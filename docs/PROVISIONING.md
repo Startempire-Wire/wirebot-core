@@ -208,3 +208,4 @@ See [AUTH_AND_SECRETS.md](./AUTH_AND_SECRETS.md).
 - [PAIRING_ALLOWLIST.md](./PAIRING_ALLOWLIST.md) — DM approval flow
 - [WP_PAIRING_FLOW.md](./WP_PAIRING_FLOW.md) — WordPress auto-approve
 - [CURRENT_STATE.md](./CURRENT_STATE.md) — What's deployed
+- [WHITE_LABEL.md](./WHITE_LABEL.md) — Client frontend deployment

@@ -98,6 +98,12 @@ as-user wirebot 'source ~/.nvm/nvm.sh && \
 | [NETWORK_INTEGRATION.md](docs/NETWORK_INTEGRATION.md) | Startempire Wire integration |
 | [PLUGIN.md](docs/PLUGIN.md) | WordPress plugin specification |
 
+### White-Label & Client Deployment
+
+| Document | Purpose |
+|----------|---------|
+| [WHITE_LABEL.md](docs/WHITE_LABEL.md) | Branded, tier-scoped client frontend architecture |
+
 ### Configuration & Provisioning
 
 | Document | Purpose |

@@ -112,3 +112,4 @@ Lower modes = shared gateway with bindings.
 - [ARCHITECTURE.md](./ARCHITECTURE.md) — Infrastructure models (shared vs dedicated)
 - [PROVISIONING.md](./PROVISIONING.md) — Tier-based provisioning
 - [AUTH_AND_SECRETS.md](./AUTH_AND_SECRETS.md) — Auth enforcement
+- [WHITE_LABEL.md](./WHITE_LABEL.md) — Tier-scoped client frontend

@@ -254,4 +254,5 @@ Clawdbot does **not** include Twilio SMS. See [SMS_OPTIONS.md](./SMS_OPTIONS.md)
 - [DEDICATED_GATEWAY_CONFIG.md](./DEDICATED_GATEWAY_CONFIG.md) — Per-user config
 - [PROVISIONING.md](./PROVISIONING.md) — User provisioning
 - [INSTALLATION.md](./INSTALLATION.md) — Initial setup
+- [WHITE_LABEL.md](./WHITE_LABEL.md) — Client-facing frontend (uses HTTP + WS APIs)
 - [Clawdbot Gateway Docs](https://docs.clawd.bot/gateway) — Foundation reference
