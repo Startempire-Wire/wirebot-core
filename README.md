@@ -98,11 +98,12 @@ as-user wirebot 'source ~/.nvm/nvm.sh && \
 | [NETWORK_INTEGRATION.md](docs/NETWORK_INTEGRATION.md) | Startempire Wire integration |
 | [PLUGIN.md](docs/PLUGIN.md) | WordPress plugin specification |
 
-### White-Label & Client Deployment
+### Ecosystem & Frontend
 
 | Document | Purpose |
 |----------|---------|
-| [WHITE_LABEL.md](docs/WHITE_LABEL.md) | Branded, tier-scoped client frontend architecture |
+| [DISCOVERY_NOTES.md](docs/DISCOVERY_NOTES.md) | **Figma mockup analysis + Startempire Wire ecosystem integration** |
+| [WHITE_LABEL.md](docs/WHITE_LABEL.md) | Earlier white-label concept (superseded by Discovery Notes) |
 
 ### Configuration & Provisioning
 

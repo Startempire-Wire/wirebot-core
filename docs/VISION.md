@@ -84,6 +84,17 @@ Both tracks share the same Clawdbot runtime + skills.
 
 ---
 
+## Startempire Wire Ecosystem
+
+Wirebot is a core component of the larger Startempire Wire ecosystem. See [DISCOVERY_NOTES.md](./DISCOVERY_NOTES.md) for the full picture including:
+- The Figma UI mockup (business operating dashboard, not chat)
+- Startempire Wire membership tiers (Free/FreeWire/Wire/ExtraWire) mapped to Wirebot feature gates
+- Ring Leader Plugin API integration for auth and content distribution
+- Chrome Extension embedding strategy
+- Business Setup Checklist Engine (Idea → Launch → Growth)
+- Accountability cadence (daily standups, EOD Q&A, weekly/monthly/yearly planning)
+- Network roles (Mentor/Collaborator/Mentee)
+
 ## See Also
 
 - [ARCHITECTURE.md](./ARCHITECTURE.md) — System architecture

@@ -257,4 +257,5 @@ See [CURRENT_STATE.md](./CURRENT_STATE.md) for detailed deployment status.
 - [NETWORK_INTEGRATION.md](./NETWORK_INTEGRATION.md) — Startempire Wire integration
 - [CAPABILITIES.md](./CAPABILITIES.md) — Feature matrix
 - [TRUST_MODES.md](./TRUST_MODES.md) — Trust enforcement
-- [WHITE_LABEL.md](./WHITE_LABEL.md) — White-label frontend for clients
+- [WHITE_LABEL.md](./WHITE_LABEL.md) — White-label frontend for clients (superseded by DISCOVERY_NOTES)
+- [DISCOVERY_NOTES.md](./DISCOVERY_NOTES.md) — Figma mockup analysis + Startempire ecosystem integration
