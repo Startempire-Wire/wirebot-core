@@ -1,0 +1,12 @@
+{
+  "name": "@wirebot/memory-mem0",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Wirebot Mem0 memory plugin for Clawdbot (skeleton)",
+  "dependencies": {
+    "@sinclair/typebox": "0.34.47"
+  },
+  "clawdbot": {
+    "extensions": ["./index.ts"]
+  }
+}

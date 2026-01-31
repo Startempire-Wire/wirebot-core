@@ -1,0 +1,28 @@
+{
+  "id": "sms-twilio",
+  "uiHints": {
+    "accountSid": {
+      "label": "Twilio Account SID",
+      "placeholder": "AC..."
+    },
+    "authToken": {
+      "label": "Twilio Auth Token",
+      "sensitive": true
+    },
+    "fromNumber": {
+      "label": "From Number",
+      "placeholder": "+15551234567"
+    }
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "accountSid": { "type": "string" },
+      "authToken": { "type": "string" },
+      "fromNumber": { "type": "string" },
+      "statusCallback": { "type": "string" }
+    },
+    "required": ["accountSid", "authToken", "fromNumber"]
+  }
+}

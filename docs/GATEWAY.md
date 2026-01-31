@@ -1,303 +1,257 @@
-# Wirebot Gateway Specification
+# Wirebot Gateway (Clawdbot)
 
-> **The single brain that owns all intelligence.**
+> **Clawdbot is the gateway. No custom gateway build.**
 
 ---
 
 ## Overview
 
-The Wirebot Gateway is a containerized TypeScript service that:
-- Owns all sessions and memory
-- Manages scheduling and cron jobs
-- Routes requests to AI providers
-- Enforces trust modes at runtime
-- Applies surface-aware policies
+Wirebot uses the **Clawdbot Gateway** as its control plane.
+
+Capabilities built-in:
+- WebSocket control plane
+- Channel routing (WhatsApp, Telegram, Discord, Slack, Signal, iMessage, etc.)
+- Sessions + history
+- Cron + hooks
+- Control UI + WebChat
+- Model routing + failover
+- Skills system
+- Memory (markdown + hybrid search)
 
 ---
 
-## Technology Stack
+## Production Deployment
 
-| Component | Technology | Notes |
-|-----------|------------|-------|
-| Runtime | Node 20 (TypeScript) | Modern, async-native |
-| Framework | Fastify or Hono | Fast, WS-friendly |
-| Cache | Redis 7.2 | Sessions, rate limits |
-| Database | MariaDB 10.6 | Structured state, transcripts |
-| Container | Podman | Rootless, OCI-compliant |
-| Reverse Proxy | LiteSpeed | Already configured |
-| Vector Store | Qdrant (optional, later) | Semantic recall |
+### Service
 
----
-
-## API Surfaces
-
-### HTTP Endpoints
-
-```
-POST /chat                    # Main chat endpoint
-POST /sms/inbound             # Twilio webhook
-POST /voice/inbound           # Twilio voice webhook
-GET  /health                  # Health check
-GET  /session/:id             # Session state (authenticated)
-POST /workspace/:id/sync      # Force workspace sync
-```
-
-### WebSocket
-
-```
-ws://api.wirebot.chat/ws
-
-Events:
-- connect (auth via JWT)
-- message (user input)
-- response (streaming tokens)
-- heartbeat
-- disconnect
-```
-
----
-
-## Core Components
-
-### 1. Session Manager
-
-Owns conversation state and context windows.
-
-```typescript
-interface Session {
-  id: string;
-  founderId: string;
-  workspaceId: string;
-  trustMode: 0 | 1 | 2 | 3;
-  surface: 'web' | 'extension' | 'sms' | 'discord';
-  context: Message[];
-  createdAt: Date;
-  lastActiveAt: Date;
-}
-```
-
-Storage: Redis (`wb:session:{id}`)
-TTL: 24 hours (configurable)
-
-### 2. Memory Store
-
-Layered memory architecture.
-
-| Layer | Storage | Purpose |
-|-------|---------|---------|
-| Structured State | MariaDB | Business profile, stage, goals |
-| Rolling Summaries | MariaDB | Weekly ops, blockers, plan |
-| Transcripts | MariaDB | Full conversation logs |
-| Vector (optional) | Qdrant | Semantic recall |
-
-### 3. Scheduler (Cron)
-
-Handles automated prompts and maintenance.
-
-```typescript
-interface ScheduledJob {
-  id: string;
-  founderId: string;
-  type: 'standup' | 'eod' | 'weekly' | 'maintenance';
-  schedule: string; // cron expression
-  enabled: boolean;
-  lastRun: Date;
-  nextRun: Date;
-}
-```
-
-Jobs:
-- Daily standup prompt (configurable time)
-- End-of-day reflection
-- Weekly planning prompt
-- Monthly recalibration
-- Rolling summary generation
-
-### 4. Tool Registry
-
-Managed tool access by trust mode.
-
-```typescript
-interface Tool {
-  name: string;
-  description: string;
-  minTrustMode: 0 | 1 | 2 | 3;
-  handler: (input: unknown) => Promise<unknown>;
-}
-```
-
-Tools are registered and gated by trust level.
-
-### 5. Provider Router
-
-Routes to AI providers (Claude, etc).
-
-- Primary: Anthropic Claude API
-- Fallback: Configurable
-- Rate limiting: Per-founder, per-surface
-- Cost tracking: Per-workspace
-
-### 6. Trust Enforcer
-
-Runtime enforcement of trust boundaries.
-
-- Validates JWT on every request
-- Checks operation against `trust_mode_max`
-- Applies surface-specific restrictions
-- Logs all access attempts
-
----
-
-## Authentication Flow
-
-```
-1. Request arrives with JWT in Authorization header
-2. Gateway validates signature (shared secret or JWKS)
-3. Gateway extracts claims:
-   - user_id
-   - workspace_id
-   - trust_mode_max
-   - scopes
-   - surfaces
-4. Gateway checks:
-   - Token not expired
-   - Surface allowed
-   - Scope includes requested operation
-5. Gateway creates/resumes session with trust ceiling
-6. All operations checked against ceiling
-```
-
----
-
-## Database Schema (MariaDB)
-
-```sql
--- Workspaces (business context)
-CREATE TABLE workspaces (
-  id VARCHAR(36) PRIMARY KEY,
-  founder_id VARCHAR(36) NOT NULL,
-  name VARCHAR(255),
-  stage ENUM('idea', 'launch', 'growth'),
-  profile JSON,
-  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
-);
-
--- Checklists
-CREATE TABLE checklists (
-  id VARCHAR(36) PRIMARY KEY,
-  workspace_id VARCHAR(36) NOT NULL,
-  title VARCHAR(255),
-  items JSON,
-  priority INT,
-  progress DECIMAL(5,2),
-  due_date DATE,
-  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-
--- Goals
-CREATE TABLE goals (
-  id VARCHAR(36) PRIMARY KEY,
-  workspace_id VARCHAR(36) NOT NULL,
-  title VARCHAR(255),
-  target_value DECIMAL(15,2),
-  current_value DECIMAL(15,2),
-  unit VARCHAR(50),
-  deadline DATE,
-  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-
--- Summaries (rolling memory)
-CREATE TABLE summaries (
-  id VARCHAR(36) PRIMARY KEY,
-  workspace_id VARCHAR(36) NOT NULL,
-  type ENUM('weekly', 'blockers', 'plan', 'decisions'),
-  content TEXT,
-  generated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-
--- Transcripts (audit log)
-CREATE TABLE transcripts (
-  id VARCHAR(36) PRIMARY KEY,
-  session_id VARCHAR(36) NOT NULL,
-  workspace_id VARCHAR(36) NOT NULL,
-  surface VARCHAR(50),
-  messages JSON,
-  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-
--- Scheduled Jobs
-CREATE TABLE scheduled_jobs (
-  id VARCHAR(36) PRIMARY KEY,
-  founder_id VARCHAR(36) NOT NULL,
-  type VARCHAR(50),
-  schedule VARCHAR(100),
-  enabled BOOLEAN DEFAULT TRUE,
-  last_run TIMESTAMP,
-  next_run TIMESTAMP
-);
-```
-
----
-
-## Redis Key Structure
-
-```
-wb:session:{session_id}         # Session state (JSON)
-wb:rate:{founder_id}:{surface}  # Rate limit counter
-wb:lock:{resource}              # Distributed locks
-wb:cache:{key}                  # General cache
-wbs:*                           # Mode 3 (Sovereign) namespace
-```
-
----
-
-## Container Configuration
-
-### Dockerfile
-
-```dockerfile
-FROM node:20-alpine
-WORKDIR /app
-COPY package*.json ./
-RUN npm ci --only=production
-COPY dist ./dist
-EXPOSE 8100
-USER node
-CMD ["node", "dist/index.js"]
-```
-
-### Podman Run
+The gateway runs as a **systemd service**:
 
 ```bash
-podman run -d \
-  --name wirebot-gateway \
-  --network host \
-  -e DATABASE_URL="mysql://wirebot:pass@localhost/wirebot_prod" \
-  -e REDIS_URL="redis://localhost:6379" \
-  -e JWT_SECRET="..." \
-  -e ANTHROPIC_API_KEY="..." \
-  -p 127.0.0.1:8100:8100 \
-  wirebot-gateway:latest
+systemctl status clawdbot-gateway    # Check status
+systemctl restart clawdbot-gateway   # Restart
+systemctl stop clawdbot-gateway      # Stop
+```
+
+See [OPERATIONS.md](./OPERATIONS.md) for full service management.
+
+### Config File (JSON5)
+
+**Path:** `/data/wirebot/users/verious/clawdbot.json`
+
+**Not** the default `~/.clawdbot/clawdbot.json` — overridden via environment variables:
+
+| Variable | Value |
+|----------|-------|
+| `CLAWDBOT_STATE_DIR` | `/data/wirebot/users/verious` |
+| `CLAWDBOT_CONFIG_PATH` | `/data/wirebot/users/verious/clawdbot.json` |
+| `CLAWDBOT_GATEWAY_PORT` | `18789` |
+
+### Current Config (Production)
+
+```json5
+{
+  meta: { lastTouchedVersion: "2026.1.24-3" },
+  update: { channel: "dev", checkOnStart: true },
+  agents: {
+    defaults: { maxConcurrent: 4, subagents: { maxConcurrent: 8 } },
+    list: [{ id: "verious", name: "Wirebot: verious" }]
+  },
+  messages: { ackReactionScope: "group-mentions" },
+  commands: { native: "auto", nativeSkills: "auto" },
+  gateway: {
+    port: 18789,
+    mode: "local",
+    bind: "loopback",
+    controlUi: { allowInsecureAuth: false },
+    auth: { mode: "token", token: "<redacted>", allowTailscale: true },
+    trustedProxies: ["127.0.0.1"]
+  },
+  skills: { load: { extraDirs: ["/home/wirebot/wirebot-core/skills"] } },
+  plugins: { allow: ["memory-core"] }
+}
 ```
 
 ---
 
-## Monitoring
+## Gateway Auth
 
-- Health endpoint: `/health`
-- Metrics: Prometheus-compatible (optional)
-- Logs: Structured JSON to stdout
-- Alerts: Via existing server monitoring
+Clawdbot supports token/password auth on the WebSocket connection:
+
+```json5
+{
+  gateway: {
+    auth: {
+      mode: "token",
+      token: "<uuid-token>"
+    }
+  }
+}
+```
+
+**Security rules:**
+- Gateway token is stored in `clawdbot.json` (mode 600, wirebot-owned)
+- **WordPress plugin must never expose this token to the client** — use server-side proxy calls
+- Token is required even on loopback (Clawdbot default since recent versions)
+- Control UI authenticates via `connect.params.auth.token` (stored in browser settings)
+
+### Trusted Proxies
+
+When behind a reverse proxy (e.g., Cloudflare tunnel), set:
+
+```json5
+{
+  gateway: {
+    trustedProxies: ["127.0.0.1"]
+  }
+}
+```
+
+The Cloudflare tunnel (`cloudflared-wirebot`) connects from localhost, so `127.0.0.1` is correct.
 
 ---
 
-## Security Considerations
+## Public Access (Cloudflare Tunnel)
 
-1. **No direct public access** — Always behind LiteSpeed proxy
-2. **JWT validation on every request** — No exceptions
-3. **Trust ceiling enforcement** — Runtime checks
-4. **Input sanitization** — All user input validated
-5. **Rate limiting** — Per-founder, per-surface
-6. **Audit logging** — All operations logged
-7. **Secrets management** — Environment variables, not config files
+The gateway is exposed via Cloudflare tunnel:
+
+| Public URL | Origin | Purpose |
+|------------|--------|---------|
+| `helm.wirebot.chat` | `http://127.0.0.1:18789` | Control UI + WebChat + WebSocket |
+| `api.wirebot.chat` | `http://localhost:8100` | REST API (not yet active) |
+
+Tunnel config: `/etc/cloudflared/wirebot.yml`
+Tunnel service: `cloudflared-wirebot.service`
+
+---
+
+## Shared Gateway (Lower Tiers)
+
+Use a **single** Clawdbot gateway with multiple agents and bindings:
+
+```json5
+{
+  agents: {
+    list: [
+      { id: "user_1" },
+      { id: "user_2" }
+    ]
+  },
+  bindings: [
+    { agentId: "user_1", match: { channel: "discord", peer: { kind: "dm", id: "123" } } },
+    { agentId: "user_2", match: { channel: "telegram", peer: { kind: "dm", id: "456" } } }
+  ],
+  channels: {
+    discord: { dm: { policy: "pairing" } },
+    telegram: { dmPolicy: "pairing" }
+  }
+}
+```
+
+See [SHARED_GATEWAY_CONFIG.md](./SHARED_GATEWAY_CONFIG.md) for a full example.
+
+---
+
+## Dedicated Gateway (Top Tier)
+
+Each top-tier user gets their **own** gateway instance with unique port and state dir:
+
+```
+CLAWDBOT_STATE_DIR=/data/wirebot/users/<user_id>
+CLAWDBOT_CONFIG_PATH=/data/wirebot/users/<user_id>/clawdbot.json
+CLAWDBOT_GATEWAY_PORT=18xxx
+```
+
+See [DEDICATED_GATEWAY_CONFIG.md](./DEDICATED_GATEWAY_CONFIG.md) and [PROVISIONING.md](./PROVISIONING.md).
+
+---
+
+## HTTP Endpoints (Optional)
+
+Clawdbot can expose OpenAI-compatible REST endpoints:
+
+```json5
+{
+  gateway: {
+    http: {
+      endpoints: {
+        chatCompletions: { enabled: true },
+        responses: { enabled: true }
+      }
+    }
+  }
+}
+```
+
+---
+
+## Control UI + WebChat
+
+Clawdbot serves Control UI and WebChat by default on the gateway port:
+
+- **Local:** `http://127.0.0.1:18789/`
+- **Public:** `https://helm.wirebot.chat/` (via tunnel)
+
+Features: chat, channels, sessions, cron, skills, config editor, logs, debug tools.
+
+See [Clawdbot Control UI docs](https://docs.clawd.bot/web/control-ui) for full reference.
+
+---
+
+## Hot Reload
+
+Clawdbot watches the config file and supports hot-reload:
+
+- `gateway.reload.mode: "hybrid"` (default): hot-apply safe changes, restart for critical ones
+- Other modes: `hot`, `restart`, `off`
+
+---
+
+## CLI Commands (Quick Reference)
+
+```bash
+# All commands need env vars set
+export CLAWDBOT_STATE_DIR=/data/wirebot/users/verious
+export CLAWDBOT_CONFIG_PATH=/data/wirebot/users/verious/clawdbot.json
+
+# Gateway
+clawdbot gateway probe          # Deep health check
+clawdbot gateway health         # Quick health
+
+# Models
+clawdbot models status          # Auth overview
+clawdbot models status --probe  # Live auth probe
+
+# Config
+clawdbot config get             # View config
+clawdbot doctor                 # Diagnose issues
+clawdbot doctor --fix           # Auto-fix issues
+
+# Channels
+clawdbot channels list          # List connected channels
+clawdbot channels login         # Connect a channel (WhatsApp QR, etc.)
+
+# Sessions
+clawdbot sessions list          # Active sessions
+```
+
+---
+
+## SMS Reality
+
+Clawdbot does **not** include Twilio SMS. See [SMS_OPTIONS.md](./SMS_OPTIONS.md) for alternatives.
+
+---
+
+## See Also
+
+- [OPERATIONS.md](./OPERATIONS.md) — Systemd service, launcher, logs
+- [AUTH_AND_SECRETS.md](./AUTH_AND_SECRETS.md) — Provider auth + secret management
+- [MONITORING.md](./MONITORING.md) — Health probes + alerting
+- [TROUBLESHOOTING.md](./TROUBLESHOOTING.md) — Common gateway issues
+- [CURRENT_STATE.md](./CURRENT_STATE.md) — What's actually running
+- [ARCHITECTURE.md](./ARCHITECTURE.md) — System architecture
+- [SHARED_GATEWAY_CONFIG.md](./SHARED_GATEWAY_CONFIG.md) — Multi-tenant config
+- [DEDICATED_GATEWAY_CONFIG.md](./DEDICATED_GATEWAY_CONFIG.md) — Per-user config
+- [PROVISIONING.md](./PROVISIONING.md) — User provisioning
+- [INSTALLATION.md](./INSTALLATION.md) — Initial setup
+- [Clawdbot Gateway Docs](https://docs.clawd.bot/gateway) — Foundation reference

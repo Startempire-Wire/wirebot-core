@@ -1,206 +1,114 @@
-# Wirebot Trust Modes
+# Wirebot Trust Modes (Clawdbot-Based)
 
-> **System-level primitives, not UI toggles.**
+> **Trust modes are product policy. Enforced via tiers + skills + channels.**
 
-Trust modes control **capability × risk** at the system level. They are enforced by both WordPress (JWT ceiling) and Gateway (runtime checks).
+---
+
+## Overview
+
+Trust modes still apply, but enforcement is **not** a custom gateway.
+
+Enforcement points:
+- WordPress plugin (tier + entitlements)
+- Clawdbot config (skills allowlist, channel enablement)
+- Dedicated vs shared infrastructure
 
 ---
 
 ## Mode Overview
 
-| Mode | Name | Who | Capabilities | Guards |
-|------|------|-----|--------------|--------|
-| 0 | Public / Demo | Anyone | None | Maximum |
-| 1 | Standard Founder | Paid users | Core features | On |
-| 2 | Advanced Trusted | Vetted power users | Extended features | Partial |
-| 3 | Sovereign | Owner only | Full access | Internal off, External max |
+| Mode | Name | Who | Infrastructure |
+|------|------|-----|----------------|
+| 0 | Public / Demo | Anyone | Shared gateway |
+| 1 | Standard Founder | Paid users | Shared gateway |
+| 2 | Advanced Trusted | Vetted users | Shared gateway |
+| 3 | Sovereign | Owner + top tier | **Dedicated Clawdbot** |
 
 ---
 
-## Mode 0 — Public / Demo
+## Enforcement Mechanisms
 
-### Purpose
-- Showcase capability
-- Build trust
-- Convert visitors
+### 1) Skills Allowlist
 
-### Capabilities
-- Demo flows only
-- Sample reflections
-- Preview of frameworks
-- No personalization
-- No memory
-- No tools
-
-### Guards
-- Highest guardrails
-- No persistence
-- Rate limited
-- Heavily filtered output
-
-### Surfaces
-- Public wirebot.chat (not logged in)
-- Marketing pages
-
----
-
-## Mode 1 — Standard Founder (Default Product)
-
-### Who
-- Most paid users
-- LinkedIn-style founders
-- Standard membership tier
-
-### Capabilities
-- Business context
-- Stage tracking (Idea → Launch → Growth)
-- Accountability engine
-- Checklist progress + priority scoring
-- "Next 3 actions" guidance
-- Daily / weekly reflection
-- Structured reasoning
-
-### Guards ON
-- No raw chain-of-thought
-- No experimental tools
-- Scoped memory (workspace-level)
-- Strong prompt-injection defense
-- No cross-workspace leakage
-
-### Surfaces
-- wirebot.chat (logged in)
-- Chrome extension (authenticated)
-- SMS (verified phone)
-
----
-
-## Mode 2 — Advanced Trusted (Invite-Only)
-
-### Who
-- Vetted power users
-- Technical founders
-- Inner circle operators
-- Requires explicit approval
-
-### Capabilities
-Everything in Mode 1, plus:
-- Deeper memory (longer context window)
-- Early/beta features
-- Tool chaining
-- Higher autonomy suggestions
-- More direct feedback
-- Pattern analysis across longer timeframes
-
-### Guards PARTIALLY OFF
-- Expanded context limits
-- More permissive tool access
-- Still isolated from public surfaces
-- Still no cross-user data access
-
-### Surfaces
-- wirebot.chat (logged in, advanced flag)
-- Chrome extension (authenticated)
-- SMS (verified phone)
-- Premium Discord (limited)
-
----
-
-## Mode 3 — Sovereign Mode (Owner Only)
-
-### Who
-- System owner only (you)
-- Never user-accessible
-- Hard allowlist by identity
-
-### Purpose
-- Deep personal assistant
-- Long-range thinking
-- Sensitive data handling
-- Experimentation and incubation
-- Future feature testing
-
-### Capabilities
-- Maximum memory depth
-- Freeform exploration
-- Internal drafts
-- Hypothesis testing
-- Potentially agentic behavior
-- Access to experimental tools
-- Cross-workspace synthesis (owner's workspaces only)
-
-### Guards
-- **Internal guards OFF** — Full capability access
-- **External guards MAX** — Completely isolated
-
-### Isolation Requirements
-- Separate container instance
-- Separate database/schema
-- Separate encryption keys
-- Separate credentials
-- No public ingress (localhost + VPN/SSH only)
-- No community surfaces
-- Possibly single-tenant or local inference
-
-### Surfaces
-- Dedicated admin interface
-- SSH tunnel access
-- Never exposed to public DNS
-
----
-
-## Trust Escalation Rules
-
-1. **Default is Mode 1** — All new paid users start here
-2. **Mode 2 requires invitation** — Manual approval only
-3. **Mode 3 is never user-accessible** — Owner identity only
-4. **Downgrade is automatic** — Session timeout, suspicious activity
-5. **Upgrade requires re-auth** — Fresh JWT with elevated scope
-
----
-
-## JWT Trust Ceiling
-
-The WordPress plugin embeds `trust_mode_max` in the JWT:
-
-```json
-{
-  "user_id": "founder_123",
-  "workspace_id": "ws_456",
-  "trust_mode_max": 1,
-  "scopes": ["chat", "checklist", "sms"],
-  "surfaces": ["web", "extension"],
-  "exp": 1704067200
+```json5
+skills: {
+  allowBundled: ["wirebot-accountability", "wirebot-business", "wirebot-memory"],
+  load: { extraDirs: ["/home/wirebot/wirebot-core/skills"] }
 }
 ```
 
-The Gateway:
-1. Validates JWT signature
-2. Checks `trust_mode_max` against requested operation
-3. Enforces scope restrictions
-4. Logs access attempts
+### 2) Channel Enablement
+
+Channels can be enabled/disabled per tier:
+
+```json5
+channels: {
+  discord: { enabled: true },
+  telegram: { enabled: true },
+  whatsapp: { enabled: false }
+}
+```
+
+### 3) Per-Channel Skill Filters
+
+Discord/Telegram can restrict skills per channel:
+
+```json5
+channels: {
+  discord: {
+    guilds: {
+      "my-guild": {
+        channels: {
+          "general": { skills: ["wirebot-accountability"] }
+        }
+      }
+    }
+  }
+}
+```
+
+### 4) Dedicated vs Shared
+
+Mode 3 = dedicated Clawdbot container.
+Lower modes = shared gateway with bindings.
 
 ---
 
-## Implementation Notes
+## Mode Details
 
-### Mode 0-2: Same Gateway Instance
-- Namespace isolation via database prefix
-- Redis keyspace separation: `wb:m0:`, `wb:m1:`, `wb:m2:`
-- Same encryption key (different per workspace)
+### Mode 0 — Public / Demo
+- No personalization
+- Limited skills
+- Shared gateway
 
-### Mode 3: Separate Instance
-- Container: `wirebot-sovereign`
-- Database: `wirebot_sovereign`
-- Redis keyspace: `wbs:`
-- Encryption key: `/root/.credentials/wirebot-sovereign.key`
-- Network: `localhost:8101` (no public binding)
+### Mode 1 — Standard Founder
+- Core skills (accountability, business)
+- Shared gateway
+- Limited channels
+
+### Mode 2 — Advanced Trusted
+- Extended skills (memory/patterns)
+- Shared gateway
+- More channels
+
+### Mode 3 — Sovereign
+- Dedicated Clawdbot container
+- Full channels (including WhatsApp)
+- Full skills + autonomy
 
 ---
 
-## Security Principles
+## Notes
 
-1. **Trust is earned, not configured** — Modes are system-assigned
-2. **Ceiling, not floor** — JWT sets maximum, runtime can restrict further
-3. **Isolation by default** — Mode 3 is physically separated
-4. **No escalation paths** — Can't request higher mode than assigned
-5. **Audit everything** — All mode transitions logged
+- Clawdbot default DM policy is **pairing**.
+- For SMB onboarding, automate pairing or set `dmPolicy: "open"` + allowlist.
+
+---
+
+## See Also
+
+- [CAPABILITIES.md](./CAPABILITIES.md) — Feature matrix per tier
+- [GATEWAY.md](./GATEWAY.md) — Gateway config for trust enforcement
+- [ARCHITECTURE.md](./ARCHITECTURE.md) — Infrastructure models (shared vs dedicated)
+- [PROVISIONING.md](./PROVISIONING.md) — Tier-based provisioning
+- [AUTH_AND_SECRETS.md](./AUTH_AND_SECRETS.md) — Auth enforcement

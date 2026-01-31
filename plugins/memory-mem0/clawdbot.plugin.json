@@ -1,0 +1,47 @@
+{
+  "id": "memory-mem0",
+  "kind": "memory",
+  "uiHints": {
+    "baseUrl": {
+      "label": "Mem0 Base URL",
+      "placeholder": "http://localhost:8080"
+    },
+    "apiKey": {
+      "label": "Mem0 API Key",
+      "sensitive": true,
+      "placeholder": "mem0-..."
+    },
+    "endpoints.search": {
+      "label": "Search Path",
+      "placeholder": "/v1/search"
+    },
+    "endpoints.store": {
+      "label": "Store Path",
+      "placeholder": "/v1/store"
+    },
+    "endpoints.delete": {
+      "label": "Delete Path",
+      "placeholder": "/v1/delete"
+    }
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "baseUrl": { "type": "string" },
+      "apiKey": { "type": "string" },
+      "namespacePrefix": { "type": "string" },
+      "endpoints": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "search": { "type": "string" },
+          "store": { "type": "string" },
+          "delete": { "type": "string" }
+        },
+        "required": ["search", "store", "delete"]
+      }
+    },
+    "required": ["baseUrl", "endpoints"]
+  }
+}

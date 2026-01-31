@@ -1,148 +1,259 @@
-# Wirebot Architecture
+# Wirebot Architecture (Clawdbot-Based)
 
-> **Two-Layer System: Intelligence Runtime + Product Shell**
+> **Clawdbot is the runtime. Wirebot is skills + product shell + network intelligence.**
 
 ---
 
-## Overview
-
-Wirebot is a **dual-layer system**:
+## High-Level Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│              LAYER B: WordPress (Product Shell)             │
-│                                                             │
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐      │
-│  │ Ring Leader  │  │   Connect    │  │  Wirebot     │      │
-│  │ (identity)   │  │ (ext bridge) │  │  Plugin      │      │
-│  └──────────────┘  └──────────────┘  └──────┬───────┘      │
-│                                              │              │
-│         Trust ceiling, JWT issuer, UX,       │              │
-│         billing, modules, consent            │              │
-└──────────────────────────────────────────────┼──────────────┘
-                                               │
-                                          JWT + scopes
-                                               │
-                                               ▼
-┌─────────────────────────────────────────────────────────────┐
-│              LAYER A: Wirebot Gateway (Intelligence)        │
-│                                                             │
-│  Sessions │ Memory │ Scheduling │ Reasoning │ Trust Enforce │
-│                                                             │
-│  Node 20 (TS) │ Redis │ MariaDB │ Podman                   │
+│                     Public Internet                          │
+│  helm.wirebot.chat ──→ Cloudflare Tunnel                    │
+│  api.wirebot.chat  ──→ Cloudflare Tunnel                    │
+└──────────────┬──────────────────────────────────────────────┘
+               │
+┌──────────────▼──────────────────────────────────────────────┐
+│              Production VPS (AlmaLinux 8)                     │
+│                                                               │
+│  ┌─────────────────────────────────────────────────────┐     │
+│  │  Cloudflare Tunnel (cloudflared-wirebot.service)     │     │
+│  │  helm.wirebot.chat → 127.0.0.1:18789                │     │
+│  │  api.wirebot.chat  → localhost:8100                  │     │
+│  └──────────────┬──────────────────────────────────────┘     │
+│                 │                                             │
+│  ┌──────────────▼──────────────────────────────────────┐     │
+│  │  Clawdbot Gateway (clawdbot-gateway.service)         │     │
+│  │  Port: 18789 (loopback only)                         │     │
+│  │  User: wirebot | Node: v22.22.0                      │     │
+│  │                                                       │     │
+│  │  ┌─────────────────────────────────────────────┐     │     │
+│  │  │ Control UI + WebChat (built-in)              │     │     │
+│  │  │ WebSocket control plane                       │     │     │
+│  │  │ Channel routing engine                        │     │     │
+│  │  │ Session manager                               │     │     │
+│  │  │ Cron engine                                   │     │     │
+│  │  │ Model router + failover                       │     │     │
+│  │  │ Memory (markdown + hybrid search)             │     │     │
+│  │  └─────────────────────────────────────────────┘     │     │
+│  │                                                       │     │
+│  │  Skills: wirebot-core, wirebot-accountability,        │     │
+│  │          wirebot-memory, wirebot-network               │     │
+│  │                                                       │     │
+│  │  Plugins: memory-core (built-in)                      │     │
+│  └──────────────────────────────────────────────────────┘     │
+│                                                               │
+│  ┌──────────────────────────────────────────────────────┐     │
+│  │  Future: Letta Server (structured business state)     │     │
+│  │  Future: Mem0 Server (cross-surface sync)             │     │
+│  │  Future: WordPress Plugin (product shell)             │     │
+│  └──────────────────────────────────────────────────────┘     │
+│                                                               │
+│  ┌──────────────────────────────────────────────────────┐     │
+│  │  Secret Management                                    │     │
+│  │  rbw (Bitwarden vault) → /run/wirebot/gateway.env     │     │
+│  │  Claude Code OAuth → auth-profiles.json               │     │
+│  └──────────────────────────────────────────────────────┘     │
 └─────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-## Layer A: Wirebot Gateway (Intelligence Runtime)
+## Component Responsibilities
 
-The Gateway is the **single brain** that:
-- Owns sessions and memory
-- Manages scheduling (cron / wakeups)
-- Maintains tool registry
-- Routes to AI providers
-- Enforces trust modes
-- Applies surface-aware policies
+### Clawdbot Gateway (Runtime)
 
-### Technology Stack
-- **Runtime:** Node 20 (TypeScript)
-- **Cache/Sessions:** Redis 7.2
-- **Persistence:** MariaDB 10.6
-- **Containers:** Podman
-- **Reverse Proxy:** LiteSpeed
+**Owns:**
+- WebSocket control plane (ws://127.0.0.1:18789)
+- Channel connections (WhatsApp, Telegram, Discord, Slack, Signal, iMessage, etc.)
+- Session lifecycle + history
+- Cron scheduling + hooks
+- Tool execution (sandboxed)
+- Model routing + auth profile failover
+- Memory system (markdown + sqlite-vec + FTS5 hybrid search)
+- Control UI + WebChat (served on gateway port)
+- Skills loading + execution
 
-### Endpoints
-- `api.wirebot.chat` — HTTP + WebSocket API
-- Twilio webhooks for SMS/Voice
+**Does not own:**
+- User identity / billing (→ WordPress)
+- Structured business state (→ Letta, planned)
+- Cross-surface memory sync (→ Mem0, planned)
+- Network intelligence (→ Ring Leader APIs, planned)
+
+### Wirebot Skills (Business Logic)
+
+Skills loaded from `/home/wirebot/wirebot-core/skills/`:
+
+| Skill | Purpose |
+|-------|---------|
+| `wirebot-core` | Core Wirebot identity + behavior |
+| `wirebot-accountability` | Standups, reflections, goal tracking |
+| `wirebot-memory` | Memory management + recall patterns |
+| `wirebot-network` | Startempire Wire network intelligence |
+
+Skills are SKILL.md files (pi-coding-agent format) loaded via `skills.load.extraDirs`.
+
+### Cloudflare Tunnel (Public Access)
+
+Exposes the loopback-bound gateway to the public internet via encrypted tunnel.
+
+- **Service:** `cloudflared-wirebot.service`
+- **Config:** `/etc/cloudflared/wirebot.yml`
+- **Tunnel ID:** `57df17a8-b9d1-4790-bab9-8157ac51641b`
+
+### Secret Management (rbw + OAuth)
+
+- **Provider API keys:** Retrieved from Bitwarden vault (`rbw`) at service start
+- **Anthropic OAuth:** Synced from Claude Code credentials, auto-refreshed by Clawdbot
+- **Gateway token:** Stored in `clawdbot.json` (mode 600)
+- **Runtime secrets:** Written to tmpfs `/run/wirebot/gateway.env` (cleared on reboot)
+
+See [AUTH_AND_SECRETS.md](./AUTH_AND_SECRETS.md) for details.
 
 ---
 
-## Layer B: WordPress Plugin Ecosystem (Product Shell)
+## Data Architecture
 
-WordPress handles **governance, UX, and monetization**.
+### Per-User Isolation
 
-### Core Plugin: `startempire-wirebot`
+Each user gets isolated state:
 
-Responsibilities:
-- Identity & trust ceiling management
-- JWT issuer for Gateway authentication
-- Settings & configuration UI
-- Module management
-- Data ownership boundary
-- Billing / entitlements
+| Layer | Isolation Key | Storage |
+|-------|--------------|---------|
+| Clawdbot agent | `agentId` | `agents/<id>/agent/` + workspace |
+| Clawdbot sessions | `agentId + channel + peer` | `agents/<id>/sessions/` |
+| Clawdbot memory | `agentId + workspaceDir` | SQLite per-agent |
+| Letta (planned) | `agent_<user_id>` | Letta server |
+| Mem0 (planned) | `wirebot_<user_id>` | Mem0 server |
 
-### Integration with Existing Plugins
-
-| Plugin | Role | Wirebot Integration |
-|--------|------|---------------------|
-| Ring Leader | Identity, network graph, auth broker | Consumes identity |
-| Connect | Extension auth bridge | Uses for extension auth |
-| WebSockets | Realtime transport | Optional streaming |
-| Screenshots | Visual enrichment | Not core |
-
----
-
-## Data Flow
+### State Directory Layout
 
 ```
-Founder → WordPress Login
-       → Wirebot Plugin generates JWT
-       → JWT includes: user_id, workspace_id, trust_mode_max, scopes
-       → Browser/Extension sends JWT to api.wirebot.chat
-       → Gateway validates, enforces trust ceiling
-       → Response flows back through same channel
+/data/wirebot/users/<user_id>/           # State dir (700, wirebot)
+├── clawdbot.json                        # Config (600)
+├── credentials/                          # Channel pairing + allowlists
+├── cron/                                 # Cron job definitions
+├── devices/                              # Paired devices
+├── identity/                             # Gateway identity
+├── sessions/                             # Legacy session store
+└── agents/
+    ├── main/
+    │   └── agent/
+    │       └── auth-profiles.json        # Auth secrets (600)
+    └── <agentId>/
+        ├── agent/
+        │   └── auth-profiles.json        # Auth secrets (600)
+        └── sessions/
+            └── sessions.json             # Session store
+```
+
+### Workspace Layout
+
+```
+/home/wirebot/clawd/                     # Default agent workspace
+├── MEMORY.md                            # Long-term curated memory
+├── memory/                              # Daily append-only logs
+│   ├── 2026-01-30.md
+│   └── ...
+└── canvas/                              # Canvas UI static files
 ```
 
 ---
 
-## Deployment Architecture
+## Infrastructure Models
 
-### Single VPS (Current)
+### Shared Gateway (Lower Tiers)
+
+Single Clawdbot gateway with multi-tenant agents:
 
 ```
-AlmaLinux VPS (10 cores, 14GB RAM)
-├── LiteSpeed (cPanel)
-├── MariaDB 10.6
-├── Redis 7.2
-└── Podman Containers
-    ├── wirebot-gateway (Modes 0-2)
-    ├── wirebot-sovereign (Mode 3, localhost only)
-    └── [other services]
+One gateway process (port 18789)
+├── Agent: user_1 → Discord DM binding
+├── Agent: user_2 → Telegram DM binding
+└── Agent: user_3 → Web UI binding
 ```
 
-### DNS Structure
+Config: `agents.list` + `bindings` for channel → agent routing.
 
-| Subdomain | Purpose |
-|-----------|---------|
-| `wirebot.chat` | Marketing / public demo (Mode 0) |
-| `app.wirebot.chat` | Founder dashboard (Mode 1-2) |
-| `api.wirebot.chat` | Gateway API (HTTP + WS) |
-| `go.wirebot.chat` | Short links / redirects |
+### Dedicated Gateway (Top Tier)
 
----
+Per-user Clawdbot container with unique port:
 
-## Key Design Principles
+```
+Gateway process (port 18xxx)
+├── Agent: <user_id> (sole agent)
+├── Full channel access (WhatsApp, etc.)
+└── Own workspace + credentials
+```
 
-1. **Separation of concerns** — Gateway thinks, WordPress governs
-2. **Thin clients** — All surfaces are dumb, Gateway owns intelligence
-3. **Trust enforcement at both layers** — JWT ceiling + runtime checks
-4. **Progressive isolation** — Mode 3 runs separately from Modes 0-2
+Provisioned via script with per-user `CLAWDBOT_STATE_DIR` and port.
 
 ---
 
-## Correct Mental Model
+## Memory Stack
 
-**Incorrect:**
-> "Wirebot is a WordPress plugin that calls OpenAI."
+```
+┌─────────────────────────────┐
+│  Clawdbot Memory (Built-in) │  ← Daily logs + MEMORY.md + hybrid search
+│  SQLite + sqlite-vec + FTS5 │     Operational. Used now.
+├─────────────────────────────┤
+│  Letta (Planned)            │  ← Structured business state (goals, KPIs, stage)
+│  REST API + PostgreSQL      │     Not deployed yet.
+├─────────────────────────────┤
+│  Mem0 (Planned)             │  ← Cross-surface sync (browser → agents)
+│  Vector + graph memory      │     Not deployed yet.
+└─────────────────────────────┘
+```
 
-**Correct:**
-> "Wirebot is a secure intelligence service. WordPress is the product shell that governs access, trust, UX, and monetization."
+See [MEMORY.md](./MEMORY.md) for the full memory architecture.
 
 ---
 
-## Summary
+## Network Integration (Planned)
 
-- **WordPress = legitimacy, safety, commercial viability**
-- **Gateway = thinking, memory, execution**
-- Both required. Neither optional.
+```
+StartempireWire.com (MemberPress + BuddyBoss)
+        │
+Ring Leader Plugin (identity + network graph)
+        │
+Wirebot Plugin (auth + provisioning + tier routing)
+        │
+Clawdbot Runtime (gateway + skills + channels)
+        │
+Letta + Mem0 (memory + context)
+```
+
+See [NETWORK_INTEGRATION.md](./NETWORK_INTEGRATION.md) for details.
+
+---
+
+## Service Topology (Production)
+
+| Service | Unit | Port | User | Status |
+|---------|------|------|------|--------|
+| Clawdbot Gateway | `clawdbot-gateway.service` | 18789 | wirebot | ✅ Running |
+| Cloudflare Tunnel | `cloudflared-wirebot.service` | N/A | root | ✅ Running |
+| Browser Control | (embedded) | 18791 | wirebot | ✅ Running |
+| Letta Server | — | TBD | — | ❌ Not deployed |
+| Mem0 Server | — | TBD | — | ❌ Not deployed |
+| api.wirebot.chat | — | 8100 | — | ❌ No listener |
+
+See [CURRENT_STATE.md](./CURRENT_STATE.md) for detailed deployment status.
+
+---
+
+## See Also
+
+- [CURRENT_STATE.md](./CURRENT_STATE.md) — What's actually deployed
+- [OPERATIONS.md](./OPERATIONS.md) — Service management
+- [AUTH_AND_SECRETS.md](./AUTH_AND_SECRETS.md) — Secret management
+- [GATEWAY.md](./GATEWAY.md) — Gateway config reference
+- [MEMORY.md](./MEMORY.md) — Memory stack details
+- [MONITORING.md](./MONITORING.md) — Health checks
+- [INSTALLATION.md](./INSTALLATION.md) — Setup procedure
+- [PROVISIONING.md](./PROVISIONING.md) — User provisioning
+- [VISION.md](./VISION.md) — High-level vision
+- [LAUNCH_ORDER.md](./LAUNCH_ORDER.md) — Implementation roadmap
+- [NETWORK_INTEGRATION.md](./NETWORK_INTEGRATION.md) — Startempire Wire integration
+- [CAPABILITIES.md](./CAPABILITIES.md) — Feature matrix
+- [TRUST_MODES.md](./TRUST_MODES.md) — Trust enforcement
