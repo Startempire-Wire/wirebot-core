@@ -68,6 +68,12 @@ type SyncState struct {
 	blocksWritten   int64
 	startedAt       time.Time
 	writing         bool // true when daemon is writing files (suppress inotify)
+
+	// Hot cache
+	cachedFacts     []Mem0Fact
+	cachedBlocks    []LettaBlock
+	cacheHits       int64
+	cacheUpdatedAt  time.Time
 }
 
 // ============================================================================
@@ -237,6 +243,12 @@ func syncMem0ToWorkspace(cfg *Config, state *SyncState) {
 		}
 	}
 
+	// Always update cache
+	state.mu.Lock()
+	state.cachedFacts = facts
+	state.cacheUpdatedAt = time.Now()
+	state.mu.Unlock()
+
 	if len(newFacts) == 0 {
 		state.mu.Lock()
 		state.lastMem0Sync = time.Now()
@@ -316,6 +328,12 @@ func syncLettaToWorkspace(cfg *Config, state *SyncState) {
 
 	snapshot := buf.String()
 	newHash := quickHash(snapshot)
+
+	// Always update cache
+	state.mu.Lock()
+	state.cachedBlocks = blocks
+	state.cacheUpdatedAt = time.Now()
+	state.mu.Unlock()
 
 	state.mu.Lock()
 	if newHash == state.lastBizHash {
@@ -604,11 +622,87 @@ func startHTTP(cfg *Config, state *SyncState) *http.Server {
 			"facts_written":  state.factsWritten,
 			"blocks_written": state.blocksWritten,
 			"writing":        state.writing,
+			"cache_facts":    len(state.cachedFacts),
+			"cache_blocks":   len(state.cachedBlocks),
+			"cache_hits":     state.cacheHits,
+			"cache_age_ms":   int(time.Since(state.cacheUpdatedAt).Milliseconds()),
 		}
 		state.mu.Unlock()
 
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(data)
+	})
+
+	// Hot cache: return facts matching substring (no embedding needed)
+	mux.HandleFunc("/cache/search", func(w http.ResponseWriter, r *http.Request) {
+		query := r.URL.Query().Get("q")
+		if query == "" {
+			http.Error(w, `{"error":"missing ?q="}`, 400)
+			return
+		}
+		queryLower := strings.ToLower(query)
+
+		state.mu.Lock()
+		facts := state.cachedFacts
+		blocks := state.cachedBlocks
+		state.cacheHits++
+		state.mu.Unlock()
+
+		type result struct {
+			Source string `json:"source"`
+			Text   string `json:"text"`
+		}
+		var results []result
+
+		// Search facts
+		for _, f := range facts {
+			if strings.Contains(strings.ToLower(f.Memory), queryLower) {
+				results = append(results, result{Source: "mem0", Text: f.Memory})
+			}
+		}
+
+		// Search blocks
+		for _, b := range blocks {
+			if strings.Contains(strings.ToLower(b.Value), queryLower) ||
+				strings.Contains(strings.ToLower(b.Label), queryLower) {
+				results = append(results, result{Source: "letta:" + b.Label, Text: b.Value})
+			}
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"query":   query,
+			"results": results,
+			"cached":  true,
+			"age_ms":  int(time.Since(state.cacheUpdatedAt).Milliseconds()),
+		})
+	})
+
+	// Hot cache: return all cached state
+	mux.HandleFunc("/cache/state", func(w http.ResponseWriter, r *http.Request) {
+		state.mu.Lock()
+		facts := state.cachedFacts
+		blocks := state.cachedBlocks
+		state.cacheHits++
+		age := time.Since(state.cacheUpdatedAt).Milliseconds()
+		state.mu.Unlock()
+
+		factTexts := make([]string, len(facts))
+		for i, f := range facts {
+			factTexts[i] = f.Memory
+		}
+
+		blockMap := make(map[string]string)
+		for _, b := range blocks {
+			blockMap[b.Label] = b.Value
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"facts":  factTexts,
+			"blocks": blockMap,
+			"age_ms": int(age),
+		})
 	})
 
 	mux.HandleFunc("/sync", func(w http.ResponseWriter, r *http.Request) {
