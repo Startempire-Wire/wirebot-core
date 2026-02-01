@@ -542,6 +542,226 @@ const wirebotMemoryBridge = {
     );
 
     // ========================================================================
+    // Tool: wirebot_checklist
+    // Business Setup Checklist Engine — Idea → Launch → Growth
+    // ========================================================================
+
+    api.registerTool(
+      {
+        name: "wirebot_checklist",
+        label: "Business Checklist",
+        description:
+          "Business Setup Checklist Engine. Track tasks across Idea → Launch → Growth stages. " +
+          "Actions: status (show progress), next (get next task), complete (mark done), " +
+          "skip, add (new task), daily (stand-up), list (filter tasks), detail, set-stage.",
+        parameters: Type.Object({
+          action: Type.Union([
+            Type.Literal("status"),
+            Type.Literal("next"),
+            Type.Literal("complete"),
+            Type.Literal("skip"),
+            Type.Literal("add"),
+            Type.Literal("daily"),
+            Type.Literal("list"),
+            Type.Literal("detail"),
+            Type.Literal("set-stage"),
+          ], { description: "Action to perform" }),
+          stage: Type.Optional(
+            Type.Union([
+              Type.Literal("idea"),
+              Type.Literal("launch"),
+              Type.Literal("growth"),
+            ], { description: "Business stage filter" }),
+          ),
+          category: Type.Optional(Type.String({ description: "Category filter" })),
+          taskId: Type.Optional(Type.String({ description: "Task ID for complete/skip/detail" })),
+          title: Type.Optional(Type.String({ description: "Task title (for add)" })),
+          description: Type.Optional(Type.String({ description: "Task description (for add)" })),
+          priority: Type.Optional(
+            Type.Union([
+              Type.Literal("critical"),
+              Type.Literal("high"),
+              Type.Literal("medium"),
+              Type.Literal("low"),
+            ], { description: "Task priority (for add)" }),
+          ),
+          status: Type.Optional(
+            Type.Union([
+              Type.Literal("pending"),
+              Type.Literal("in_progress"),
+              Type.Literal("completed"),
+              Type.Literal("skipped"),
+            ], { description: "Status filter (for list)" }),
+          ),
+        }),
+        execute: async (params) => {
+          try {
+            // Dynamic import — checklist engine lives outside the plugin dir
+            const { readFileSync, writeFileSync, existsSync } = await import("node:fs");
+            const { randomUUID } = await import("node:crypto");
+
+            const CHECKLIST_PATH = "/home/wirebot/clawd/checklist.json";
+
+            // Inline minimal engine for the plugin context
+            // (avoiding cross-module import complexity in openclaw plugin loader)
+            interface TaskData {
+              id: string; title: string; description?: string; stage: string;
+              category: string; status: string; priority: string; source: string;
+              aiSuggestion?: string; dueDate?: string; completedAt?: string;
+              createdAt: string; updatedAt: string; dependencies?: string[];
+              notes?: string; order: number;
+            }
+            interface ChecklistData {
+              version: number; userId: string; businessName?: string;
+              currentStage: string; tasks: TaskData[];
+              categories: Array<{ id: string; name: string; stage: string; order: number }>;
+              createdAt: string; updatedAt: string;
+            }
+
+            let data: ChecklistData;
+            if (existsSync(CHECKLIST_PATH)) {
+              data = JSON.parse(readFileSync(CHECKLIST_PATH, "utf-8"));
+            } else {
+              return { content: [{ type: "text" as const, text: "Checklist not initialized. Run the onboarding flow first." }] };
+            }
+
+            const save = () => {
+              data.updatedAt = new Date().toISOString();
+              writeFileSync(CHECKLIST_PATH, JSON.stringify(data, null, 2));
+            };
+
+            const { action, stage, category, taskId, title, description: desc, priority, status: statusFilter } = params;
+            const currentStage = stage || data.currentStage;
+
+            const progressBar = (pct: number) => "█".repeat(Math.round(pct / 5)) + "░".repeat(20 - Math.round(pct / 5));
+
+            const getProgress = (s: string) => {
+              const tasks = data.tasks.filter(t => t.stage === s);
+              const completed = tasks.filter(t => t.status === "completed").length;
+              const total = tasks.length;
+              return { stage: s, completed, total, percent: total > 0 ? Math.round(completed / total * 100) : 0 };
+            };
+
+            switch (action) {
+              case "status": {
+                const stages = stage ? [stage] : ["idea", "launch", "growth"];
+                const all = data.tasks;
+                const totalDone = all.filter(t => t.status === "completed").length;
+                let text = `📊 Business Setup — ${data.currentStage.toUpperCase()}\n`;
+                text += `Overall: ${totalDone}/${all.length} (${all.length > 0 ? Math.round(totalDone/all.length*100) : 0}%)\n\n`;
+                for (const s of stages) {
+                  const p = getProgress(s);
+                  text += `${s.toUpperCase()}: ${progressBar(p.percent)} ${p.percent}% (${p.completed}/${p.total})\n`;
+                }
+                const next = data.tasks
+                  .filter(t => t.stage === currentStage && t.status === "pending")
+                  .sort((a, b) => { const pr: Record<string, number> = {critical:0,high:1,medium:2,low:3}; return (pr[a.priority]??2) - (pr[b.priority]??2) || a.order - b.order; })[0];
+                if (next) text += `\n▶ Next: ${next.title} [${next.priority}]`;
+                return { content: [{ type: "text" as const, text }] };
+              }
+
+              case "next": {
+                const task = data.tasks
+                  .filter(t => t.stage === currentStage && (t.status === "pending" || t.status === "in_progress"))
+                  .sort((a, b) => { const pr: Record<string, number> = {critical:0,high:1,medium:2,low:3}; return (pr[a.priority]??2) - (pr[b.priority]??2) || a.order - b.order; })[0];
+                if (!task) return { content: [{ type: "text" as const, text: "✅ All tasks in this stage are complete!" }] };
+                let text = `▶ ${task.title}\nPriority: ${task.priority} | ${task.stage}/${task.category}\n`;
+                if (task.aiSuggestion) text += `💡 ${task.aiSuggestion}\n`;
+                text += `ID: ${task.id}`;
+                return { content: [{ type: "text" as const, text }] };
+              }
+
+              case "complete": {
+                if (!taskId) return { content: [{ type: "text" as const, text: "❌ taskId required" }] };
+                const task = data.tasks.find(t => t.id === taskId);
+                if (!task) return { content: [{ type: "text" as const, text: "❌ Task not found" }] };
+                task.status = "completed";
+                task.completedAt = new Date().toISOString();
+                task.updatedAt = new Date().toISOString();
+                save();
+                const p = getProgress(task.stage);
+                return { content: [{ type: "text" as const, text: `✅ ${task.title}\nProgress: ${p.completed}/${p.total} (${p.percent}%)` }] };
+              }
+
+              case "skip": {
+                if (!taskId) return { content: [{ type: "text" as const, text: "❌ taskId required" }] };
+                const task = data.tasks.find(t => t.id === taskId);
+                if (!task) return { content: [{ type: "text" as const, text: "❌ Task not found" }] };
+                task.status = "skipped";
+                task.updatedAt = new Date().toISOString();
+                save();
+                return { content: [{ type: "text" as const, text: `⏭ Skipped: ${task.title}` }] };
+              }
+
+              case "add": {
+                if (!title) return { content: [{ type: "text" as const, text: "❌ title required" }] };
+                const newTask: TaskData = {
+                  id: randomUUID(), title, description: desc, stage: stage || data.currentStage,
+                  category: category || `${stage || data.currentStage}-custom`,
+                  status: "pending", priority: priority || "medium", source: "user",
+                  order: 999, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+                };
+                data.tasks.push(newTask);
+                save();
+                return { content: [{ type: "text" as const, text: `➕ ${newTask.title}\nID: ${newTask.id}` }] };
+              }
+
+              case "daily": {
+                const tasks = data.tasks
+                  .filter(t => t.stage === data.currentStage && (t.status === "pending" || t.status === "in_progress") && (t.priority === "critical" || t.priority === "high"))
+                  .sort((a, b) => a.order - b.order)
+                  .slice(0, 3);
+                if (tasks.length === 0) return { content: [{ type: "text" as const, text: "📋 No tasks for today" }] };
+                let text = `📋 Daily Stand-Up\n\n`;
+                for (const t of tasks) text += `☐ ${t.title} [${t.priority}]\n`;
+                return { content: [{ type: "text" as const, text }] };
+              }
+
+              case "list": {
+                let tasks = data.tasks;
+                if (stage) tasks = tasks.filter(t => t.stage === stage);
+                if (category) tasks = tasks.filter(t => t.category === category);
+                if (statusFilter) tasks = tasks.filter(t => t.status === statusFilter);
+                const icons: Record<string, string> = { pending: "☐", in_progress: "⏳", completed: "✅", skipped: "⏭" };
+                let text = `Tasks (${tasks.length}):\n\n`;
+                for (const t of tasks.slice(0, 25)) {
+                  text += `${icons[t.status] || "?"} ${t.title} [${t.priority}] ${t.id.slice(0,8)}\n`;
+                }
+                if (tasks.length > 25) text += `\n... +${tasks.length - 25} more`;
+                return { content: [{ type: "text" as const, text }] };
+              }
+
+              case "detail": {
+                if (!taskId) return { content: [{ type: "text" as const, text: "❌ taskId required" }] };
+                const task = data.tasks.find(t => t.id === taskId);
+                if (!task) return { content: [{ type: "text" as const, text: "❌ Task not found" }] };
+                let text = `📌 ${task.title}\nStatus: ${task.status} | Priority: ${task.priority}\n`;
+                text += `Stage: ${task.stage} | Category: ${task.category}\n`;
+                if (task.aiSuggestion) text += `💡 ${task.aiSuggestion}\n`;
+                if (task.notes) text += `📝 ${task.notes}\n`;
+                text += `ID: ${task.id}`;
+                return { content: [{ type: "text" as const, text }] };
+              }
+
+              case "set-stage": {
+                if (!stage) return { content: [{ type: "text" as const, text: "❌ stage required (idea/launch/growth)" }] };
+                data.currentStage = stage;
+                save();
+                const p = getProgress(stage);
+                return { content: [{ type: "text" as const, text: `🔄 Stage: ${stage.toUpperCase()} — ${p.completed}/${p.total} (${p.percent}%)` }] };
+              }
+            }
+
+            return { content: [{ type: "text" as const, text: "❌ Unknown action" }] };
+          } catch (err) {
+            return { content: [{ type: "text" as const, text: `Error: ${String(err)}` }] };
+          }
+        },
+      },
+      { name: "wirebot_checklist" },
+    );
+
+    // ========================================================================
     // Hook: agent_end — async fact extraction to Mem0
     // ========================================================================
 
