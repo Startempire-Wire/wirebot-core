@@ -1,240 +1,265 @@
 <script>
   let { data, lastUpdate } = $props();
 
-  function bar(value, max, width = 10) {
-    const filled = Math.round((value / max) * width);
-    return '█'.repeat(filled) + '░'.repeat(width - filled);
+  function signalClass(s) {
+    return s === 'green' ? 'sig-g' : s === 'yellow' ? 'sig-y' : 'sig-r';
   }
-
-  function signalClass(signal) {
-    return signal === 'green' ? 'signal-green' : signal === 'yellow' ? 'signal-yellow' : 'signal-red';
+  function signalLabel(s) {
+    return s === 'green' ? 'WINNING' : s === 'yellow' ? 'PRESSURE' : 'STALLING';
   }
-
-  function pct(v) { return Math.round(v * 100); }
-
-  function signalLabel(signal) {
-    return signal === 'green' ? 'WINNING' : signal === 'yellow' ? 'PRESSURE' : 'STALLING';
-  }
+  function pct(v) { return Math.round((v || 0) * 100); }
+  function lanePct(v, max) { return max ? Math.round((v / max) * 100) : 0; }
 </script>
 
-<div class="stadium">
+<div class="s">
   <!-- Header -->
-  <header>
-    <span class="season-name">{data.season?.name?.toUpperCase() || 'SCOREBOARD'}</span>
-    <span class="season-day">{data.season_day || ''}</span>
-  </header>
-
-  <!-- Main Score -->
-  <div class="score-zone {signalClass(data.signal)}">
-    <div class="score-label">EXECUTION SCORE</div>
-    <div class="score-number">{data.score}</div>
-    <div class="score-sub">{signalLabel(data.signal)}</div>
+  <div class="hdr">
+    <span class="sn">{data.season?.name?.toUpperCase() || 'SCOREBOARD'}</span>
+    <span class="sd">{data.season_day || ''}</span>
   </div>
 
-  <!-- Stats -->
+  <!-- Score -->
+  <div class="sc {signalClass(data.signal)}">
+    <div class="sc-lbl">EXECUTION SCORE</div>
+    <div class="sc-num">{data.score}</div>
+    <div class="sc-sub">{signalLabel(data.signal)}</div>
+  </div>
+
+  <!-- Stats Grid -->
   <div class="stats">
-    <div class="stat">
-      <div class="stat-val">🔥 {data.streak?.current || 0}</div>
-      <div class="stat-lbl">STREAK</div>
-    </div>
-    <div class="stat">
-      <div class="stat-val">🏆 {data.streak?.best || 0}</div>
-      <div class="stat-lbl">BEST</div>
-    </div>
-    <div class="stat">
-      <div class="stat-val">📊 {data.record || '0W-0L'}</div>
-      <div class="stat-lbl">RECORD</div>
-    </div>
-    <div class="stat">
-      <div class="stat-val">🚀 {data.ship_today || 0}</div>
-      <div class="stat-lbl">SHIPS</div>
-    </div>
+    <div class="st"><span class="st-v">🔥 {data.streak?.current || 0}</span><span class="st-l">STREAK</span></div>
+    <div class="st"><span class="st-v">🏆 {data.streak?.best || 0}</span><span class="st-l">BEST</span></div>
+    <div class="st"><span class="st-v">{data.record || '0-0'}</span><span class="st-l">W-L</span></div>
+    <div class="st"><span class="st-v">🚀 {data.ship_today || 0}</span><span class="st-l">SHIPS</span></div>
   </div>
 
   <!-- Possession -->
-  <div class="possession">
-    ⚡ <span class="pos-value">{data.possession || '—'}</span>
-  </div>
+  <div class="pos">⚡ <strong>{data.possession || '—'}</strong></div>
 
-  <!-- Lanes -->
+  <!-- Lanes (CSS bars, not text) -->
   <div class="lanes">
-    <div class="lane">
-      <span class="lane-name">SHIP</span>
-      <span class="lane-bar">{bar(data.lanes?.shipping || 0, data.lanes?.shipping_max || 40)}</span>
-      <span class="lane-pts">{data.lanes?.shipping || 0}<span class="lane-max">/{data.lanes?.shipping_max || 40}</span></span>
-    </div>
-    <div class="lane">
-      <span class="lane-name">DIST</span>
-      <span class="lane-bar">{bar(data.lanes?.distribution || 0, data.lanes?.distribution_max || 25)}</span>
-      <span class="lane-pts">{data.lanes?.distribution || 0}<span class="lane-max">/{data.lanes?.distribution_max || 25}</span></span>
-    </div>
-    <div class="lane">
-      <span class="lane-name">REV</span>
-      <span class="lane-bar">{bar(data.lanes?.revenue || 0, data.lanes?.revenue_max || 20)}</span>
-      <span class="lane-pts">{data.lanes?.revenue || 0}<span class="lane-max">/{data.lanes?.revenue_max || 20}</span></span>
-    </div>
-    <div class="lane">
-      <span class="lane-name">SYS</span>
-      <span class="lane-bar">{bar(data.lanes?.systems || 0, data.lanes?.systems_max || 15)}</span>
-      <span class="lane-pts">{data.lanes?.systems || 0}<span class="lane-max">/{data.lanes?.systems_max || 15}</span></span>
-    </div>
+    {#each [
+      ['SHIPPING', data.lanes?.shipping || 0, data.lanes?.shipping_max || 40],
+      ['DISTRIB', data.lanes?.distribution || 0, data.lanes?.distribution_max || 25],
+      ['REVENUE', data.lanes?.revenue || 0, data.lanes?.revenue_max || 20],
+      ['SYSTEMS', data.lanes?.systems || 0, data.lanes?.systems_max || 15],
+    ] as [name, val, max]}
+      <div class="ln">
+        <span class="ln-n">{name}</span>
+        <div class="ln-track">
+          <div class="ln-fill" style="width:{lanePct(val, max)}%"></div>
+        </div>
+        <span class="ln-v">{val}/{max}</span>
+      </div>
+    {/each}
   </div>
 
   <!-- Last Ship -->
   {#if data.last_ship}
-    <div class="last-ship">
-      LAST: {data.last_ship}
-    </div>
+    <div class="ls">LAST SHIP: {data.last_ship}</div>
   {/if}
 
-  <!-- Clock -->
-  <div class="clocks">
-    <div class="clock-row">
-      <span class="clock-lbl">DAY</span>
-      <div class="clock-track"><div class="clock-fill" style="width:{pct(data.clock?.day_progress||0)}%"></div></div>
-      <span class="clock-pct">{pct(data.clock?.day_progress||0)}%</span>
-    </div>
-    <div class="clock-row">
-      <span class="clock-lbl">WEEK</span>
-      <div class="clock-track"><div class="clock-fill" style="width:{pct(data.clock?.week_progress||0)}%"></div></div>
-      <span class="clock-pct">{pct(data.clock?.week_progress||0)}%</span>
-    </div>
-    <div class="clock-row">
-      <span class="clock-lbl">SEASON</span>
-      <div class="clock-track"><div class="clock-fill season-bar" style="width:{pct(data.clock?.season_progress||0)}%"></div></div>
-      <span class="clock-pct">{pct(data.clock?.season_progress||0)}%</span>
-    </div>
+  <!-- Clocks -->
+  <div class="clk">
+    {#each [
+      ['DAY', data.clock?.day_progress],
+      ['WEEK', data.clock?.week_progress],
+      ['SEASON', data.clock?.season_progress],
+    ] as [label, progress], i}
+      <div class="ck">
+        <span class="ck-l">{label}</span>
+        <div class="ck-track">
+          <div class="ck-fill {i === 2 ? 'ck-season' : ''}" style="width:{pct(progress)}%"></div>
+        </div>
+        <span class="ck-p">{pct(progress)}%</span>
+      </div>
+    {/each}
   </div>
 
-  <footer>{data.season?.theme || ''} · Updated {lastUpdate}</footer>
+  <div class="ft">{lastUpdate}</div>
 </div>
 
 <style>
-  .stadium {
-    width: 100%;
-    min-height: 100vh;
+  /* ── Base: Mobile (320px+) ── */
+  .s {
     display: flex;
     flex-direction: column;
-    padding: env(safe-area-inset-top, 12px) 16px env(safe-area-inset-bottom, 12px);
+    min-height: 100dvh;
+    padding: 12px 16px;
+    padding-top: max(12px, env(safe-area-inset-top));
+    padding-bottom: max(12px, env(safe-area-inset-bottom));
     box-sizing: border-box;
-    background: linear-gradient(180deg, #0a0a1a 0%, #0d0d20 50%, #0a0a1a 100%);
-    gap: 12px;
-    font-family: 'SF Mono', 'Fira Code', 'JetBrains Mono', 'Courier New', monospace;
+    gap: 10px;
+    background: #0a0a1a;
+    color: #ddd;
+    font-family: system-ui, -apple-system, sans-serif;
   }
 
-  header {
+  /* Header */
+  .hdr {
     display: flex;
     justify-content: space-between;
     align-items: baseline;
-    border-bottom: 1px solid #1a1a2e;
-    padding-bottom: 8px;
+    border-bottom: 1px solid #1e1e30;
+    padding-bottom: 6px;
   }
-  .season-name { font-size: 14px; font-weight: 700; letter-spacing: 0.2em; color: #7c7cff; }
-  .season-day { font-size: 13px; color: #666; }
+  .sn { font-size: 12px; font-weight: 700; letter-spacing: .15em; color: #7c7cff; }
+  .sd { font-size: 12px; color: #555; }
 
   /* Score */
-  .score-zone {
+  .sc {
     text-align: center;
-    padding: 16px 0;
+    padding: 12px 0;
     border-radius: 12px;
-    transition: all 0.5s ease;
   }
-  .score-label { font-size: 11px; letter-spacing: 0.4em; opacity: 0.5; }
-  .score-number { font-size: 96px; font-weight: 900; line-height: 1; font-variant-numeric: tabular-nums; }
-  .score-sub { font-size: 14px; letter-spacing: 0.3em; margin-top: 4px; }
+  .sc-lbl { font-size: 10px; letter-spacing: .3em; opacity: .5; }
+  .sc-num {
+    font-size: 80px;
+    font-weight: 900;
+    line-height: 1;
+    font-variant-numeric: tabular-nums;
+    font-family: system-ui, -apple-system, sans-serif;
+  }
+  .sc-sub { font-size: 13px; letter-spacing: .25em; margin-top: 4px; }
 
-  .signal-green { background: rgba(0,255,100,0.06); }
-  .signal-green .score-number { color: #00ff64; text-shadow: 0 0 30px rgba(0,255,100,0.25); }
-  .signal-green .score-sub { color: #00cc50; }
+  .sig-g { background: rgba(0,255,100,.06); }
+  .sig-g .sc-num { color: #00ff64; text-shadow: 0 0 30px rgba(0,255,100,.2); }
+  .sig-g .sc-sub { color: #00cc50; }
 
-  .signal-yellow { background: rgba(255,200,0,0.06); }
-  .signal-yellow .score-number { color: #ffc800; text-shadow: 0 0 30px rgba(255,200,0,0.25); }
-  .signal-yellow .score-sub { color: #cc9900; }
+  .sig-y { background: rgba(255,200,0,.06); }
+  .sig-y .sc-num { color: #ffc800; text-shadow: 0 0 30px rgba(255,200,0,.2); }
+  .sig-y .sc-sub { color: #cc9900; }
 
-  .signal-red { background: rgba(255,50,50,0.06); }
-  .signal-red .score-number { color: #ff3232; text-shadow: 0 0 30px rgba(255,50,50,0.25); animation: pulse 2s infinite; }
-  .signal-red .score-sub { color: #cc2020; }
+  .sig-r { background: rgba(255,50,50,.06); }
+  .sig-r .sc-num { color: #ff3232; text-shadow: 0 0 30px rgba(255,50,50,.2); animation: pulse 2s infinite; }
+  .sig-r .sc-sub { color: #cc2020; }
 
-  @keyframes pulse { 0%,100% { opacity:1; } 50% { opacity:0.6; } }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.6} }
 
   /* Stats */
   .stats {
     display: grid;
     grid-template-columns: repeat(4, 1fr);
-    gap: 8px;
+    gap: 4px;
+    border-top: 1px solid #1e1e30;
+    border-bottom: 1px solid #1e1e30;
     padding: 8px 0;
-    border-top: 1px solid #1a1a2e;
-    border-bottom: 1px solid #1a1a2e;
   }
-  .stat { text-align: center; }
-  .stat-val { font-size: 16px; font-weight: 700; }
-  .stat-lbl { font-size: 9px; letter-spacing: 0.15em; opacity: 0.4; margin-top: 2px; }
+  .st { text-align: center; }
+  .st-v { display: block; font-size: 15px; font-weight: 700; white-space: nowrap; }
+  .st-l { display: block; font-size: 8px; letter-spacing: .1em; opacity: .35; margin-top: 1px; }
 
   /* Possession */
-  .possession {
-    text-align: center;
-    font-size: 13px;
-    color: #888;
-    letter-spacing: 0.1em;
-  }
-  .pos-value { font-size: 18px; font-weight: 700; color: #7c7cff; }
-
-  /* Lanes */
-  .lanes { display: flex; flex-direction: column; gap: 6px; padding: 4px 0; }
-  .lane { display: flex; align-items: center; gap: 8px; }
-  .lane-name { font-size: 11px; width: 36px; opacity: 0.5; letter-spacing: 0.05em; }
-  .lane-bar { font-size: 14px; color: #4a9eff; letter-spacing: 0.02em; flex: 1; }
-  .lane-pts { font-size: 13px; font-variant-numeric: tabular-nums; min-width: 48px; text-align: right; }
-  .lane-max { opacity: 0.4; font-size: 11px; }
-
-  /* Last Ship */
-  .last-ship {
+  .pos {
     text-align: center;
     font-size: 12px;
+    color: #888;
+    letter-spacing: .05em;
+  }
+  .pos strong { color: #7c7cff; font-size: 16px; }
+
+  /* Lanes — CSS progress bars */
+  .lanes { display: flex; flex-direction: column; gap: 8px; }
+  .ln { display: flex; align-items: center; gap: 8px; }
+  .ln-n { font-size: 10px; width: 56px; letter-spacing: .05em; opacity: .45; flex-shrink: 0; }
+  .ln-track {
+    flex: 1;
+    height: 10px;
+    background: #1a1a2e;
+    border-radius: 5px;
+    overflow: hidden;
+  }
+  .ln-fill {
+    height: 100%;
+    background: linear-gradient(90deg, #4a9eff, #7c7cff);
+    border-radius: 5px;
+    transition: width .8s ease;
+    min-width: 2px;
+  }
+  .ln-v {
+    font-size: 12px;
+    font-variant-numeric: tabular-nums;
+    opacity: .6;
+    min-width: 40px;
+    text-align: right;
+    flex-shrink: 0;
+  }
+
+  /* Last Ship */
+  .ls {
+    text-align: center;
+    font-size: 11px;
     color: #4a9eff;
-    opacity: 0.7;
-    white-space: nowrap;
+    opacity: .65;
     overflow: hidden;
     text-overflow: ellipsis;
-    padding: 4px 0;
+    white-space: nowrap;
   }
 
   /* Clocks */
-  .clocks { display: flex; flex-direction: column; gap: 6px; margin-top: auto; padding-top: 8px; border-top: 1px solid #1a1a2e; }
-  .clock-row { display: flex; align-items: center; gap: 8px; }
-  .clock-lbl { font-size: 10px; width: 50px; opacity: 0.4; letter-spacing: 0.15em; }
-  .clock-track { flex: 1; height: 6px; background: #1a1a2e; border-radius: 3px; overflow: hidden; }
-  .clock-fill { height: 100%; background: linear-gradient(90deg, #4a9eff, #7c7cff); border-radius: 3px; transition: width 1s ease; }
-  .season-bar { background: linear-gradient(90deg, #ff6b4a, #ff4a9e); }
-  .clock-pct { font-size: 11px; opacity: 0.5; min-width: 32px; text-align: right; font-variant-numeric: tabular-nums; }
+  .clk {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    margin-top: auto;
+    padding-top: 8px;
+    border-top: 1px solid #1e1e30;
+  }
+  .ck { display: flex; align-items: center; gap: 6px; }
+  .ck-l { font-size: 9px; width: 44px; opacity: .35; letter-spacing: .1em; flex-shrink: 0; }
+  .ck-track { flex: 1; height: 5px; background: #1a1a2e; border-radius: 3px; overflow: hidden; }
+  .ck-fill { height: 100%; background: linear-gradient(90deg, #4a9eff, #7c7cff); border-radius: 3px; transition: width 1s ease; }
+  .ck-season { background: linear-gradient(90deg, #ff6b4a, #ff4a9e); }
+  .ck-p { font-size: 10px; opacity: .4; min-width: 28px; text-align: right; font-variant-numeric: tabular-nums; flex-shrink: 0; }
 
-  footer {
-    text-align: center;
-    font-size: 10px;
-    opacity: 0.25;
-    padding: 4px 0;
+  /* Footer */
+  .ft { text-align: center; font-size: 9px; opacity: .2; }
+
+  /* ── Tablet (600px+) ── */
+  @media (min-width: 600px) {
+    .s { padding: 20px 32px; gap: 14px; }
+    .sn { font-size: 14px; }
+    .sc-num { font-size: 120px; }
+    .sc-sub { font-size: 16px; }
+    .st-v { font-size: 18px; }
+    .st-l { font-size: 10px; }
+    .pos strong { font-size: 20px; }
+    .ln-n { font-size: 12px; width: 70px; }
+    .ln-track { height: 14px; border-radius: 7px; }
+    .ln-fill { border-radius: 7px; }
+    .ln-v { font-size: 14px; }
+    .ls { font-size: 13px; }
   }
 
-  /* ── TV / Large screen overrides ── */
+  /* ── TV / Stadium (1024px+) ── */
   @media (min-width: 1024px) {
-    .stadium { padding: 3vh 4vw; gap: 2vh; }
-    .season-name { font-size: 2.5vh; }
-    .season-day { font-size: 2vh; }
-    .score-number { font-size: 18vh; }
-    .score-label { font-size: 1.8vh; }
-    .score-sub { font-size: 2.5vh; }
-    .stats { gap: 2vw; }
-    .stat-val { font-size: 3vh; }
-    .stat-lbl { font-size: 1.5vh; }
-    .pos-value { font-size: 3.5vh; }
-    .lane-name { font-size: 2vh; width: 8vw; }
-    .lane-bar { font-size: 2.5vh; }
-    .lane-pts { font-size: 2vh; }
+    .s {
+      padding: 3vh 5vw;
+      gap: 2vh;
+      height: 100vh;
+      min-height: auto;
+      overflow: hidden;
+      font-family: 'SF Mono', 'JetBrains Mono', 'Fira Code', monospace;
+    }
+    .sn { font-size: 2.2vh; }
+    .sd { font-size: 1.8vh; }
+    .sc { padding: 2.5vh 0; }
+    .sc-lbl { font-size: 1.6vh; }
+    .sc-num { font-size: 16vh; }
+    .sc-sub { font-size: 2.5vh; }
+    .stats { gap: 2vw; padding: 1.5vh 0; }
+    .st-v { font-size: 3vh; }
+    .st-l { font-size: 1.3vh; }
+    .pos strong { font-size: 3vh; }
     .lanes { gap: 1.5vh; }
-    .clock-lbl { font-size: 1.5vh; }
-    .clock-track { height: 1vh; }
-    .clock-pct { font-size: 1.5vh; }
-    .last-ship { font-size: 2vh; }
-    footer { font-size: 1.2vh; }
+    .ln-n { font-size: 1.8vh; width: 8vw; }
+    .ln-track { height: 1.5vh; border-radius: 1vh; }
+    .ln-fill { border-radius: 1vh; }
+    .ln-v { font-size: 1.8vh; min-width: 6vw; }
+    .ls { font-size: 1.8vh; }
+    .ck-l { font-size: 1.3vh; width: 6vw; }
+    .ck-track { height: .8vh; }
+    .ck-p { font-size: 1.3vh; }
+    .ft { font-size: 1vh; }
   }
 </style>
