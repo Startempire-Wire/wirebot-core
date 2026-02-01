@@ -247,34 +247,69 @@ const wirebotMemoryBridge = {
 
           // Layer 1: memory-core — skip, already injected by memory-core plugin
 
-          // Layer 2: Mem0 facts
-          if (searchAll || layers?.includes("mem0")) {
-            const facts = await mem0Search(
-              cfg.mem0Url,
-              cfg.mem0Namespace,
-              query,
-              5,
-            );
-            for (const f of facts) {
-              const pct = typeof f.score === "number"
-                ? ` (${(f.score * 100).toFixed(0)}%)`
-                : "";
-              results.push(`[fact] ${f.memory}${pct}`);
+          // FAST PATH: Try Go daemon cache first (serves all facts + blocks, <1ms)
+          let cacheHit = false;
+          if (searchAll) {
+            try {
+              const cacheResp = await fetch(
+                `http://127.0.0.1:8201/cache/search?q=${encodeURIComponent(query)}`,
+                { signal: AbortSignal.timeout(500) },
+              );
+              if (cacheResp.ok) {
+                const cache = (await cacheResp.json()) as {
+                  results: Array<{ source: string; text: string }>;
+                  age_ms: number;
+                };
+                if (cache.results && cache.results.length > 0) {
+                  for (const r of cache.results) {
+                    if (r.source === "mem0") {
+                      results.push(`[fact] ${r.text}`);
+                    } else if (r.source.startsWith("letta:")) {
+                      results.push(`[state:${r.source.replace("letta:", "")}] ${r.text}`);
+                    }
+                  }
+                  cacheHit = true;
+                }
+              }
+            } catch {
+              // Cache unavailable — fall through to direct queries
             }
           }
 
-          // Layer 3: Letta blocks
-          if (searchAll || layers?.includes("letta")) {
-            const blocks = await lettaGetBlocks(cfg.lettaUrl, cfg.lettaAgentId);
-            const queryLower = query.toLowerCase();
-            for (const block of blocks) {
-              if (
-                block.value &&
-                block.value.toLowerCase().includes(queryLower)
-              ) {
-                results.push(`[state:${block.label}] ${block.value}`);
-              }
+          // SLOW PATH: Direct queries (parallel) — only if cache missed
+          if (!cacheHit) {
+            const promises: Promise<void>[] = [];
+
+            if (searchAll || layers?.includes("mem0")) {
+              promises.push(
+                mem0Search(cfg.mem0Url, cfg.mem0Namespace, query, 5).then((facts) => {
+                  for (const f of facts) {
+                    const pct = typeof f.score === "number"
+                      ? ` (${(f.score * 100).toFixed(0)}%)`
+                      : "";
+                    results.push(`[fact] ${f.memory}${pct}`);
+                  }
+                }),
+              );
             }
+
+            if (searchAll || layers?.includes("letta")) {
+              promises.push(
+                lettaGetBlocks(cfg.lettaUrl, cfg.lettaAgentId).then((blocks) => {
+                  const queryLower = query.toLowerCase();
+                  for (const block of blocks) {
+                    if (
+                      block.value &&
+                      block.value.toLowerCase().includes(queryLower)
+                    ) {
+                      results.push(`[state:${block.label}] ${block.value}`);
+                    }
+                  }
+                }),
+              );
+            }
+
+            await Promise.all(promises);
           }
 
           if (results.length === 0) {
