@@ -3135,7 +3135,14 @@ Agent Constitution (versions)         Local directory            /data/wirebot/f
 CS drafts                             Local directory            /data/wirebot/focusa-state/constitutions/drafts/
 Capability permissions                Local config              /data/wirebot/focusa-state/permissions.json
 Cache metadata                        In-memory                 (ephemeral, C2 class)
+Cache bust log                        Local append-only         /data/wirebot/focusa-state/cache-busts.jsonl
 Worker queue                          In-memory                 (ephemeral, bounded 100)
+Training dataset exports              Local files               /data/wirebot/focusa-state/exports/
+Contribution policy                   Local config              /data/wirebot/focusa-state/contribution-policy.json
+Contribution queue                    Local file                /data/wirebot/focusa-state/contribution-queue.jsonl
+Agent behavioral protocol             Workspace file            clawd/AGENTS.md
+ACP proxy sessions                    Local file                /data/wirebot/focusa-state/acp-sessions.json
+Skill invocation telemetry            Local append-only         (part of telemetry.jsonl)
 ```
 
 Design principle: Every piece of state has a **primary backend** (real-time) and a **workspace shadow** (.md file memory-core indexes). Nightly sync aligns them. Workspace shadows + reducer event log can reconstruct everything.
@@ -3166,11 +3173,19 @@ G1-10-workers.md                               →  bridge/workers.ts
 16-constitution-synthesizer.md                 →  bridge/synthesizer.ts
 17-context-lineage-tree.md                     →  bridge/clt.ts
 18-cache-permission-matrix.md                  →  bridge/cache.ts
+19-intentional-cache-busting.md                →  bridge/cache-bust.ts
+20-training-dataset-schema.md                  →  bridge/dataset.ts
+22-data-contribution.md                        →  bridge/contribution.ts
 23-capabilities-api.md                         →  bridge/api.ts
+24-capabilities-cli.md                         →  bridge/cli.ts (tool registrations)
 25-capability-permissions.md                   →  bridge/permissions.ts
+26-agent-capability-scope.md                   →  bridge/scope.ts
 29-telemetry-spec.md + 30-schema               →  bridge/telemetry.ts
-G1-detail-15-events-observability.md           →  bridge/events.ts
+31-telemetry-api.md                            →  bridge/telemetry-api.ts
+32-telemetry-tui.md                            →  (dashboard telemetry component)
+33-acp-proxy-spec.md                           →  bridge/adapter.ts (ACP modes)
 34-agent-skills-spec.md                        →  bridge/tools.ts
+35-skill-to-capabilities-mapping.md            →  bridge/tools.ts (exact mappings)
 36-reliability-focus-mode.md                   →  bridge/rfm.ts
 37-autonomy-calibration-spec.md                →  bridge/autonomy.ts
 12-autonomy-scoring.md                         →  bridge/autonomy.ts (scoring)
@@ -3178,13 +3193,1602 @@ G1-detail-15-events-observability.md           →  bridge/events.ts
 39-thread-lifecycle-spec.md                    →  bridge/threads.ts
 40-instance-session-attachment-spec.md         →  bridge/instances.ts
 41-proposal-resolution-engine.md               →  bridge/pre.ts
+G1-detail-15-events-observability.md           →  bridge/events.ts
+11-menubar-ui-spec.md                          →  (dashboard home component)
+13-autonomy-ui.md                              →  (dashboard profile component)
+27-tui-spec.md                                 →  (dashboard layout/navigation)
+28-ratatui-component-tree.md                   →  (dashboard component hierarchy)
+02-runtime-daemon.md                           →  bridge/daemon.ts (session + event model)
+10-monorepo-layout.md                          →  (repo structure reference, Rust → TS mapping)
+21-data-export-cli.md                          →  bridge/export.ts
+G1-12-api.md                                   →  bridge/api.ts (Gen1 endpoint reference)
+G1-13-cli.md                                   →  bridge/cli.ts (Gen1 command reference)
+G1-16-testing.md                               →  bridge/tests/ (acceptance criteria)
+G1-detail-00-doc-suite-readme.md               →  (invariants reference, non-negotiable)
+G1-detail-PRD-gen2-intermediate.md             →  (product requirements, Gen2 refinement)
+PRD-delta-threads.md                           →  bridge/threads.ts (requirements)
+PRD-delta-thread-workspaces.md                 →  bridge/threads.ts (requirements)
+AGENTS.md                                      →  bridge/agent-protocol.ts
+bootstrap-prompt.md                            →  (implementation guide)
+bootstrap-prompt-rust.md                       →  (implementation guide, Rust-specific)
+PRD.md                                         →  (product requirements reference)
+README.md                                      →  (project philosophy + design principles)
 00-glossary.md                                 →  bridge/types.ts
 01-architecture-overview.md                    →  (this document)
 ```
 
 ---
 
-## 32. Precision Disclosure: Genuinely Unparameterized Items
+## 32. Intentional Cache Busting
+
+Source: `19-intentional-cache-busting.md`
+
+> **Cache busting is a correctness feature. We break caches to preserve meaning.**
+
+### Bust Categories (6)
+
+**Category A — Fresh Evidence Arrived (Always Bust):**
+New file/diff/snippet attached, tool output with new errors, repo HEAD changes, new Beads task selected, new constraints stated.
+Bust: C1 prompt assembly, C1 context pack, C2 retrieval rankings, C3 provider KV (if it would exclude new evidence).
+
+**Category B — Authority Boundary Changed (Always Bust):**
+Autonomy level changes, human approval toggled, new policy constraints, task authority changes.
+Bust: all C1/C2, always rebuild prompt from Focus State.
+
+**Category C — Compaction/Summary Inserted (Always Bust):**
+CLT compaction or anchored summaries inserted. Stale prefix reuse can reintroduce outdated material.
+Bust: C1 prompt assembly, C1 context pack, C3 provider KV if compaction changed prefix content.
+
+**Category D — Staleness Risk Detected (Should Bust):**
+Signals: UFI rises over last N interactions, repeated "rephrase"/"no that's not what I meant", repeated wrong-file edits, agent references old artifacts despite new attachments.
+Bust: C1/C2 always, C3 optionally.
+
+**Category E — Salience Collapse Detected (Should Bust):**
+Signals: token budget pressure increases, high history-to-current ratio, Focus Gate low confidence, frequent retrieval misses + user corrections.
+Response: force compaction, rebuild prompt minimalistically, accept cache miss.
+Bust: C1/C2, C3 if it incentivizes append-only behavior.
+
+**Category F — Provider Cache Mismatch (May Bust):**
+Unexpected prefill latency spikes, inconsistent cache-hit telemetry, harness switched.
+Response: do not preserve provider cache at expense of correctness.
+
+### Bust Procedures
+
+**Internal (C1/C2):** Delete entries by key or increment `focus_state_revision` / `prompt_assembly_revision`. Preferred: revision bump (audit-friendly).
+
+**Provider KV (C3):** Black-box busting via:
+1. Prefix refresh marker (deterministic nonce that changes only when required)
+2. Strict separation (static scaffolding minimal, dynamic outside cached prefix)
+3. Forced repack (reassemble with new ordering when correctness requires)
+
+Never insert random noise. Must remain deterministic and auditable.
+
+### Telemetry
+
+Each bust records: timestamp, category (A–F), reason, impacted cache classes, recompute cost.
+
+> **We bust caches when the system risks being wrong, stale, or miscalibrated — even if it costs tokens.**
+
+**Bridge mapping:** Bust triggers → bridge plugin event handlers. Category A/B map to Clawdbot config change events. Category D/E map to UFI signals from UXP/UFI module.
+
+---
+
+## 33. Training Dataset Schema
+
+Source: `20-training-dataset-schema.md`
+
+> **Training data must represent cognition, not conversation.**
+
+### Dataset Families (4)
+
+**1. `focusa_sft` — Supervised Fine-Tuning:**
+Stable, high-confidence behaviors. Eligibility: UXP ≥ threshold, UFI ≤ threshold, task completed.
+
+```json
+{
+  "instruction": "string",
+  "context": { "references": ["ref://..."], "summaries": ["ref://..."] },
+  "response": "string",
+  "response_metadata": { "token_count": 1234, "format": "markdown | text | json" }
+}
+```
+
+**2. `focusa_preference` — Preference/DPO:**
+
+```json
+{
+  "prompt": "string",
+  "response_a": "string",
+  "response_b": "string",
+  "preferred": "a | b",
+  "preference_basis": { "uxp_delta": 0.32, "ufi_delta": -0.18, "user_corrections": 2 }
+}
+```
+
+**3. `focusa_contrastive` — Failure-aware Training:**
+
+```json
+{
+  "goal": "string",
+  "failed_path": { "summary": "string", "clt_nodes": ["clt_id"] },
+  "successful_path": { "summary": "string", "clt_nodes": ["clt_id"] },
+  "failure_reason": ["stale_context", "constraint_violation", "wrong_focus", "tool_misuse"]
+}
+```
+
+**4. `focusa_long_horizon` — Procedural/Temporal Reasoning:**
+
+```json
+{
+  "episode": {
+    "initial_intent": "string",
+    "state_transitions": [{ "focus_state_delta": {}, "action_taken": "string", "outcome": "string" }],
+    "final_outcome": "success | failure | partial"
+  }
+}
+```
+
+### Common Fields (ALL records)
+
+Every record includes: `record_id`, `session_id`, `agent_id`, `agent_constitution_version`, `model_id`, `harness_id`, `focus_state_id`, `focus_state_snapshot`, `clt_head`, `clt_path`, `task_context`, `uxp`, `ufi`, `autonomy`, `license`, `timestamps`.
+
+### Decontamination (Required Before Export)
+
+Strip provider phrasing, remove system messages, normalize tool output formats, exclude eval prompts, exclude cached responses reused across contexts.
+
+### Output Formats
+
+JSONL (default), Parquet (optional), HuggingFace `datasets` compatible.
+
+> **If provenance, focus, or outcome cannot be proven — do not export.**
+
+**Bridge mapping:** Training data export → future scheduled bridge job. Sources: telemetry JSONL, CLT, workspace artifacts. Not needed for MVP.
+
+---
+
+## 34. Opt-In Data Contribution (ODCL)
+
+Source: `22-data-contribution.md`
+
+> **Users contribute meaning, not surveillance.**
+
+### Architecture
+
+```
+Focusa Runtime → Contribution Eligibility Filter → Local Queue → User Policy Gate → Background Export Worker → Encrypted Dataset Sink
+```
+
+ODCL is read-only with respect to cognition. OFF by default. No silent defaults. No dark patterns.
+
+### Contribution Policy Schema
+
+```json
+{
+  "enabled": true,
+  "dataset_types": ["sft", "preference", "contrastive", "long_horizon"],
+  "min_uxp": 0.75,
+  "max_ufi": 0.25,
+  "min_autonomy_level": 0,
+  "exclude_domains": ["private", "work", "confidential"],
+  "require_manual_review": false,
+  "upload_schedule": "idle_only | manual | scheduled",
+  "network_policy": "unmetered_only | any",
+  "power_policy": "plugged_in_only | any",
+  "redaction_level": "high | medium | low",
+  "consent_version": "v1.0"
+}
+```
+
+### Eligibility (ALL must pass)
+
+- contribution enabled
+- `export_allowed = true`
+- Focus State complete
+- CLT lineage intact
+- no secrets detected
+- license/consent valid
+- UXP ≥ threshold
+- UFI ≤ threshold
+
+If uncertain → exclude.
+
+### Allowed vs Forbidden
+
+**Allowed:** Focus State snapshots, CLT summaries (not raw turns), structured tool outputs, reducer state transitions, preference/correction signals, autonomy outcome metrics.
+
+**Forbidden:** Raw conversations, raw prompts, system messages, provider fingerprints, secrets/credentials, personal identifiers.
+
+### Local Queue
+
+```json
+{
+  "queue_item_id": "uuid",
+  "dataset_type": "focusa_sft",
+  "preview": { "goal": "string", "summary": "string", "outcome": "success" },
+  "estimated_size_kb": 38,
+  "status": "pending | approved | rejected | uploaded"
+}
+```
+
+User can: inspect, approve/reject, redact, pause queue, purge history.
+
+### Upload Sinks (Pluggable)
+
+- Option A: Central Focusa Dataset (curated, default for MVP)
+- Option B: Federated/P2P Dataset (future)
+- Option C: Local/Team Export (manual)
+
+### Canonical Rules
+
+1. No opt-in → no export
+2. No provenance → no export
+3. If it surprises the user → don't do it
+4. Local control always wins
+5. Contribution must earn trust every day
+
+**Bridge mapping:** ODCL → future module. Not needed for MVP. When built, it reads from telemetry JSONL + CLT + workspace.
+
+---
+
+## 35. Agent Capability Scope Model
+
+Source: `26-agent-capability-scope.md`
+
+> **Agents may see everything. Agents may change nothing directly.**
+
+### Agent Identity
+
+```json
+{
+  "agent_id": "agent_uuid",
+  "name": "string",
+  "kind": "assistant | auditor | researcher | visualizer | trainer",
+  "constitution_version": "semver",
+  "default_permissions": ["scope:*"],
+  "allowed_commands": ["command_type"],
+  "created_at": "iso8601"
+}
+```
+
+### Scope Tiers (3)
+
+**Core Read Scopes (Default ON):**
+`state:read`, `lineage:read`, `references:read`, `gate:read`, `intuition:read`, `constitution:read`, `autonomy:read`, `metrics:read`, `cache:read`, `events:read`
+→ Full cognition introspection. Zero authority.
+
+**Advisory Scopes (Optional):**
+`intuition:submit`, `constitution:propose`
+→ Submit advisory signals, draft constitution updates. Cannot activate.
+
+**Command Request Scope (Highly Restricted):**
+`commands:request`
+→ Request commands, receive approval/denial. **Cannot self-approve.**
+
+### Agent Interaction Loop
+
+1. **Observe** (read Focus State, CLT, metrics)
+2. **Analyze** (detect patterns, compare outcomes, reason over lineage)
+3. **Propose** (advisory suggestion, constitution draft, command request)
+4. **Explain** (rationale, evidence, confidence)
+
+### Prohibited Agent Actions (Hard Failures)
+
+- mutate Focus State
+- bypass Focus Gate
+- escalate autonomy
+- write directly to Reference Store
+- alter cache policy
+- approve data contribution
+- activate constitution versions
+
+> **Agents reason *with* Focusa — they do not reason *instead of* Focusa.**
+
+**Bridge mapping:** Wirebot itself is the agent. Clawdbot registered tools = read scopes. Bridge plugin enforces scope tiers.
+
+---
+
+## 36. ACP Proxy & Observation
+
+Source: `33-acp-proxy-spec.md`
+
+### Integration Modes (2)
+
+**Mode A — Passive Observation (Wrapper):**
+```
+Zed ACP Client ↔ Focusa Observer Wrapper ↔ Agent ACP server
+```
+Focusa pipes stdin/stdout, parses JSON-RPC frames, records telemetry, forwards bytes **unmodified**. Provides telemetry only.
+
+**Mode B — Active Cognitive Proxy (Preferred):**
+```
+Zed ACP Client ↔ Focusa ACP Proxy (daemon) ↔ Agent ACP server
+```
+Focusa terminates ACP client transport, routes bidirectionally, maps ACP session to Focusa Session, shapes context (Focus Gate + Prompt Assembly), records full CTL telemetry. Provides **full Focusa cognition**.
+
+### Configuration
+
+```json
+{
+  "acp": {
+    "enabled": true,
+    "mode": "observe | proxy",
+    "listen": "127.0.0.1:4778",
+    "target_agent": {
+      "kind": "claude | gemini | codex | other",
+      "transport": "stdio | tcp | ws",
+      "command": ["claude", "--acp"]
+    }
+  }
+}
+```
+
+### Proxy Mode Cognitive Hooks
+
+1. **Focus Gate:** On session/prompt — read Focus State, evaluate freshness, decide accept/bust/compact/rehydrate
+2. **Prompt Assembly:** Assemble constitution + Focus State + CLT deltas + salient refs + user prompt
+3. **CLT Updates:** Append interaction nodes per prompt-response cycle
+4. **Telemetry:** Emit `acp.rpc.in`, `acp.rpc.out` + derived `model.tokens`, `tool.call`
+
+### Performance
+
+- Proxy overhead: **p50 < 5ms**, **p95 < 15ms**
+- All telemetry writes async, batched, non-blocking
+- Backpressure: drop low-priority telemetry, never block ACP routing
+
+### Implementation Phases
+
+1. Passive Observation (stdio interception, JSON-RPC framing, CTL capture)
+2. Proxy with Read-only Cognition (routing, session mapping, CLT, telemetry)
+3. Full Cognitive Proxy (Focus Gate, Prompt Assembly, cache policy, autonomy hooks)
+
+> **Observation is optional. Proxying is explicit. Cognition is earned.**
+
+**Bridge mapping:** Clawdbot IS the proxy layer. Mode B is the natural architecture — Clawdbot already mediates all model requests. `beforeAgentTurn` / `afterAgentTurn` hooks serve as the ACP cognitive hook equivalents.
+
+---
+
+## 37. Skills → Capabilities API Mapping
+
+Source: `35-skill-to-capabilities-mapping.md`
+
+> **Skills call capabilities. Capabilities enforce policy. Reducers enact cognition.**
+
+Skills are thin declarative wrappers over the Capabilities API. They do not add logic, mutate state, or bypass gates.
+
+### Complete Mapping (18 skills)
+
+**Cognition Inspection (8 skills — read-only):**
+
+| Skill | Capability | API Endpoint |
+|-------|-----------|-------------|
+| `focusa.get_focus_state` | `state:read` | `GET /v1/state/current` |
+| `focusa.get_focus_stack` | `state:read` | `GET /v1/state/stack` |
+| `focusa.get_lineage_tree` | `lineage:read` | `GET /v1/lineage/tree` |
+| `focusa.get_lineage_node` | `lineage:read` | `GET /v1/lineage/node/{clt_id}` |
+| `focusa.get_gate_explanation` | `gate:read` | `GET /v1/gate/explain` |
+| `focusa.get_salient_references` | `references:read` | `GET /v1/references/salient` |
+| `focusa.get_constitution` | `constitution:read` | `GET /v1/constitution/current` |
+| `focusa.get_autonomy_status` | `autonomy:read` | `GET /v1/autonomy/status` |
+
+**Telemetry & Metrics (4 skills — read-only):**
+
+| Skill | Capability | API Endpoint |
+|-------|-----------|-------------|
+| `focusa.get_token_stats` | `telemetry:read` | `GET /v1/telemetry/tokens` |
+| `focusa.get_cognitive_metrics` | `telemetry:read` | `GET /v1/telemetry/process` |
+| `focusa.get_tool_usage` | `telemetry:read` | `GET /v1/telemetry/tools` |
+| `focusa.get_ux_signals` | `telemetry:read` | `GET /v1/telemetry/ux` |
+
+**Explanation & Traceability (2 skills — read-only):**
+
+| Skill | Capability | API Endpoint |
+|-------|-----------|-------------|
+| `focusa.explain_last_decision` | `state:read` | `GET /v1/state/explain?scope=last` |
+| `focusa.trace_reference_usage` | `references:read` | `GET /v1/references/trace/{ref_id}` |
+
+**Proposal & Request (4 skills — guarded, never enact change):**
+
+| Skill | Capability | API Endpoint |
+|-------|-----------|-------------|
+| `focusa.propose_focus_change` | `commands:request` | `POST /v1/commands/request` (type: `focus.change`) |
+| `focusa.request_cache_bust` | `commands:request` | `POST /v1/commands/request` (type: `cache.bust`) |
+| `focusa.propose_constitution_update` | `constitution:propose` | `POST /v1/constitution/propose` |
+| `focusa.request_command` | `commands:request` | `POST /v1/commands/request` |
+
+### Response Contract (ALL skills)
+
+```json
+{
+  "status": "success | rejected | pending",
+  "data": { },
+  "explanation": "string",
+  "citations": [{ "type": "clt | telemetry", "id": "uuid" }]
+}
+```
+
+### Telemetry (Mandatory per invocation)
+
+Every skill invocation emits: `skill.invoked`, `capability.accessed`, `permission.checked`, `result.returned`.
+
+> **If a skill cannot be mapped to a capability, it must not exist.**
+
+**Bridge mapping:** Each row in the table above → one `api.registerTool()` call in bridge plugin. Read skills map directly; proposal skills go through Clawdbot's command validation.
+
+---
+
+## 38. Menubar UI
+
+Source: `11-menubar-ui-spec.md`
+
+### Purpose
+
+Ambient cognitive awareness without interrupting work. The UI **never becomes the primary interface**.
+
+### Design Principles (5)
+
+1. Awareness, not control
+2. Organic motion
+3. Bottom-to-top emergence
+4. Focus brightens, background fades
+5. Nothing demands attention
+
+### Visual Language (Locked)
+
+- Background: white / off-white
+- Primary outline: charcoal / grayscale
+- Accent: light navy
+- Focused elements: mid-gray (never dark)
+- Background elements: lighter by scale
+- Motion: cloud-like drift, no sharp linear motion, focus rises gently, resolved items fade upward and out
+
+### Menubar Icon States
+
+| State | Visual |
+|---|---|
+| Idle | Soft outline circle |
+| Focused | Filled mid-gray |
+| Candidates | Subtle pulse |
+| Error | Temporary dark ring |
+
+No badges. No numbers.
+
+### Primary View
+
+**Focus Bubble (Center):** Cloud-like shape, slight inner glow, title on hover. Always centered. Represents current Focus Frame.
+
+**Background Thought Clouds:** Inactive Focus Frames, pinned candidates, archived context. Drift slowly, fade with distance, never overlap focused bubble.
+
+**Intuition Pulses:** Soft concentric ripples, originate below view, drift upward, fade unless gated. Never interrupt.
+
+### Focus Gate Panel (On Click)
+
+Small vertical panel: lists surfaced candidates, shows pressure as opacity, pin/suppress actions only. No "switch focus" button.
+
+### Reference Peek (On Hover)
+
+Shows artifact summary, no content load. Click opens explicit rehydration view.
+
+### Update Frequency
+
+| Element | Rate |
+|---|---|
+| Focus State | On change |
+| Intuition pulses | ≤1/sec |
+| Gate updates | On surfacing |
+| Motion | 60fps CSS |
+
+### Forbidden UI Behaviors
+
+Modal dialogs, task switching, editing Focus State, acting without confirmation, auto focus change.
+
+### Accessibility
+
+Motion can be reduced. High contrast mode supported. All info available via CLI.
+
+**Bridge mapping:** Wirebot Figma Home Overview screen = adapted Menubar UI. Focus Bubble → current active task card. Background Thought Clouds → upcoming task indicators. Gate Panel → notification/suggestion area in dashboard.
+
+---
+
+## 39. Autonomy Visualization
+
+Source: `13-autonomy-ui.md`
+
+### Core Visual Metaphor
+
+Autonomy is a **halo of earned capability** around the active Focus Bubble.
+- Inner state = current focus
+- Outer halo = earned trust
+- Texture = confidence
+- Motion = stability over time
+
+The UI must never *sell* autonomy — it must *show evidence*.
+
+### CLI Commands
+
+```bash
+focusa score now          # AL, ARI (0-100), confidence band, top contributors, top penalties
+focusa score explain --run <id>    # contributing tasks, event IDs, penalties, normalization
+focusa autonomy status    # current AL, granted scope, TTL/expiry, last promotion rec
+focusa autonomy recommend # whether promotion justified + why/why not + missing evidence
+focusa autonomy grant --level 2 --scope ./repo --ttl 72h    # explicit human action
+```
+
+All grants are logged and reversible.
+
+### Menubar — Autonomy Halo
+
+**Geometry:** Radius proportional to Autonomy Level. Continuous ring, not segmented.
+
+**Appearance:**
+- Color: grayscale → light navy accent
+- Opacity: ARI (higher = clearer)
+- Blur: confidence (low confidence = more diffuse)
+
+**Motion:**
+- Stable if ARI rising
+- Subtle wobble if ARI volatile
+- No pulsing unless promotion-ready
+
+**Promotion-Ready Indicator:** Subtle navy shimmer on halo. No notification. Visible only on hover or inspection.
+
+### Timeline View (Popover)
+
+Vertical growth ribbon: ARI over time, markers for promotions/regressions/major failures. Colorless by default, navy accents only for milestones.
+
+### Evidence Inspection
+
+Every visual element must be inspectable:
+- Click halo → list recent runs
+- Click run → score breakdown
+- Click penalty → event references
+
+No "black box" visuals.
+
+### Forbidden UI Behaviors
+
+Celebratory animations, scores without evidence, automatic promotion actions, leaderboards, competitive framing, "levels unlocked" messaging.
+
+**Bridge mapping:** Wirebot Figma Profile screen = Autonomy Halo + UXP dimensions. ARI history → profile "progress" section. Promotion timeline → milestone markers.
+
+---
+
+## 40. Capabilities CLI
+
+Source: `24-capabilities-cli.md`
+
+> The CLI is not a "dev helper." It is a **cognitive observability and command surface** for humans and agents.
+
+### Structure
+
+```bash
+focusa <domain> <action> [subaction] [flags]
+```
+
+### Canonical Principles (5)
+
+1. CLI parity with API: anything observable via API must be observable via CLI
+2. No hidden mutations: all writes are explicit commands
+3. Human + agent usable: machine-readable output mandatory
+4. Local-first: always targets local Focusa daemon
+5. Calm power: no surprise actions, no implicit escalation
+
+### Output Modes (All Commands)
+
+```bash
+--format table|json|jsonl|yaml
+--quiet
+--explain
+```
+
+Defaults: human-facing → `table`, scripting → `json`.
+
+### Complete Domain Commands (14 domains)
+
+**State:**
+`focusa state show`, `focusa state history`, `focusa state diff --from 41 --to 42`, `focusa state stack`
+
+**Lineage (CLT):**
+`focusa lineage head`, `focusa lineage tree`, `focusa lineage node <id>`, `focusa lineage path <id>`, `focusa lineage children <id>`, `focusa lineage summaries`
+
+**References:**
+`focusa references list`, `focusa references show <id>`, `focusa references meta <id>`, `focusa references search "<query>"` (auto-paged, `--range offset:length`)
+
+**Gate:**
+`focusa gate policy`, `focusa gate scores`, `focusa gate explain <candidate_id>` (read-only)
+
+**Intuition:**
+`focusa intuition signals`, `focusa intuition patterns`, `focusa intuition submit --file signal.json` (restricted)
+
+**Constitution:**
+`focusa constitution show`, `focusa constitution versions`, `focusa constitution diff 1.1.0 1.2.0`, `focusa constitution drafts`
+Write commands: `focusa constitution propose --from-current`, `focusa constitution activate <version>`, `focusa constitution rollback <version>` (require confirmation unless `--yes`)
+
+**Autonomy:**
+`focusa autonomy status`, `focusa autonomy ledger`, `focusa autonomy explain <event_id>`
+
+**Metrics:**
+`focusa metrics uxp`, `focusa metrics ufi`, `focusa metrics session <session_id>`, `focusa metrics perf` (supports `--window 7d|30d`, `--trend`)
+
+**Cache:**
+`focusa cache status`, `focusa cache policy`, `focusa cache events`, `focusa cache bust --reason "<text>"` (command)
+
+**Contribution:**
+`focusa contribute status`, `focusa contribute enable`, `focusa contribute pause`, `focusa contribute review`, `focusa contribute policy edit`, `focusa contribute purge`
+
+**Export:**
+`focusa export history`, `focusa export manifest <id>`, `focusa export start sft --output ./data.jsonl` (command)
+
+**Agents:**
+`focusa agents list`, `focusa agents show <id>`, `focusa agents capabilities <id>`
+
+**Events (Streaming):**
+`focusa events stream` (flags: `--types focus_state.updated,cache.bust`, `--since <iso8601>`)
+
+**Commands (Audit):**
+`focusa commands list`, `focusa commands status <id>`, `focusa commands log <id>`
+
+### Safety & Confirmation Rules
+
+Mutating commands MUST: show summary, require confirmation, support `--dry-run`, support `--yes` for automation.
+
+### Exit Codes
+
+`0` success, `1` invalid usage, `2` policy violation, `3` not authorized, `4` internal error.
+
+> **If the CLI cannot explain what happened, the system is wrong.**
+
+**Bridge mapping:** CLI commands → Clawdbot registered tools. Each `focusa <domain> <action>` maps to a `wirebot_focusa_<domain>_<action>` tool.
+
+---
+
+## 41. TUI Specification
+
+Source: `27-tui-spec.md`
+
+### Design Principles (5)
+
+1. Observe, don't interrupt
+2. Hierarchy over clutter
+3. Live cognition > static logs
+4. Everything navigable
+5. No hidden state
+
+### Global Layout
+
+```
+┌────────────────────────────────────────────┐
+│ Focusa — Cognitive Runtime (session: xyz) │
+├───────────────┬───────────────────────────┤
+│ Left Sidebar  │ Main Panel                │
+│ (Navigation)  │ (Contextual View)         │
+├───────────────┴───────────────────────────┤
+│ Status Bar (Focus, Autonomy, UXP/UFI)     │
+└────────────────────────────────────────────┘
+```
+
+### Navigation Sidebar (14 domains)
+
+```
+▸ Focus State       ▸ Gate              ▸ Autonomy        ▸ Contribution
+▸ Focus Stack       ▸ Intuition         ▸ Metrics          ▸ Export
+▸ Lineage (CLT)     ▸ Constitution      ▸ Cache            ▸ Agents
+▸ References                                                ▸ Events
+```
+
+Keys: `↑↓` move, `Enter` select, `/` search, `q` quit.
+
+### Domain Views (14)
+
+**Focus State:** Intent, Constraints, Active Frame, Confidence, Salient Refs, Lineage Head. History browsing (`h`), diffing (`d`), copy/export (`y`).
+
+**Focus Stack:** Nested tree visualization:
+```
+[ Root Intent ]
+  └─ [ Coding Task ]
+      └─ [ File Refactor ] ← ACTIVE
+```
+
+**Lineage (CLT):** Scrollable tree: `●` active path, `○` summary nodes, faded = abandoned. Keys: `←→` expand/collapse, `Enter` inspect, `b` branch, `s` summary.
+
+**References:** Table: Ref ID, Type, Size, Linked. Preview, range fetch, provenance view.
+
+**Gate:** Candidate list, scores, decay curves, explanation per candidate. Read-only.
+
+**Intuition:** Signal timeline, pattern clusters, confidence bands. Signals visually distinct from facts.
+
+**Constitution:** Active text, version history, diffs, CS drafts. Can review/edit/propose.
+
+**Autonomy:** Current level, earned score, success/failure timeline, explanations. Clear boundary between allowed/denied/pending.
+
+**Metrics:** UXP trend, UFI trend, cache hit/miss, latency. Sparklines & gauges.
+
+**Cache:** Cache classes, live hit/miss feed, recent bust reasons.
+
+**Contribution:** Status, queue items, review UI, policy editor. No uploads without confirmation.
+
+**Agents:** Registered agents, capabilities per agent, active sessions.
+
+**Events (Live):** Scrollable live event stream, filterable by type:
+```
+[12:41:02] focus_state.updated
+[12:41:05] cache.bust (reason: fresh evidence)
+```
+
+### Status Bar (Always Visible)
+
+Active focus frame, autonomy level, UXP/UFI, session time, connection health.
+
+### Key Bindings
+
+`?` help, `/` search, `d` diff, `y` copy, `Esc` back, `q` quit.
+
+> **If the TUI cannot show it, the system does not truly understand it.**
+
+**Bridge mapping:** TUI design principles → Wirebot dashboard. 14 TUI domains → dashboard tabs/sections.
+
+---
+
+## 42. TUI Component Tree
+
+Source: `28-ratatui-component-tree.md` (778 lines)
+
+### Canonical Principles (6)
+
+1. Single source of truth: Capabilities API
+2. Event-driven rendering: no polling loops
+3. No hidden state: all UI state inspectable
+4. Hierarchy reflects cognition
+5. Read-only by default
+6. Zero cognitive side-effects
+
+### Application Structure
+
+```
+App
+├── ApiClient (REST → Capabilities API)
+├── EventStreamClient (SSE/WebSocket listener)
+├── AppState (normalized cached view models)
+├── NavigationState (current focus in UI)
+└── RootLayout
+    ├── HeaderBar (AppTitle, SessionInfo, ConnectionIndicator)
+    ├── MainBody
+    │   ├── SidebarNav (14 NavItems, one per domain)
+    │   └── ContentPanel (active DomainView)
+    └── StatusBar (FocusIndicator, AutonomyIndicator, UxpUfiIndicator, SessionTimer, HealthIndicator)
+```
+
+### Domain View Component Trees (14)
+
+**Focus State:**
+```
+FocusStateView → FocusSummaryPanel (IntentBlock, ConstraintsList, ActiveFrameIndicator, ConfidenceGauge), SalientReferencesPanel, LineagePointerPanel
+```
+
+**Focus Stack:**
+```
+FocusStackView → StackTreePanel (FocusFrameNode recursive), FrameDetailPanel
+```
+
+**Lineage (CLT):**
+```
+LineageView → LineageTreePanel (CLTNodeView recursive), LineageLegend, NodeDetailPanel
+```
+
+**References:**
+```
+ReferencesView → ReferenceTable (ReferenceRow), ReferencePreviewPanel, ReferenceMetadataPanel
+```
+
+**Gate:**
+```
+GateView → CandidateListPanel (GateCandidateRow), ScoreBreakdownPanel, GatePolicyPanel
+```
+
+**Intuition:**
+```
+IntuitionView → SignalTimelinePanel (SignalPoint), PatternClusterPanel, ConfidenceBandPanel
+```
+
+**Constitution:**
+```
+ConstitutionView → ActiveConstitutionPanel, VersionHistoryPanel (ConstitutionVersionRow), DiffPanel, DraftsPanel
+```
+
+**Autonomy:**
+```
+AutonomyView → AutonomyLevelPanel, EarnedScoreGauge, AutonomyTimelinePanel (AutonomyEventRow), ExplanationPanel
+```
+
+**Metrics:**
+```
+MetricsView → UxpSparkline, UfiSparkline, CacheStatsPanel, PerformancePanel
+```
+
+**Cache:**
+```
+CacheView → CacheClassTable, CacheEventFeed (CacheEventRow), CachePolicyPanel
+```
+
+**Contribution:**
+```
+ContributionView → ContributionStatusPanel, ContributionQueueTable (QueueItemRow), PolicyEditorPanel, ReviewPanel
+```
+
+**Export:**
+```
+ExportView → ExportHistoryTable (ExportRow), ExportManifestPanel, ExportStatsPanel
+```
+
+**Agents:**
+```
+AgentsView → AgentListPanel (AgentRow), AgentDetailPanel, AgentCapabilitiesPanel
+```
+
+**Events:**
+```
+EventsView → EventStreamPanel (EventRow), EventFilterPanel, EventDetailPanel
+```
+
+### AppState (Normalized View Models — 14)
+
+`focus_state_vm`, `focus_stack_vm`, `lineage_vm`, `references_vm`, `gate_vm`, `intuition_vm`, `constitution_vm`, `autonomy_vm`, `metrics_vm`, `cache_vm`, `contribution_vm`, `export_vm`, `agents_vm`, `events_vm`.
+
+Updated via: initial API fetch + SSE events.
+
+### Data Flow
+
+```
+SSE Event → EventRouter → AppState update → Component re-render
+KeyPress → NavigationState update → DomainView swap OR Component-local action
+```
+
+No direct component-to-component communication. Commands trigger confirmation modals.
+
+### Rendering Rules
+
+No blocking API calls in render. Colors: charcoal/grayscale, light navy accent, darker = more focused, lighter = background.
+
+### Implementation Priority (MVP)
+
+1. App + Layout → 2. SidebarNav → 3. Focus State View → 4. Lineage View → 5. Metrics View → 6. Events Stream → 7. Remaining domains incrementally
+
+> **The TUI reflects cognition — it never competes with it.**
+
+**Bridge mapping:** Complete component tree serves as specification for Wirebot dashboard frontend. Each DomainView → dashboard component.
+
+---
+
+## 43. Telemetry API Endpoints
+
+Source: `31-telemetry-api.md`
+
+Domain: `telemetry.*` (read-only by default).
+
+| Endpoint | Parameters | Returns |
+|----------|-----------|---------|
+| `GET /v1/telemetry/events` | `type`, `session_id`, `agent_id`, `model_id`, `since`, `until`, `limit`, `cursor` | Paginated events with `next_cursor` |
+| `GET /v1/telemetry/tokens` | `group_by=model\|session\|agent`, `window=7d\|30d` | Aggregated token metrics |
+| `GET /v1/telemetry/process` | — | avg focus depth, abandonment rate, gate acceptance rate, summarization frequency |
+| `GET /v1/telemetry/productivity` | — | completion ratio, correction loops, rework ratio, time-to-resolution |
+| `GET /v1/telemetry/autonomy` | — | Autonomy timeline, earned score, reversions |
+| `POST /v1/telemetry/export` | `{ format: "jsonl\|parquet", purpose: "sft\|research", filters: {} }` | Export job ID |
+
+Required scopes: `telemetry:read`, `export:start` (for exports).
+
+> **Telemetry is queryable, never mutable.**
+
+**Bridge mapping:** Each endpoint → Clawdbot registered tool or dashboard API route.
+
+---
+
+## 44. Telemetry TUI
+
+Source: `32-telemetry-tui.md`
+
+Navigation entry: `▸ Telemetry` with subviews: Tokens, Cognition, Tools, Autonomy, UX Signals.
+
+### Token View
+
+Panels: tokens per model, cache efficiency, cost proxy, latency histogram. Visuals: sparklines, gauges.
+
+### Cognition View
+
+Timeline: focus depth, CLT branching, summarization. Heatmap: focus drift, abandoned branches.
+
+### Tool View
+
+Chain graph: tool sequences, failures highlighted.
+
+### Autonomy View
+
+Earned autonomy gauge, success vs failure bands, explanations.
+
+### UX Signal View
+
+UXP trend, UFI trend, evidence citations, override heatmap.
+
+### Interaction
+
+Arrow keys navigate, `Enter` drills down, `d` shows underlying events, `e` export slice.
+
+### Visual Semantics
+
+Darker = higher focus, lighter = background, navy accent = confidence, red only for failures.
+
+> **Telemetry should reveal cognition, not distract from it.**
+
+**Bridge mapping:** Telemetry TUI → dashboard analytics tab.
+
+---
+
+## 45. Agent Behavioral Protocol
+
+Source: `AGENTS.md`
+
+### Core Authority
+
+- **Beads** is the authoritative task system
+- **Focusa** governs focus and cognition
+- Agents do not invent work
+
+### Required Agent Behaviors
+
+**Focus Discipline:** Maintain exactly one active Focus Frame. Never switch focus implicitly. Always bind work to a Beads issue.
+
+**Focus State Updates:** Update incrementally. Never overwrite prior decisions. Log contradictions explicitly.
+
+**Intuition Respect:** Do not act on intuition signals. Surface candidates for review only.
+
+**Reference Store Usage:** Store large outputs immediately. Reference via handles only. Never inline large artifacts.
+
+**Expression Discipline:** Respect deterministic structure. Do not inject hidden instructions.
+
+### Forbidden Agent Actions
+
+Autonomous task switching, silent memory mutation, bypassing Focus Gate, editing archived frames, acting without Beads backing.
+
+### Failure Handling
+
+On confusion or ambiguity: 1. Pause → 2. Surface candidate → 3. Await instruction. **Never guess.**
+
+### Beads Commands (Required)
+
+`bd new`, `bd list`, `bd show`, `bd next`, `bd done`, `bd block`, `bd log`.
+
+> **If work is not tracked in Beads, it does not exist.**
+
+> **Meaning lives in Focus State, not in conversation.**
+
+**Bridge mapping:** Agent behavioral rules → Wirebot SOUL.md. Beads integration → `bd` commands via bridge plugin. Focus discipline enforced by reducer invariants.
+
+---
+
+## 46. Bootstrap Prompt & Implementation Protocol
+
+Source: `bootstrap-prompt.md`, `bootstrap-prompt-rust.md`
+
+### Mental Model (Required)
+
+Focusa models **human cognition**, not agent orchestration:
+- Focus State = state of mind
+- Focus Stack = nested attention
+- Intuition Engine = subconscious pattern formation
+- Focus Gate = conscious filter
+- Reference Store = external memory
+- Expression Engine = speech
+- Runtime = stable ground of cognition
+
+**Conversation is NOT memory. Meaning lives in Focus State.**
+
+### Implementation Order (Strict — 11 steps)
+
+1. `focusa-core` (session model, event system, persistence)
+2. Focus Stack + Focus Frames
+3. Focus State (structure + incremental updates)
+4. Reference Store (handles + filesystem)
+5. Intuition Engine (signals only, async)
+6. Focus Gate (pressure, decay, pinning)
+7. Expression Engine (deterministic serializer)
+8. API server (thin wrapper)
+9. CLI (thin control surface)
+10. Proxy adapter (passthrough-safe)
+11. Menubar UI (read-only observability)
+
+**Do NOT skip ahead.**
+
+### Non-Negotiable Rules for Implementers
+
+MUST NOT: invent new concepts, rename components, collapse components together, infer memory implicitly, introduce autonomous behavior, bypass Focus Gate, allow Intuition Engine to mutate state, change focus automatically, store large artifacts in prompts, block hot path with background work.
+
+MUST: keep cognition explicit, keep behavior deterministic, emit events for all state changes, bind all work to Beads, preserve Focus State across compaction, keep Focusa fast and invisible.
+
+### Definition of "Done" (MVP)
+
+- Focus survives long sessions
+- Compaction does not destroy intent
+- Only one Focus Frame active at any time
+- Intuition suggests but never acts
+- Large artifacts never enter prompts
+- CLI-only usage is sufficient
+- UI is calm, optional, and passive
+- Focusa is invisible unless inspected
+
+### Performance & Safety
+
+- All background work async
+- Hot path < 20ms typical
+- Failures must be visible
+- State must survive restarts
+- Passthrough must work if Focusa fails
+
+**Bridge mapping:** Implementation order → bridge plugin build sequence. Bridge implements steps 1-7 in TypeScript on Clawdbot. Steps 8-11 use Clawdbot's existing API/CLI/web infrastructure.
+
+---
+
+## 47. PRD (Product Requirements)
+
+Source: `PRD.md`
+
+### Product Definition
+
+Focusa is a local, harness-agnostic cognitive runtime that sits between an AI harness and an LLM backend to govern **focus, context fidelity, and priority emergence** across long-running sessions.
+
+### Problem Statement (4 failure modes)
+
+1. **Linear context growth:** Token bloat, lossy summarization, quadratic attention cost
+2. **Loss of task continuity:** Nested subtasks collapse into chat history, no structured "current focus"
+3. **Priority confusion:** Everything treated equally, no organic surfacing of what matters now
+4. **Lack of trust:** Silent prompt truncation, hidden memory writes, autonomous behavior hijacking intent
+
+### Core Product Principles (6)
+
+1. Focus over autonomy
+2. Structure over prose
+3. Advisory systems over control
+4. Determinism over magic
+5. Human intent always wins
+6. Failure must be visible
+
+### MVP Success Criteria (7)
+
+1. Long sessions remain coherent
+2. Prompt size plateaus
+3. Focus never auto-shifts
+4. Priorities surface meaningfully
+5. Failures are visible
+6. Works with a real harness as proxy
+7. CLI-only usage is sufficient
+
+### Performance Requirements
+
+| Area | Requirement |
+|---|---|
+| Proxy overhead | < 20ms typical |
+| Prompt assembly | Deterministic, bounded |
+| Workers | Async, non-blocking |
+| Storage | Local, fast I/O |
+| Long sessions | Hours/days without reset |
+
+### Trust & Safety Requirements
+
+No silent prompt changes, no hidden memory writes, no autonomous focus switching, explicit degradation warnings, session isolation guaranteed, replayable event log.
+
+### Updated Vision (from PRD UPDATE)
+
+Focusa is a **cognitive governance layer** that preserves meaning, intent, and trust across long-running AI work — even under context compression and autonomy. Enables: earned autonomy, verifiable learning, explicit human control, long-horizon operation (days to weeks).
+
+### Key Differentiator
+
+**Explicit Constitutional Evolution:** Agents do not silently change how they reason. CS analyzes long-term evidence, proposes refinements, requires human review, preserves full version history, allows one-click rollback. Growth without drift.
+
+### Product Principle
+
+> **Focusa allows agents to grow in capability without drifting in identity.**
+
+### Post-MVP Roadmap
+
+Multi-session workspace management, visual infinite canvas, replay & time-travel debugging, NavisAI integration, advanced salience heuristics, optional semantic retrieval, multi-agent systems with distinct constitutions, cross-model calibration, institutional-grade AI governance.
+
+**Bridge mapping:** PRD requirements → Wirebot Phase 1-3 milestones. Every success criterion maps to a testable bridge feature.
+
+**Bridge mapping:** Dashboard frontend draws from these design principles. The Wirebot Figma mockup's Home Overview → adapted from Menubar UI. Task List → Focus Stack visualization. Profile → Autonomy Halo + UXP dimensions.
+
+---
+
+## 48. Runtime Daemon (MVP Foundation)
+
+Source: `02-runtime-daemon.md`
+
+### Purpose
+
+The daemon is the **single authoritative execution context** for all cognitive state. It is NOT an agent, planner, or orchestrator.
+
+### Core Invariants (5)
+
+1. Exactly one daemon instance owns mutable state per session
+2. All state transitions are deterministic
+3. All mutations emit events
+4. No background task may block the hot path
+5. No subsystem may bypass Focus Gate or Focus Stack
+
+### Execution Flow (Per Turn)
+
+```
+Harness Input → Session Validation → Intuition Engine (async signal updates)
+→ Focus Gate (candidate surfacing) → Focus Stack validation → Focus State update
+→ Expression Engine → Model Invocation → State Persistence + Events
+```
+
+### Session Properties
+
+```
+session_id: UUIDv7
+adapter_id
+workspace_id: optional
+created_at
+last_activity
+status: active | closed
+```
+
+Rules: All state belongs to exactly one session. Cross-session access forbidden by default. Restarting daemon restores session state.
+
+### State Ownership (Daemon Owns All)
+
+Focus Stack, Focus State (per frame), Focus Gate state, Intuition Engine buffers, Reference Store metadata, Memory (semantic/procedural), Event log, Beads mappings. No other component may mutate these directly.
+
+### Event Properties
+
+`event_id`, `timestamp`, `session_id`, `event_type`, `payload`, `correlation_id`.
+Categories: `focus.*`, `intuition.*`, `gate.*`, `reference.*`, `expression.*`, `session.*`, `error.*`.
+
+### Persistence Guarantees
+
+- Crash-safe writes
+- Restart-safe recovery
+- Deterministic reload
+- JSON snapshots for state, append-only JSONL for events, file-backed Reference Store
+
+### Failure Handling
+
+No silent failure. No partial state writes. No undefined behavior. On error: emit error event, preserve last valid state, surface failure via CLI/UI.
+
+### What the Runtime Is Not
+
+Not multi-writer. Not distributed. Not autonomous. Not self-modifying. Not cloud-connected.
+
+> **The Focusa Runtime is the stable ground of cognition. It does not think, decide, or act — it maintains coherence.**
+
+**Bridge mapping:** Daemon = Clawdbot gateway process. Session management = Clawdbot session model. Event system = bridge plugin event emitters.
+
+---
+
+## 49. Monorepo Layout
+
+Source: `10-monorepo-layout.md`
+
+### Technology Stack (Locked)
+
+| Layer | Technology |
+|---|---|
+| Core Runtime | Rust |
+| IPC / API | Local HTTP (JSON) |
+| CLI | Rust |
+| UI | SvelteKit |
+| Desktop Shell | Tauri |
+| State Storage | Local filesystem (JSON + JSONL) |
+| Task Memory | Beads |
+
+### Repository Structure
+
+```
+focusa/
+├─ docs/                        # Authoritative specifications
+├─ crates/
+│  ├─ focusa-core/              # All cognition (Rust)
+│  │  ├─ runtime/               # daemon.rs, session.rs, events.rs, persistence.rs
+│  │  ├─ focus/                 # stack.rs, frame.rs, state.rs
+│  │  ├─ intuition/             # engine.rs, signals.rs, aggregation.rs
+│  │  ├─ gate/                  # focus_gate.rs, candidates.rs
+│  │  ├─ reference/             # store.rs, artifact.rs, gc.rs
+│  │  ├─ expression/            # engine.rs, serializer.rs, budget.rs
+│  │  └─ adapters/              # mod.rs, openai.rs, letta.rs, passthrough.rs
+│  ├─ focusa-cli/               # CLI commands (thin facade)
+│  │  └─ commands/              # focus.rs, stack.rs, gate.rs, intuition.rs, refs.rs, debug.rs
+│  └─ focusa-api/               # Local HTTP API (thin facade)
+│     └─ routes/                # session.rs, focus.rs, gate.rs, intuition.rs, reference.rs
+├─ apps/
+│  └─ menubar/                  # SvelteKit + Tauri
+│     ├─ components/            # FocusBubble, FocusStackView, IntuitionPulse, GatePanel, ReferencePeek
+│     ├─ stores/                # focus.ts, intuition.ts, gate.ts
+│     └─ src-tauri/             # Tauri config
+├─ packages/
+│  ├─ ui-tokens/                # colors.ts, motion.ts, hierarchy.ts
+│  ├─ api-client/               # focus.ts, intuition.ts, reference.ts
+│  └─ types/                    # focus.ts, intuition.ts, gate.ts
+├─ data/                        # Local runtime state (gitignored)
+│  ├─ sessions/ focus/ reference/ events/ beads/
+└─ scripts/
+```
+
+### Rules
+
+- `focusa-core` owns ALL cognition
+- CLI and API are thin facades
+- No UI logic in Rust
+- UI is read-mostly; no direct Focus State mutation; all writes go through API
+
+### NavisAI Compatibility
+
+`focusa-core` is embeddable. API boundaries are stable. UI can be subsumed later. No architectural dead ends.
+
+**Bridge mapping:** In the Wirebot bridge implementation, the Rust monorepo translates to TypeScript modules within `wirebot-memory-bridge/` plugin. Each Rust crate → TypeScript module. SvelteKit UI components → React/mobile dashboard components.
+
+---
+
+## 50. Data Export CLI
+
+Source: `21-data-export-cli.md`
+
+### Command Structure
+
+```bash
+focusa export <dataset_type> [options]
+```
+
+Dataset types: `sft`, `preference`, `contrastive`, `long-horizon`.
+
+### Global Options
+
+```bash
+--output <path>              # required
+--format jsonl|parquet       # default: jsonl
+--min-uxp <float>            # default: 0.7
+--max-ufi <float>            # default: 0.3
+--min-autonomy <int>         # default: 0
+--agent <agent_id|all>
+--task <task_id|all>
+--since <iso8601>
+--until <iso8601>
+--dry-run
+--explain
+```
+
+### Dataset-Specific Flags
+
+**SFT:** `--require-success`, `--min-turns 3`
+**Preference:** `--min-delta 0.15`, `--require-user-correction`
+**Contrastive:** `--require-abandoned-branch`, `--max-path-length 20`
+**Long Horizon:** `--min-session-length 30m`, `--min-state-transitions 5`
+
+### Execution Phases (5)
+
+1. **Discovery:** Enumerate sessions, filter eligibility, validate license/consent
+2. **Extraction:** Load Focus State snapshots, resolve CLT paths, resolve Reference Store artifacts
+3. **Normalization:** Canonicalize text, normalize formats, strip provider fingerprints
+4. **Validation:** Schema validation, provenance completeness, outcome signals present
+5. **Export:** Write dataset, emit manifest, emit statistics
+
+### Dry Run Mode
+
+```bash
+focusa export sft --dry-run --explain
+```
+
+Outputs: eligible record count, exclusion reasons, sample schema preview, estimated dataset size. No files written.
+
+### Manifest File
+
+```json
+{
+  "dataset_type": "focusa_sft",
+  "record_count": 1243,
+  "filters": { },
+  "uxp_threshold": 0.7,
+  "ufi_threshold": 0.3,
+  "generated_at": "iso8601",
+  "focusa_version": "semver"
+}
+```
+
+### Safety Guarantees
+
+No network calls. No mutation of Focusa state. Explicit opt-in required. Redaction hooks available. Per-record exclusion logging.
+
+### Integration Targets
+
+Verified compatibility: Unsloth, HuggingFace `datasets`, Axolotl, TRL (DPO/IPO).
+
+> **Exporting data is an act of training — not logging. Treat it with the same rigor as model evaluation.**
+
+**Bridge mapping:** Export CLI → scheduled bridge job or manual Clawdbot tool.
+
+---
+
+## 51. Gen1 Local API (MVP Endpoints)
+
+Source: `G1-12-api.md`
+
+Default bind: `127.0.0.1:8787`. Configurable. No auth in MVP (localhost only).
+
+### MVP Endpoints
+
+**Health/Status:**
+- `GET /v1/health` → `{ ok: true, version, uptime_ms }`
+- `GET /v1/status` → active focus frame, stack depth, worker status, last event, prompt stats
+
+**Focus Stack:**
+- `GET /v1/focus/stack`
+- `POST /v1/focus/push`, `POST /v1/focus/pop`, `POST /v1/focus/set-active`
+
+**Focus Gate:**
+- `GET /v1/focus-gate/candidates` (returns id, label, source, pressure, last_seen_at)
+- `POST /v1/focus-gate/ingest-signal`
+- `POST /v1/focus-gate/surface`, `POST /v1/focus-gate/suppress`
+
+**Prompt Assembly:**
+- `POST /v1/prompt/assemble` → input: turn_id, raw_user_input, format ("string"|"messages"), budget → output: assembled, stats (token counts), handles_used[]
+
+**Turn Lifecycle:**
+- `POST /v1/turn/start`, `POST /v1/turn/append` (optional), `POST /v1/turn/complete`
+
+**ASCC:**
+- `GET /v1/ascc/frame/:frame_id`, `POST /v1/ascc/update-delta`
+
+**ECS:**
+- `POST /v1/ecs/store`, `GET /v1/ecs/resolve/:handle_id`
+
+**Memory:**
+- `GET /v1/memory/semantic`, `POST /v1/memory/semantic/upsert`
+- `GET /v1/memory/procedural`, `POST /v1/memory/procedural/reinforce`
+
+**Events:**
+- `GET /v1/events/recent?limit=200`, `GET /v1/events/stream` (SSE optional)
+
+### Error Model
+
+HTTP status + `{ code, message, details?, correlation_id? }`
+
+### Determinism Requirement
+
+Repeated status reads do not mutate state. `turn/complete` with same `turn_id` must not double-apply (turn_id dedupe).
+
+**Bridge mapping:** Gen1 API → Clawdbot HTTP API. `POST /v1/focus/push` → `wirebot_focus_push` tool. Turn lifecycle → Clawdbot's built-in turn model.
+
+---
+
+## 52. Gen1 CLI Contract (MVP)
+
+Source: `G1-13-cli.md`
+
+Binary: `focusa`. Global flags: `--json`, `--config <path>`, `--verbose`, `--quiet`.
+
+### Commands
+
+**Daemon Control:** `focusa start`, `focusa stop`, `focusa status`
+
+**Focus Stack:** `focusa stack`, `focusa focus push "<title>" --goal "<goal>"`, `focusa focus pop`, `focusa focus complete`, `focusa focus set <frame_id>`
+
+**Focus Gate:** `focusa gate list`, `focusa gate suppress <id> --for 10m`, `focusa gate resolve <id>`, `focusa gate promote <id>` (promotes candidate → push focus frame)
+
+**Memory:** `focusa memory list`, `focusa memory set key=value`, `focusa memory rules`
+
+**ECS:** `focusa ecs list`, `focusa ecs cat <handle_id>`, `focusa ecs meta <handle_id>`, `focusa ecs rehydrate <handle_id> --max-tokens 300`
+
+**Debug/Inspect:** `focusa events tail`, `focusa events show <event_id>`, `focusa state dump`
+
+### Output Rules
+
+Default: human-readable. `--json`: exact API response passthrough.
+
+### Error Handling
+
+Non-zero exit codes. Errors include message, correlation_id, suggested next action.
+
+**Bridge mapping:** Gen1 CLI commands → Clawdbot registered tools. Each command → one `api.registerTool()` call.
+
+---
+
+## 53. Testing & Acceptance
+
+Source: `G1-16-testing.md`
+
+### Test Levels (4)
+
+**Unit Tests:** Focus Stack invariants, Focus Gate pressure updates, ASCC merge rules, ECS store/resolve, Prompt Assembly slot logic.
+
+**Integration Tests:** Daemon + CLI, Turn lifecycle, Worker pipeline, Persistence across restart.
+
+**Harness Smoke Tests:** Wrap a harness CLI, run multi-turn session, verify: prompt size stabilizes, focus stack maintained, no corruption of output.
+
+**Long-Session Test:** 100+ turns, multiple focus pushes/pops, repeated artifacts. Pass criteria: prompt size plateaus, memory bounded, daemon remains responsive.
+
+### Acceptance Criteria (MVP — 5 + UPDATE additions)
+
+1. Focus maintained over long sessions
+2. Context does not grow unbounded
+3. Priorities surface without hijacking
+4. CLI and GUI reflect true state
+5. Works as a proxy with a real harness
+
+**UPDATE additions:**
+- Multi-session isolation test
+- Prompt degradation test
+- Pinned item persistence test
+- Time-based Focus Gate surfacing test
+- Cross-session ECS access rejection test
+
+### Non-Regression Rules
+
+Any change to prompt assembly → snapshot comparison. Any change to Focus Gate heuristics → replay tests.
+
+### MVP Completion Gate (Updated)
+
+MVP complete only when: no silent degradation exists, human override always wins, long sessions remain stable, focus never auto-shifts, all failures are observable.
+
+**Bridge mapping:** These acceptance criteria become bridge plugin test cases. Each test → automated verification via Clawdbot WebSocket RPC.
+
+---
+
+## 54. Documentation Suite README
+
+Source: `G1-detail-00-doc-suite-readme.md`
+
+### What Focusa Is (MVP)
+
+A local cognitive runtime that sits between an existing harness and the model/API. Behaves like a cognitive proxy. Does NOT replace harness. Does NOT modify model. DOES govern focus, context fidelity, memory injection. DOES provide CLI, API, minimal menubar UI.
+
+### MVP Promise
+
+Maintain stable focus across long sessions. Prevent context collapse. Externalize bulky artifacts. Allow priorities to emerge organically via Focus Gate. Be fast/imperceptible.
+
+### Non-Goals (MVP)
+
+No model training/RL. No inference kernel work. No Letta-specific code in core. No interactive infinite canvas. No multi-agent coordination.
+
+### Doc Map (Implementation Order — 16 docs)
+
+1. Architecture Overview → 2. Repo Layout → 3. Runtime Daemon → 4. Proxy Adapter → 5. Focus Stack (HEC) → 6. Focus Gate → 7. ASCC → 8. ECS → 9. Memory → 10. Workers → 11. Prompt Assembly → 12. API → 13. CLI → 14. GUI Menubar → 15. Events & Observability → 16. Testing
+
+### Canonical Terms
+
+Focusa (whole system), Daemon (local process), Focus Stack/HEC (hierarchical execution contexts), Focus Gate (RAS-inspired salience filter), ASCC (Anchored Structured Context Checkpointing), ECS (Externalized Context Store), Handle (typed reference), Prompt Assembly (deterministic construction).
+
+### Architectural Invariants (from UPDATE)
+
+**Identity & Boundary:** Every interaction belongs to a Session. Sessions isolated. No cross-session leaks.
+
+**Determinism:** Prompt assembly deterministic. Reducer replayable from events. No hidden prompt rewriting.
+
+**Trust & Control:** Focus Gate advisory only. No automatic focus switching. No automatic memory writes. Human intent always wins.
+
+**Failure Transparency:** Prompt degradation explicit and observable. Silent truncation forbidden. All degradations emit events and warnings.
+
+**Bridge mapping:** These invariants are non-negotiable for the bridge implementation. Every one must be preserved.
+
+---
+
+## 55. Gen2 PRD (Intermediate)
+
+Source: `G1-detail-PRD-gen2-intermediate.md`
+
+### Enhanced Problem Statement (5 failure modes)
+
+1. Conversation treated as memory
+2. Automatic compaction silently destroys meaning
+3. Intent and constraints drift
+4. Artifacts vanish
+5. Models repeat work or regress
+
+### Gen2 Focus State Requirements
+
+Structured representation of intent and decisions. Incrementally updated. Anchored and deterministic. Injected into every model call. **Success metric:** Intent survives compaction without drift.
+
+### Gen2 Product Statement
+
+> **Focusa ensures that AI systems maintain a stable state of mind across time, even as conversation and context inevitably collapse.**
+
+### Gen2 Success Criteria (7)
+
+1. Long sessions remain coherent
+2. Compaction does not destroy intent
+3. Focus never auto-switches
+4. Artifacts are never lost
+5. Failures are observable
+6. Works with real harnesses
+7. CLI-only usage is sufficient
+
+**Bridge mapping:** Gen2 PRD refines Gen1. All criteria carry forward to bridge. "Compaction does not destroy intent" → ASCC merge rules + nightly sync.
+
+---
+
+## 56. PRD Deltas (Threads & Workspaces)
+
+Source: `PRD-delta-threads.md`, `PRD-delta-thread-workspaces.md`
+
+### Threads as First-Class Cognitive Units
+
+A Thread is NOT a chat. It is a persistent, resumable, forkable workspace that captures: intent, memory, reasoning lineage, trust evolution.
+
+A Thread has: its own goals (Thread Thesis), its own memory graph (CLT), its own autonomy trajectory, its own telemetry history.
+
+### Thread Operations
+
+Start new threads, resume old ones, fork exploratory branches, archive completed work.
+
+### Thread Capabilities
+
+Enable: long-horizon work, safe autonomy, branching exploration, clean dataset extraction.
+
+Thread operations are first-class in: API, CLI, GUI/TUI.
+
+> **This allows Focusa to scale cognition without losing coherence.**
+
+**Bridge mapping:** One Thread per founder relationship in Wirebot. Thread lifecycle maps to `18-threads.md` (§18).
+
+---
+
+## 57. Project README
+
+Source: `README.md`
+
+### Core Definition
+
+Focusa is a local-first cognitive governance framework for AI agents. Not a chatbot. Not an agent framework. **The system that makes agents trustworthy over time.**
+
+### Problems Solved
+
+Context loss under compaction, silent behavioral drift, unverifiable autonomy, unexplainable learning, long-running task incoherence.
+
+### Core Insight
+
+> **Meaning should never live only in conversation.**
+
+Focusa extracts, structures, and persists meaning *outside* the model so compaction never destroys intent.
+
+### Cognitive Architecture Flow
+
+```
+Intuition Engine → Focus Gate → Focus Stack → Focus State → Expression Engine → Model Invocation
+```
+
+### Why This Works Across Compaction
+
+When harness compacts context: conversation can be lost, meaning is not. Because: intent lives in Focus State, artifacts live in Reference Store, decisions are anchored, focus re-asserted every turn. **Compaction becomes harmless.**
+
+### Integration Model
+
+Fast local proxy. Wraps existing CLI or API harnesses. No harness internals required. No model modification. No retraining. **Invisible unless inspected.**
+
+### Relationship to Beads
+
+Beads = authoritative task system. Every Focus Frame maps to a Beads issue. If work is not in Beads, it does not exist. Focusa governs focus. Beads governs what work exists.
+
+### Design Principles (6)
+
+1. Focus over autonomy
+2. Structure over prose
+3. Explicit over inferred
+4. Advisory over controlling
+5. Human intent always wins
+6. Failure must be visible
+
+### Full Concept Glossary
+
+Focus State (state of mind), Focus Stack (nested attention), Focus Gate (conscious filter), Reference Store (lossless external memory), Expression Engine (language output), Intuition Engine (subconscious signal formation), UXP/UFI (transparent experience calibration), ARI (earned trust), Agent (persistent behavioral persona), ACP (immutable reasoning charter), CS (evidence-driven constitution drafting).
+
+### Product Statement
+
+> **Focusa preserves continuity of mind across long AI sessions by separating focus, memory, and expression from fragile conversation history.**
+
+### Philosophy
+
+> *Agents grow by learning how to act within their values — not by rewriting them.*
+
+**Bridge mapping:** This README is the soul of the project. Its design principles and core insight ("meaning should never live only in conversation") are the philosophical foundation for every bridge implementation decision.
+
+---
+
+## 58. Precision Disclosure: Genuinely Unparameterized Items
 
 The following items are described architecturally in the Focusa specs but lack
 specific numeric parameters. These values will need to be determined during
