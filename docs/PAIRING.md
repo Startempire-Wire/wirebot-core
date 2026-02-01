@@ -189,6 +189,124 @@ Once all phases complete:
 
 ---
 
+---
+
+## Persistence: Pairing Never Stops Asking
+
+Pairing is not a one-time wizard. It is a **persistent state** that Wirebot tracks and surfaces until complete — and continues deepening forever after.
+
+### Pre-Completion: Every Surface Reminds
+
+Until pairing is complete, **every interaction** includes a pairing nudge:
+
+```
+$ wb status
+⚠️ PAIRING INCOMPLETE (Phase 1: 4/10 questions answered)
+
+📊 Business Setup — IDEA
+Overall: 1/64 (2%)
+...
+▶ Next: Identify Target Customer [critical]
+
+💬 I'm working with limited context. Answer a few more questions
+   and I can give you much better guidance.
+   Run: wb pair    (or just start talking to me)
+```
+
+```
+$ wb next
+⚠️ Pairing: 40% — I don't know your target customer yet.
+
+▶ Next recommended: Identify Target Customer [critical]
+   💡 I'd give better advice here if you told me about your ideal customer.
+      Run: wb pair
+```
+
+The nudge is:
+- **Always present** but never blocking (features still work)
+- **Contextual** — mentions what's missing relevant to the current command
+- **Not annoying** — adapts tone based on how many times it's been shown
+- **Dismissable per-session** with `wb pair --later` (reappears next session)
+
+### Post-Completion: Continuous Inference Pairing
+
+Pairing doesn't end at Q22. Phase 5 runs forever:
+
+### Phase 5: Continuous Pairing (Ongoing)
+
+Every new piece of information deepens the pairing:
+
+**From conversations:**
+- Wirebot extracts facts from every chat interaction (already via Mem0 `agent_end` hook)
+- New facts refine understanding: "Operator mentioned they're also interested in real estate" → updates business context
+
+**From connected accounts (future):**
+- Google Calendar → learns schedule patterns, meeting types, key contacts
+- Stripe/QuickBooks → real revenue, expenses, cash flow (not self-reported estimates)
+- Email → communication style, key relationships, follow-up patterns
+- Social media → brand voice, audience demographics, content performance
+
+**From documents:**
+- Uploaded business plans, pitch decks, contracts → extracted and indexed
+- Shared Google Docs/Notion → watched for changes, context updated
+
+**From behavior patterns:**
+- CLI usage frequency → engagement level
+- Which commands used most → what the operator values
+- Time of day patterns → real schedule (vs. stated schedule)
+- What gets completed vs. skipped → true priorities (vs. stated priorities)
+
+**From checklist interactions:**
+- Tasks completed → updates business stage understanding
+- Tasks skipped → surfaces misalignment ("You've skipped 3 marketing tasks — is marketing not a priority right now?")
+- Custom tasks added → reveals what the operator thinks is missing
+
+**Inference rules:**
+- If operator connects Stripe and has $8K MRR → auto-update KPIs, confirm Launch stage
+- If operator's calendar shows 6 meetings/day → flag for Pillar 9 (Sustainability)
+- If uploaded pitch deck mentions "Series A" → update goals, adjust advice tier
+- If behavior shows 2 AM CLI usage → note sleep pattern, adjust circadian awareness
+
+**Each inference is:**
+1. Stored to the appropriate memory system (Mem0 fact, Letta block update, workspace file)
+2. Logged in `memory/pairing-inferences.jsonl` with timestamp, source, confidence
+3. Surfaced to operator when relevant: *"I noticed from your Stripe data that MRR is $8.2K — want me to update your goals?"*
+4. Never silent — operator always knows what Wirebot inferred and can correct it
+
+---
+
+## Pairing Score
+
+A single number (0-100) representing how well Wirebot knows this operator.
+
+### Score Components
+
+| Component | Weight | Source |
+|-----------|--------|--------|
+| Phase 1: Identity questions (10 Qs) | 25% | Direct answers |
+| Phase 2: Business questions (8 Qs) | 25% | Direct answers |
+| Phase 3: Personality questions (4 Qs) | 15% | Direct answers |
+| Connected accounts | 15% | OAuth integrations |
+| Conversation depth | 10% | Mem0 fact count + diversity |
+| Behavioral patterns | 10% | CLI usage, time patterns, checklist engagement |
+
+### Score Thresholds
+
+| Score | Level | Wirebot Capability |
+|-------|-------|-------------------|
+| 0-10 | Stranger | Generic responses only. Heavy pairing nudges. |
+| 11-30 | Acquaintance | Basic personalization. Knows name + stage. |
+| 31-60 | Partner | Solid context. Personalized recommendations. Accountability active. |
+| 61-80 | Trusted | Deep context. Proactive suggestions. Pattern recognition active. |
+| 81-100 | Bonded | Full sovereign mode. Anticipates needs. Acts autonomously within trust bounds. |
+
+The score is:
+- Visible via `wb pair status`
+- Shown in dashboard header
+- Used internally to calibrate response depth and autonomy
+
+---
+
 ## Revocation & Re-Pairing
 
 Following the SingleEye PUPP model:
@@ -239,10 +357,41 @@ POST /chat (or WebSocket message)
 ### wb CLI Support
 
 ```bash
-wb onboard              # Start/resume onboarding (interactive)
-wb onboard status       # Show pairing completion %
-wb onboard reset        # Revoke pairing (requires confirmation)
+wb pair                 # Start/resume pairing conversation (interactive)
+wb pair status          # Show pairing score + what's missing
+wb pair reset           # Revoke pairing (requires confirmation)
+wb pair skip            # Dismiss pairing nudge for this session
 ```
+
+### Pairing State File
+
+```json
+// /home/wirebot/clawd/pairing.json
+{
+  "paired": false,
+  "score": 23,
+  "phase": 1,
+  "phase1_complete": false,
+  "phase2_complete": false,
+  "phase3_complete": false,
+  "phase4_complete": false,
+  "questions_answered": ["Q1", "Q2", "Q4", "Q8"],
+  "questions_remaining": ["Q3", "Q5", "Q6", "Q7", "Q9", "Q10"],
+  "connected_accounts": [],
+  "inference_count": 12,
+  "last_nudge": "2026-02-01T20:00:00Z",
+  "nudge_dismissed_until": null,
+  "created_at": "2026-02-01T12:00:00Z",
+  "updated_at": "2026-02-01T20:48:00Z"
+}
+```
+
+This file is:
+- Read by every `wb` command to determine nudge behavior
+- Updated by the pairing conversation flow
+- Updated by continuous inference (Phase 5)
+- Watched by the Go daemon for cache refresh
+- Backed up in git with the workspace
 
 ---
 
