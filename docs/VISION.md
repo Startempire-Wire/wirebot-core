@@ -1,6 +1,6 @@
 # Wirebot × Startempire Wire — Unified High-Level Vision
 
-> **Wirebot is a private AI operating partner built on Clawdbot.**
+> **Wirebot is a sovereign AI operating partner — Jarvis for solopreneurs. Built on OpenClaw.**
 
 ---
 
@@ -18,13 +18,22 @@ It includes:
 
 ## 2. Wirebot: Core Definition
 
-> **Wirebot is a private AI operating partner for founders—helping them think clearly, prioritize effectively, and stay accountable from Idea → Launch → Growth.**
+> **Wirebot is a sovereign AI operating partner for solopreneurs — helping them systematize, organize, keep commitments, accomplish the impossible, and make serious money.**
+
+In **sovereign mode**, Wirebot covers the full scope of a founder's life:
+- **Business ops**: Strategy, execution, finance, sales, marketing, legal/admin
+- **Life ops**: Schedule, health, learning, network, personal finance
+- **Delegation**: "Handle this", "Figure this out", "Make this happen"
+- **Accountability**: Daily standups, weekly planning, commitment tracking, escalation
+- **Systematization**: If you do it twice, Wirebot builds a system for it
 
 Wirebot is:
-- Persistent
-- Stage-aware
-- Accountability-driven
-- Quietly powerful in public, trusted in private
+- Sovereign — total coverage, not narrow tool
+- Persistent — remembers everything, forgets nothing, compounds over time
+- Proactive — surfaces what matters before being asked
+- Stage-aware — knows Idea vs Launch vs Growth and adapts
+- Money-minded — every recommendation connects to revenue, time saved, or risk reduced
+- Relentless — won't let commitments slide, escalates when things stall
 
 ---
 
