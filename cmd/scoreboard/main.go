@@ -55,6 +55,7 @@ type Event struct {
 	ScoreDelta    int     `json:"score_delta"`
 	BusinessID    string  `json:"business_id,omitempty"`
 	Metadata      string  `json:"metadata,omitempty"`
+	Status        string  `json:"status"` // approved, pending, rejected
 	CreatedAt     string  `json:"created_at"`
 }
 
@@ -179,6 +180,10 @@ func main() {
 	mux.HandleFunc("/v1/audit", s.auth(s.handleAudit))
 	mux.HandleFunc("/v1/history", s.auth(s.handleHistory))
 
+	// Gated events (pending/approve/reject)
+	mux.HandleFunc("/v1/pending", s.auth(s.handlePending))
+	mux.HandleFunc("/v1/events/", s.auth(s.handleEventAction)) // /v1/events/<id>/approve|reject
+
 	// Webhook receivers (use separate tokens in query params)
 	mux.HandleFunc("/v1/webhooks/github", s.auth(s.handleGitHubWebhook))
 	mux.HandleFunc("/v1/webhooks/stripe", s.auth(s.handleStripeWebhook))
@@ -222,6 +227,8 @@ func (s *Server) initDB() {
 		`CREATE INDEX IF NOT EXISTS idx_events_date ON events(timestamp)`,
 		`CREATE INDEX IF NOT EXISTS idx_events_lane ON events(lane)`,
 		`CREATE INDEX IF NOT EXISTS idx_events_type ON events(event_type)`,
+		// Migration: add status column for gated events
+		`ALTER TABLE events ADD COLUMN status TEXT DEFAULT 'approved'`,
 		`CREATE TABLE IF NOT EXISTS daily_scores (
 			date TEXT PRIMARY KEY,
 			execution_score INTEGER DEFAULT 0,
@@ -254,7 +261,10 @@ func (s *Server) initDB() {
 	}
 	for _, stmt := range stmts {
 		if _, err := s.db.Exec(stmt); err != nil {
-			log.Fatalf("initDB: %v", err)
+			// Ignore ALTER TABLE errors (column may already exist)
+			if !strings.Contains(err.Error(), "duplicate column") {
+				log.Fatalf("initDB: %v", err)
+			}
 		}
 	}
 
@@ -376,6 +386,7 @@ func (s *Server) postEvent(w http.ResponseWriter, r *http.Request) {
 		Verifiers     json.RawMessage `json:"verifiers"`
 		BusinessID    string          `json:"business_id"`
 		Metadata      json.RawMessage `json:"metadata"`
+		Status        string          `json:"status"` // "pending" or "" (defaults to "approved")
 	}
 	if err := json.NewDecoder(r.Body).Decode(&evt); err != nil {
 		http.Error(w, `{"error":"invalid json"}`, 400)
@@ -392,7 +403,18 @@ func (s *Server) postEvent(w http.ResponseWriter, r *http.Request) {
 		evt.Confidence = 1.0
 	}
 
+	status := "approved"
+	if evt.Status == "pending" {
+		status = "pending"
+	}
+
 	scoreDelta := calcScoreDelta(evt.Lane, evt.EventType, evt.Confidence)
+	// Pending events get 0 score until approved
+	effectiveDelta := scoreDelta
+	if status == "pending" {
+		effectiveDelta = 0
+	}
+
 	id := fmt.Sprintf("evt-%d", time.Now().UnixNano())
 	verifiers := "[]"
 	if evt.Verifiers != nil {
@@ -406,11 +428,11 @@ func (s *Server) postEvent(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	_, err := s.db.Exec(`INSERT INTO events (id, event_type, lane, source, timestamp,
 		artifact_type, artifact_url, artifact_title, confidence, verifiers,
-		score_delta, business_id, metadata, created_at)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		score_delta, business_id, metadata, status, created_at)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		id, evt.EventType, evt.Lane, evt.Source, evt.Timestamp,
 		evt.ArtifactType, evt.ArtifactURL, evt.ArtifactTitle, evt.Confidence,
-		verifiers, scoreDelta, evt.BusinessID, metadata, time.Now().UTC().Format(time.RFC3339))
+		verifiers, effectiveDelta, evt.BusinessID, metadata, status, time.Now().UTC().Format(time.RFC3339))
 	s.mu.Unlock()
 
 	if err != nil {
@@ -418,18 +440,25 @@ func (s *Server) postEvent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	today := time.Now().Format("2006-01-02")
-	s.updateDailyScore(today)
-	s.updateStreak(today, evt.ArtifactTitle)
-	s.recalcSeason()
+	// Only update scores if approved
+	if status == "approved" {
+		today := time.Now().Format("2006-01-02")
+		s.updateDailyScore(today)
+		s.updateStreak(today, evt.ArtifactTitle)
+		s.recalcSeason()
+	}
 
-	daily := s.getDailyScore(today)
+	daily := s.getDailyScore(time.Now().Format("2006-01-02"))
 	streak := s.getStreak("ship")
 
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"ok": true, "event_id": id, "score_delta": scoreDelta,
-		"new_daily_score": daily.ExecutionScore, "streak": streak,
-	})
+	resp := map[string]interface{}{
+		"ok": true, "event_id": id, "status": status,
+		"score_delta": scoreDelta, "new_daily_score": daily.ExecutionScore, "streak": streak,
+	}
+	if status == "pending" {
+		resp["note"] = "Event is pending approval. Score will be applied after: POST /v1/events/" + id + "/approve"
+	}
+	json.NewEncoder(w).Encode(resp)
 }
 
 func (s *Server) getEvents(w http.ResponseWriter, r *http.Request) {
@@ -1181,6 +1210,11 @@ func calcScoreDelta(lane, eventType string, confidence float64) int {
 			"DELEGATION_COMPLETED": 6, "MONITORING_ENABLED": 4,
 		},
 	}
+	// Special: context switch and penalties return 0 (handled separately in updateDailyScore)
+	if eventType == "CONTEXT_SWITCH" || eventType == "COMMITMENT_BREACH" {
+		return 0
+	}
+
 	if laneMap, ok := base[lane]; ok {
 		if pts, ok := laneMap[eventType]; ok {
 			return int(float64(pts) * confidence)
@@ -1191,12 +1225,13 @@ func calcScoreDelta(lane, eventType string, confidence float64) int {
 }
 
 func (s *Server) updateDailyScore(date string) {
+	// Only count approved events toward score
 	var shipping, distribution, revenue, systems, ships int
-	s.db.QueryRow("SELECT COALESCE(SUM(score_delta),0) FROM events WHERE lane='shipping' AND timestamp LIKE ?", date+"%").Scan(&shipping)
-	s.db.QueryRow("SELECT COALESCE(SUM(score_delta),0) FROM events WHERE lane='distribution' AND timestamp LIKE ?", date+"%").Scan(&distribution)
-	s.db.QueryRow("SELECT COALESCE(SUM(score_delta),0) FROM events WHERE lane='revenue' AND timestamp LIKE ?", date+"%").Scan(&revenue)
-	s.db.QueryRow("SELECT COALESCE(SUM(score_delta),0) FROM events WHERE lane='systems' AND timestamp LIKE ?", date+"%").Scan(&systems)
-	s.db.QueryRow("SELECT COUNT(*) FROM events WHERE lane='shipping' AND timestamp LIKE ?", date+"%").Scan(&ships)
+	s.db.QueryRow("SELECT COALESCE(SUM(score_delta),0) FROM events WHERE lane='shipping' AND status='approved' AND timestamp LIKE ?", date+"%").Scan(&shipping)
+	s.db.QueryRow("SELECT COALESCE(SUM(score_delta),0) FROM events WHERE lane='distribution' AND status='approved' AND timestamp LIKE ?", date+"%").Scan(&distribution)
+	s.db.QueryRow("SELECT COALESCE(SUM(score_delta),0) FROM events WHERE lane='revenue' AND status='approved' AND timestamp LIKE ?", date+"%").Scan(&revenue)
+	s.db.QueryRow("SELECT COALESCE(SUM(score_delta),0) FROM events WHERE lane='systems' AND status='approved' AND timestamp LIKE ?", date+"%").Scan(&systems)
+	s.db.QueryRow("SELECT COUNT(*) FROM events WHERE lane='shipping' AND status='approved' AND timestamp LIKE ?", date+"%").Scan(&ships)
 
 	if shipping > 40 {
 		shipping = 40
@@ -1211,25 +1246,51 @@ func (s *Server) updateDailyScore(date string) {
 		systems = 15
 	}
 
-	total := shipping + distribution + revenue + systems
+	// Count context switches — penalty for 3rd+ switch in a day
+	var switches int
+	s.db.QueryRow("SELECT COUNT(*) FROM events WHERE event_type='CONTEXT_SWITCH' AND status='approved' AND timestamp LIKE ?", date+"%").Scan(&switches)
+	contextPenalty := 0
+	if switches > 2 {
+		contextPenalty = (switches - 2) * 5
+	}
+
+	// Check unfulfilled intent (COMMITMENT_BREACH)
+	commitmentPenalty := 0
+	// Only check for yesterday and older (not today — still in progress)
+	yesterday := time.Now().AddDate(0, 0, -1).Format("2006-01-02")
+	if date <= yesterday {
+		var intent string
+		var fulfilled int
+		s.db.QueryRow("SELECT COALESCE(intent,''), intent_fulfilled FROM daily_scores WHERE date=?", date).Scan(&intent, &fulfilled)
+		if intent != "" && fulfilled == 0 && ships == 0 {
+			commitmentPenalty = 10
+		}
+	}
+
+	total := shipping + distribution + revenue + systems - contextPenalty - commitmentPenalty
+	if total < 0 {
+		total = 0
+	}
 	if ships == 0 && total > 30 {
 		total = 30
 	}
 	won := total >= 50
+	penalties := contextPenalty + commitmentPenalty
 
 	s.mu.Lock()
 	s.db.Exec(`INSERT INTO daily_scores (date, execution_score, shipping_score, distribution_score,
-		revenue_score, systems_score, ships_count, won)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		revenue_score, systems_score, penalties, ships_count, won)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(date) DO UPDATE SET
 			execution_score=excluded.execution_score,
 			shipping_score=excluded.shipping_score,
 			distribution_score=excluded.distribution_score,
 			revenue_score=excluded.revenue_score,
 			systems_score=excluded.systems_score,
+			penalties=excluded.penalties,
 			ships_count=excluded.ships_count,
 			won=excluded.won`,
-		date, total, shipping, distribution, revenue, systems, ships, won)
+		date, total, shipping, distribution, revenue, systems, penalties, ships, won)
 	s.mu.Unlock()
 }
 
@@ -1300,6 +1361,111 @@ func (s *Server) getPossession() string {
 		}
 	}
 	return possession
+}
+
+// ─── GET /v1/pending ─────────────────────────────────────────────────────
+
+func (s *Server) handlePending(w http.ResponseWriter, r *http.Request) {
+	cors(w)
+	rows, err := s.db.Query(`SELECT id, event_type, lane, source, timestamp, artifact_title, artifact_url,
+		confidence, score_delta, business_id FROM events WHERE status='pending' ORDER BY timestamp DESC`)
+	if err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err), 500)
+		return
+	}
+	defer rows.Close()
+
+	type PendingEvent struct {
+		ID         string  `json:"id"`
+		Type       string  `json:"event_type"`
+		Lane       string  `json:"lane"`
+		Source     string  `json:"source"`
+		Timestamp  string  `json:"timestamp"`
+		Title      string  `json:"artifact_title"`
+		URL        string  `json:"artifact_url"`
+		Confidence float64 `json:"confidence"`
+		Points     int     `json:"potential_points"`
+		Business   string  `json:"business_id"`
+	}
+	var pending []PendingEvent
+	for rows.Next() {
+		var p PendingEvent
+		rows.Scan(&p.ID, &p.Type, &p.Lane, &p.Source, &p.Timestamp,
+			&p.Title, &p.URL, &p.Confidence, &p.Points, &p.Business)
+		// Recalculate actual points (stored as 0 while pending)
+		p.Points = calcScoreDelta(p.Lane, p.Type, p.Confidence)
+		pending = append(pending, p)
+	}
+	if pending == nil {
+		pending = []PendingEvent{}
+	}
+	json.NewEncoder(w).Encode(map[string]interface{}{"pending": pending, "count": len(pending)})
+}
+
+// ─── POST /v1/events/<id>/approve or /v1/events/<id>/reject ─────────────
+
+func (s *Server) handleEventAction(w http.ResponseWriter, r *http.Request) {
+	cors(w)
+	if r.Method != "POST" {
+		http.Error(w, `{"error":"POST only"}`, 405)
+		return
+	}
+
+	// Parse: /v1/events/<id>/approve or /v1/events/<id>/reject
+	path := strings.TrimPrefix(r.URL.Path, "/v1/events/")
+	parts := strings.SplitN(path, "/", 2)
+	if len(parts) != 2 {
+		http.Error(w, `{"error":"use /v1/events/<id>/approve or /v1/events/<id>/reject"}`, 400)
+		return
+	}
+	eventID := parts[0]
+	action := parts[1]
+
+	if action != "approve" && action != "reject" {
+		http.Error(w, `{"error":"action must be approve or reject"}`, 400)
+		return
+	}
+
+	// Check event exists and is pending
+	var currentStatus, lane, evtType, title string
+	var confidence float64
+	err := s.db.QueryRow("SELECT status, lane, event_type, artifact_title, confidence FROM events WHERE id=?", eventID).
+		Scan(&currentStatus, &lane, &evtType, &title, &confidence)
+	if err != nil {
+		http.Error(w, `{"error":"event not found"}`, 404)
+		return
+	}
+	if currentStatus != "pending" {
+		http.Error(w, fmt.Sprintf(`{"error":"event is already %s"}`, currentStatus), 409)
+		return
+	}
+
+	s.mu.Lock()
+	if action == "approve" {
+		scoreDelta := calcScoreDelta(lane, evtType, confidence)
+		s.db.Exec("UPDATE events SET status='approved', score_delta=? WHERE id=?", scoreDelta, eventID)
+		s.mu.Unlock()
+
+		// Recalculate daily score
+		var ts string
+		s.db.QueryRow("SELECT timestamp FROM events WHERE id=?", eventID).Scan(&ts)
+		date := ts[:10] // YYYY-MM-DD
+		s.updateDailyScore(date)
+		s.updateStreak(date, title)
+		s.recalcSeason()
+
+		daily := s.getDailyScore(date)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"ok": true, "event_id": eventID, "action": "approved",
+			"score_delta": scoreDelta, "new_daily_score": daily.ExecutionScore,
+		})
+	} else {
+		s.db.Exec("UPDATE events SET status='rejected', score_delta=0 WHERE id=?", eventID)
+		s.mu.Unlock()
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"ok": true, "event_id": eventID, "action": "rejected",
+		})
+	}
 }
 
 func (s *Server) getStallHours() float64 {
