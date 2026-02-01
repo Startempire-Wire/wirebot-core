@@ -89,43 +89,78 @@ Q10: "What's your relationship with money right now — comfortable, tight, or i
 
 **Goal:** Map the operator's business into Wirebot's knowledge systems.
 
-#### 2.1 Business Profile Intake
+#### 2.1 Business Landscape Intake
 
 ```
-Q11: "What do you sell — or what will you sell?"
-     → Core product offer identification
+Q11: "Tell me about everything you're working on right now.
+      Businesses, products, side projects, client work — all of it.
+      Don't filter. The messy truth is what I need."
+     → Maps the FULL business landscape. Creates Business entities.
+     → Wirebot listens, asks follow-ups, builds the picture.
 
-Q12: "Who is your ideal customer? Describe them like you're pointing them out in a crowd."
-     → Target market seeding (used for marketing guidance later)
+Q12: "Which of these is the main thing right now?
+      And which one pays the bills — even if that's different?"
+     → Sets priority per business. Identifies income vs. aspiration.
+     → If income source ≠ main focus, that's important context.
 
-Q13: "Do you have revenue yet? If so, roughly how much per month?"
-     → Seeds KPIs block. Determines if Idea, Launch, or Growth is accurate.
+Q13: "How do these all connect to each other — or don't they?"
+     → Maps dependencies. (e.g., "The hosting company supports the network
+        which distributes the AI product.")
+     → Identifies platform plays vs. standalone ventures.
 
-Q14: "What's your biggest expense right now?"
-     → Financial awareness for Pillar 7 (Protect What's Built)
+Q14: "Where is each one at — just an idea, partly built,
+      launched, or actually running and making money?"
+     → Sets stage per business. Honest assessment, not aspirational.
 
-Q15: "Do you have a website? Social media? Any online presence?"
-     → Inventory of existing assets
+Q15: "Talk to me about money. What's coming in right now?
+      Stripe accounts, client payments, anything.
+      And what's going out — debt, subscriptions, obligations?"
+     → Revenue mapping across all sources.
+     → Debt profile. Monthly burn. Break-even target.
+     → This question is asked with zero judgment. Just: what's real?
 
-Q16: "What tools do you already use? (e.g., Stripe, QuickBooks, Gmail, Notion, etc.)"
-     → Integration opportunity mapping
+Q16: "What's the one product or business that if it took off,
+      everything else would follow?"
+     → Identifies the linchpin (Pillar 11: Maximum Leverage).
+     → The thing that, if it wins, pays the debt and funds the rest.
 
-Q17: "What's working right now in your business?"
-     → Identifies strengths to protect and leverage (Pillar 5, 7, 11)
+Q17: "What have you started but not finished?
+      How far along is each one? Be honest about what's 80% done
+      versus what's 10%."
+     → Product inventory with honest completion assessment.
+     → 80%-done products are often the fastest path to revenue.
 
-Q18: "What's NOT working?"
-     → Surfaces pain points for immediate action (Pillar 8 — truth)
+Q18: "Are you stretched too thin? What would you drop
+      if you had to pick only two things to focus on?"
+     → Pillar 9 (Sustainability) + forced prioritization.
+     → Reveals what the operator truly values vs. what they're holding onto.
 ```
 
-#### 2.2 Checklist Calibration
+#### 2.2 Automatic Calibration
 
-Based on answers, Wirebot auto-marks checklist items as complete:
+Based on answers, Wirebot:
+
+**Creates businesses:**
+- Each product/project mentioned → Business entity with stage, priority, revenue status
+
+**Auto-marks checklist items:**
 - Has a business name? → ✓ Create Business Name
-- Has revenue? → ✓ Validate Business Model, likely Launch stage
+- Has revenue? → ✓ Validate Business Model, stage → Launch/Growth
 - Has a website? → ✓ Build Online Presence
-- Etc.
+- Has Stripe? → ✓ Choose Payment Processing
 
-The operator sees: *"Based on what you've told me, you're at 34% setup. Here's what's next."*
+**Maps financial reality:**
+- Revenue sources → KPIs block, per-business MRR
+- Debt profile → OPERATOR_REALITY.md
+- Monthly burn → break-even target calculated
+- Activates Red-to-Black mode if debt is significant
+
+**Identifies quick wins:**
+- 80%-done products → "Ship it this week" tasks at critical priority
+- Revenue streams being neglected → protective alerts
+- Subscriptions that can be cut → immediate savings
+
+The operator sees: *"I see 5 businesses, 3 with revenue, 2 unfinished products close to shippable. Your break-even is $X/mo and you're at $Y. Here's the fastest path to close that gap."*
 
 ---
 
