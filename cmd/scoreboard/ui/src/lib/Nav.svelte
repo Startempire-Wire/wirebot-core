@@ -7,6 +7,8 @@
     { id: 'score', icon: '⚡', label: 'Score' },
     { id: 'feed', icon: '📋', label: 'Feed' },
     { id: 'season', icon: '🏆', label: 'Season' },
+    { id: 'wrapped', icon: '🎬', label: 'Wrapped' },
+    { id: 'settings', icon: '⚙️', label: 'Settings' },
   ];
 </script>
 
@@ -51,10 +53,7 @@
     transition: color 0.2s;
   }
 
-  .tab.active {
-    color: #7c7cff;
-  }
-
-  .tab-icon { font-size: 20px; }
-  .tab-label { font-size: 10px; letter-spacing: 0.05em; }
+  .tab.active { color: #7c7cff; }
+  .tab-icon { font-size: 18px; }
+  .tab-label { font-size: 9px; letter-spacing: 0.05em; }
 </style>

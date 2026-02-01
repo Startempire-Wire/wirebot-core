@@ -72,6 +72,18 @@
     {/each}
   </div>
 
+  <!-- Modifiers -->
+  {#if data.streak_bonus > 0 || data.penalties > 0}
+    <div class="mods">
+      {#if data.streak_bonus > 0}
+        <span class="mod bonus">🔥 +{data.streak_bonus} streak bonus</span>
+      {/if}
+      {#if data.penalties > 0}
+        <span class="mod penalty">⚠️ -{data.penalties} penalties</span>
+      {/if}
+    </div>
+  {/if}
+
   <!-- Last Ship -->
   {#if data.last_ship}
     <div class="ls">🚀 {data.last_ship}</div>
@@ -188,6 +200,12 @@
   .ln-fill { height: 100%; border-radius: 5px; transition: width .8s ease; min-width: 2px; }
   .ln-v { font-size: 12px; font-variant-numeric: tabular-nums; opacity: .6; min-width: 40px; text-align: right; flex-shrink: 0; }
   .ln-max { opacity: .4; font-size: 10px; }
+
+  /* Modifiers */
+  .mods { display: flex; justify-content: center; gap: 12px; font-size: 11px; }
+  .mod { padding: 3px 8px; border-radius: 6px; }
+  .bonus { background: rgba(0,255,100,.08); color: #00cc50; }
+  .penalty { background: rgba(255,50,50,.08); color: #ff4444; }
 
   .ls { text-align: center; font-size: 11px; color: #4a9eff; opacity: .65; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 

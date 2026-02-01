@@ -96,20 +96,23 @@ type Streak struct {
 }
 
 type ScoreboardView struct {
-	Mode       string    `json:"mode"`
-	Score      int       `json:"score"`
-	Possession string    `json:"possession"`
-	ShipToday  int       `json:"ship_today"`
-	Streak     Streak    `json:"streak"`
-	Record     string    `json:"record"`
-	SeasonDay  string    `json:"season_day"`
-	LastShip   string    `json:"last_ship"`
-	Clock      ClockView `json:"clock"`
-	Lanes      LanesView `json:"lanes"`
-	Signal     string    `json:"signal"`
-	Season     Season    `json:"season"`
-	Intent     string    `json:"intent,omitempty"`
-	StallHours float64   `json:"stall_hours,omitempty"`
+	Mode        string    `json:"mode"`
+	Score       int       `json:"score"`
+	Possession  string    `json:"possession"`
+	ShipToday   int       `json:"ship_today"`
+	Streak      Streak    `json:"streak"`
+	Record      string    `json:"record"`
+	SeasonDay   string    `json:"season_day"`
+	LastShip    string    `json:"last_ship"`
+	Clock       ClockView `json:"clock"`
+	Lanes       LanesView `json:"lanes"`
+	Signal      string    `json:"signal"`
+	Season      Season    `json:"season"`
+	Intent      string    `json:"intent,omitempty"`
+	StallHours  float64   `json:"stall_hours,omitempty"`
+	Penalties   int       `json:"penalties"`
+	StreakBonus int       `json:"streak_bonus"`
+	PendingCount int     `json:"pending_count"`
 }
 
 type ClockView struct {
@@ -183,6 +186,14 @@ func main() {
 	// Gated events (pending/approve/reject)
 	mux.HandleFunc("/v1/pending", s.auth(s.handlePending))
 	mux.HandleFunc("/v1/events/", s.auth(s.handleEventAction)) // /v1/events/<id>/approve|reject
+
+	// Social cards
+	mux.HandleFunc("/v1/card/daily", s.handleCard)
+	mux.HandleFunc("/v1/card/weekly", s.handleCard)
+	mux.HandleFunc("/v1/card/season", s.handleCard)
+
+	// EOD score lock
+	mux.HandleFunc("/v1/lock", s.auth(s.handleLock))
 
 	// Webhook receivers (use separate tokens in query params)
 	mux.HandleFunc("/v1/webhooks/github", s.auth(s.handleGitHubWebhook))
@@ -708,6 +719,22 @@ func (s *Server) handleScoreboard(w http.ResponseWriter, r *http.Request) {
 		mode = "stadium"
 	}
 
+	// Count pending events
+	var pendingCount int
+	s.db.QueryRow("SELECT COUNT(*) FROM events WHERE status='pending'").Scan(&pendingCount)
+
+	// Calculate streak bonus
+	streakBonus := 0
+	if streak.Current >= 30 {
+		streakBonus = 20
+	} else if streak.Current >= 14 {
+		streakBonus = 15
+	} else if streak.Current >= 7 {
+		streakBonus = 10
+	} else if streak.Current >= 3 {
+		streakBonus = 5
+	}
+
 	view := ScoreboardView{
 		Mode:       mode,
 		Score:      daily.ExecutionScore,
@@ -728,10 +755,13 @@ func (s *Server) handleScoreboard(w http.ResponseWriter, r *http.Request) {
 			Revenue: daily.RevenueScore, RevenueMax: 20,
 			Systems: daily.SystemsScore, SystemsMax: 15,
 		},
-		Signal:     signal,
-		Season:     s.season,
-		Intent:     intent,
-		StallHours: stallHours,
+		Signal:       signal,
+		Season:       s.season,
+		Intent:       intent,
+		StallHours:   stallHours,
+		Penalties:    daily.Penalties,
+		StreakBonus:  streakBonus,
+		PendingCount: pendingCount,
 	}
 
 	// Dashboard mode: include today's feed
@@ -1274,6 +1304,28 @@ func (s *Server) updateDailyScore(date string) {
 	if ships == 0 && total > 30 {
 		total = 30
 	}
+
+	// Multipliers: streak bonus (3+ days = +5, 7+ = +10, 14+ = +15, 30+ = +20)
+	streak := s.getStreak("ship")
+	streakBonus := 0
+	if streak.Current >= 30 {
+		streakBonus = 20
+	} else if streak.Current >= 14 {
+		streakBonus = 15
+	} else if streak.Current >= 7 {
+		streakBonus = 10
+	} else if streak.Current >= 3 {
+		streakBonus = 5
+	}
+	// Only apply streak bonus if there are ships today
+	if ships > 0 && streakBonus > 0 {
+		total += streakBonus
+	}
+	// Cap at 100
+	if total > 100 {
+		total = 100
+	}
+
 	won := total >= 50
 	penalties := contextPenalty + commitmentPenalty
 
@@ -1466,6 +1518,150 @@ func (s *Server) handleEventAction(w http.ResponseWriter, r *http.Request) {
 			"ok": true, "event_id": eventID, "action": "rejected",
 		})
 	}
+}
+
+// ─── GET /v1/card/daily|weekly|season — Social Share Cards (SVG) ─────────
+
+func (s *Server) handleCard(w http.ResponseWriter, r *http.Request) {
+	cardType := "daily"
+	if strings.Contains(r.URL.Path, "weekly") {
+		cardType = "weekly"
+	} else if strings.Contains(r.URL.Path, "season") {
+		cardType = "season"
+	}
+
+	today := time.Now().Format("2006-01-02")
+	daily := s.getDailyScore(today)
+	streak := s.getStreak("ship")
+	s.recalcSeason()
+
+	signalColor := "#00ff64" // green
+	signalLabel := "WINNING"
+	if daily.ExecutionScore < 30 {
+		signalColor = "#ff3232"
+		signalLabel = "STALLING"
+	} else if daily.ExecutionScore < 50 {
+		signalColor = "#ffc800"
+		signalLabel = "PRESSURE"
+	}
+
+	var title, subtitle, stat1Label, stat1Val, stat2Label, stat2Val, stat3Label, stat3Val string
+
+	switch cardType {
+	case "daily":
+		title = fmt.Sprintf("%d", daily.ExecutionScore)
+		subtitle = signalLabel
+		stat1Label = "SHIPS"
+		stat1Val = fmt.Sprintf("%d", daily.ShipsCount)
+		stat2Label = "STREAK"
+		stat2Val = fmt.Sprintf("%d", streak.Current)
+		stat3Label = "RECORD"
+		stat3Val = s.season.Record
+	case "weekly":
+		var weekScore, weekShips, weekWins int
+		weekStart := time.Now().AddDate(0, 0, -7).Format("2006-01-02")
+		s.db.QueryRow("SELECT COALESCE(AVG(execution_score),0), COALESCE(SUM(ships_count),0), COUNT(CASE WHEN won THEN 1 END) FROM daily_scores WHERE date >= ?", weekStart).Scan(&weekScore, &weekShips, &weekWins)
+		title = fmt.Sprintf("%d", weekScore)
+		subtitle = "WEEKLY AVG"
+		stat1Label = "SHIPS"
+		stat1Val = fmt.Sprintf("%d", weekShips)
+		stat2Label = "WINS"
+		stat2Val = fmt.Sprintf("%d/7", weekWins)
+		stat3Label = "STREAK"
+		stat3Val = fmt.Sprintf("%d", streak.Current)
+		signalColor = "#7c7cff"
+	case "season":
+		title = fmt.Sprintf("%d", s.season.AvgScore)
+		subtitle = s.season.Name
+		stat1Label = "RECORD"
+		stat1Val = s.season.Record
+		stat2Label = "BEST STREAK"
+		stat2Val = fmt.Sprintf("%d", streak.Best)
+		stat3Label = "DAY"
+		stat3Val = fmt.Sprintf("%d/%d", s.season.DaysElapsed, s.season.DaysElapsed+s.season.DaysRemaining)
+		signalColor = "#ff4a9e"
+	}
+
+	svg := fmt.Sprintf(`<svg xmlns="http://www.w3.org/2000/svg" width="600" height="315" viewBox="0 0 600 315">
+  <defs>
+    <style>
+      @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;700;900');
+      text { font-family: 'Inter', system-ui, sans-serif; fill: #ddd; }
+    </style>
+  </defs>
+  <rect width="600" height="315" rx="16" fill="#0a0a1a"/>
+  <rect x="0" y="0" width="600" height="4" fill="%s"/>
+  <text x="30" y="40" font-size="13" font-weight="700" fill="#7c7cff" letter-spacing="2">⚡ WIREBOT SCOREBOARD</text>
+  <text x="570" y="40" font-size="12" fill="#555" text-anchor="end">%s</text>
+  <text x="300" y="150" font-size="96" font-weight="900" fill="%s" text-anchor="middle">%s</text>
+  <text x="300" y="180" font-size="16" font-weight="700" fill="%s" text-anchor="middle" letter-spacing="3">%s</text>
+  <line x1="30" y1="210" x2="570" y2="210" stroke="#1e1e30" stroke-width="1"/>
+  <text x="130" y="245" font-size="28" font-weight="700" fill="#ddd" text-anchor="middle">%s</text>
+  <text x="130" y="268" font-size="11" fill="#555" text-anchor="middle" letter-spacing="1">%s</text>
+  <text x="300" y="245" font-size="28" font-weight="700" fill="#ddd" text-anchor="middle">%s</text>
+  <text x="300" y="268" font-size="11" fill="#555" text-anchor="middle" letter-spacing="1">%s</text>
+  <text x="470" y="245" font-size="28" font-weight="700" fill="#ddd" text-anchor="middle">%s</text>
+  <text x="470" y="268" font-size="11" fill="#555" text-anchor="middle" letter-spacing="1">%s</text>
+  <text x="300" y="300" font-size="10" fill="#333" text-anchor="middle">wins.wirebot.chat</text>
+</svg>`,
+		signalColor, today, signalColor, title, signalColor, subtitle,
+		stat1Val, stat1Label, stat2Val, stat2Label, stat3Val, stat3Label)
+
+	w.Header().Set("Content-Type", "image/svg+xml")
+	w.Header().Set("Cache-Control", "public, max-age=300")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Write([]byte(svg))
+}
+
+// ─── POST /v1/lock — EOD Score Lock ─────────────────────────────────────
+
+func (s *Server) handleLock(w http.ResponseWriter, r *http.Request) {
+	cors(w)
+	if r.Method != "POST" {
+		http.Error(w, `{"error":"POST only"}`, 405)
+		return
+	}
+
+	var body struct {
+		Date string `json:"date"` // optional, defaults to today
+	}
+	json.NewDecoder(r.Body).Decode(&body)
+	date := body.Date
+	if date == "" {
+		date = time.Now().Format("2006-01-02")
+	}
+
+	// Force recalculate final score
+	s.updateDailyScore(date)
+	daily := s.getDailyScore(date)
+
+	// Check intent fulfillment
+	intentFulfilled := false
+	if daily.Intent != "" && daily.ShipsCount > 0 {
+		// Simple heuristic: if they shipped something, intent is fulfilled
+		intentFulfilled = true
+	}
+
+	s.mu.Lock()
+	s.db.Exec("UPDATE daily_scores SET intent_fulfilled=? WHERE date=?", intentFulfilled, date)
+	s.mu.Unlock()
+
+	// If intent was set but not fulfilled, inject commitment breach for recalc
+	if daily.Intent != "" && !intentFulfilled {
+		s.updateDailyScore(date)
+		daily = s.getDailyScore(date)
+	}
+
+	s.recalcSeason()
+	streak := s.getStreak("ship")
+
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"ok": true, "date": date, "locked": true,
+		"final_score": daily.ExecutionScore, "won": daily.Won,
+		"intent": daily.Intent, "intent_fulfilled": intentFulfilled,
+		"ships": daily.ShipsCount, "streak": streak,
+		"record": s.season.Record,
+	})
 }
 
 func (s *Server) getStallHours() float64 {
