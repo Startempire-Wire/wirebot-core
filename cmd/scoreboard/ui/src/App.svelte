@@ -273,7 +273,7 @@
   }
 
   .app { display: flex; flex-direction: column; min-height: 100dvh; }
-  .content { flex: 1; overflow-y: auto; padding-bottom: 56px; }
+  .content { flex: 1; overflow-y: auto; padding-bottom: 56px; padding-top: calc(max(8px, env(safe-area-inset-top)) + 36px); }
 
   .loading { min-height: 100dvh; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; }
   .ld-icon { font-size: 48px; }
@@ -451,7 +451,7 @@
   /* Settings */
   .settings-view {
     padding: 12px 16px;
-    padding-top: max(12px, env(safe-area-inset-top));
+    padding-top: 0;
     min-height: calc(100dvh - 56px);
     display: flex;
     flex-direction: column;

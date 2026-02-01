@@ -129,7 +129,7 @@
 <style>
   .season-view {
     padding: 12px 16px;
-    padding-top: max(12px, env(safe-area-inset-top));
+    padding-top: 0;
     min-height: calc(100dvh - 56px);
     display: flex;
     flex-direction: column;

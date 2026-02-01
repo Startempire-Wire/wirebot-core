@@ -117,7 +117,7 @@
     display: flex;
     flex-direction: column;
     padding: 12px 16px;
-    padding-top: max(12px, env(safe-area-inset-top));
+    padding-top: 0;
     gap: 10px;
     min-height: calc(100dvh - 56px);
     background: linear-gradient(180deg, #0a0a1a 0%, #0d0d20 50%, #0a0a1a 100%);
