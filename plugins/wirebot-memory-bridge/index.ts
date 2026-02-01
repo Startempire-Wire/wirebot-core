@@ -594,7 +594,7 @@ const wirebotMemoryBridge = {
             ], { description: "Status filter (for list)" }),
           ),
         }),
-        execute: async (params) => {
+        async execute(_toolCallId, params) {
           try {
             // Dynamic import — checklist engine lives outside the plugin dir
             const { readFileSync, writeFileSync, existsSync } = await import("node:fs");
@@ -630,7 +630,7 @@ const wirebotMemoryBridge = {
               writeFileSync(CHECKLIST_PATH, JSON.stringify(data, null, 2));
             };
 
-            const { action, stage, category, taskId, title, description: desc, priority, status: statusFilter } = params;
+            const { action, stage, category, taskId, title, description: desc, priority, status: statusFilter } = params as any;
             const currentStage = stage || data.currentStage;
 
             const progressBar = (pct: number) => "█".repeat(Math.round(pct / 5)) + "░".repeat(20 - Math.round(pct / 5));
