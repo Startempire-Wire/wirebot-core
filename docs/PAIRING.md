@@ -1,4 +1,4 @@
-# Wirebot Onboarding & Pairing Protocol
+# Wirebot Pairing Protocol
 
 > Inspired by the SingleEye Primary User Pairing Protocol (PUPP), adapted for Wirebot's business operating context.
 
