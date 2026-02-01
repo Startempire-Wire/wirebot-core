@@ -1,0 +1,30 @@
+{
+  "id": "wirebot-memory-bridge",
+  "kind": "extension",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "mem0Url": {
+        "type": "string",
+        "default": "http://127.0.0.1:8200"
+      },
+      "lettaUrl": {
+        "type": "string",
+        "default": "http://127.0.0.1:8283"
+      },
+      "lettaAgentId": {
+        "type": "string"
+      },
+      "mem0Namespace": {
+        "type": "string",
+        "default": "wirebot_verious"
+      },
+      "autoExtract": {
+        "type": "boolean",
+        "default": true
+      }
+    },
+    "required": ["lettaAgentId"]
+  }
+}

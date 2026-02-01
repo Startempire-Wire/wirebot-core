@@ -1,0 +1,14 @@
+{
+  "name": "@wirebot/memory-bridge",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Wirebot Memory Bridge — coordinates memory-core, Mem0, and Letta",
+  "dependencies": {
+    "@sinclair/typebox": "0.34.47"
+  },
+  "clawdbot": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}
