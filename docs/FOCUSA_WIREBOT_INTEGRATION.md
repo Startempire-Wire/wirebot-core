@@ -583,41 +583,96 @@ Else:
 **Step 3: Pressure update rules**
 
 Pressure update uses additive factors:
-- persistence, goal alignment, risk signals, novelty spikes (increase)
-- suppression, completion, time decay (decrease)
+
+Base increments (defaults per SignalKind):
+- `user_input`: **+0.6**
+- `tool_output`: **+0.5**
+- `assistant_output`: **+0.2**
+- `warning`: **+0.7**
+- `error`: **+1.2**
+- `repeated_pattern`: **+0.8**
+- `manual_pin`: **+2.0**
+
+Modifiers:
+- Goal alignment:
+  - if `related_frame == active`: **×1.3**
+  - if `related_frame` in stack path: **×1.1**
+  - else: **×0.8**
+- Recency:
+  - if within last 5 min: **+0.3**
+- Risk:
+  - if error/warning: **+0.4**
+
+Suppression:
+- if `suppressed_until` in future: do not surface (still track but do not show)
+
+Decay:
+- on periodic tick, apply **`pressure *= 0.98`** (configurable) for non-manual candidates
+- if pressure below threshold and not seen in long time → drop candidate (optional; or archive)
 
 **Step 4: Surfacing**
 
 A candidate is surfaced when:
-- pressure exceeds threshold
+- `pressure >= SURFACE_THRESHOLD` (**default 2.2**)
 - not suppressed
-- not already visible
+- not resolved
 
-Surfacing produces:
-- CLI/UI notification
-- event log entry
+Surfacing does NOT change focus stack. It only:
+- emits event `gate.candidate_surfaced`
+- returns candidate in API/UI lists
+
+API behavior:
+- `/v1/focus-gate/candidates`: sorted by `state` surfaced first, then `pressure` descending, then `last_seen_at` descending
+- `/v1/focus-gate/ingest-signal`: must be fast (**<5ms typical**). If ECS store needed, store async and return 202.
 
 **Step 5: User actions**
 
 User may:
-- accept candidate → triggers frame operation
-- suppress candidate → pressure to zero, audit trail retained
+- accept candidate → triggers frame operation (conscious action, not automatic)
+- suppress candidate → set `suppressed_until`, audit trail retained
 - pin candidate → bypass decay, persist across sessions
+- resolve candidate → `state=resolved`
 - ignore → natural decay
 
-### Pinning
+### Pinning (from UPDATE)
+
+Candidate field: `pinned: bool`
 
 Pinned candidates:
-- bypass decay
+- ignore decay
+- are always eligible for surfacing
+- have minimum pressure floor
 - persist across sessions
 - must be explicitly unpinned
 - do NOT force focus changes
+
+CLI: `focusa gate pin <candidate_id>`, `focusa gate unpin <candidate_id>`
+
+### Time as First-Class Signal (from UPDATE)
+
+Temporal signals: `inactivity_tick`, `long_running_frame`, `deadline_tick`
+
+Derived heuristics:
+- Frame open > N minutes → signal
+- Candidate resurfacing over long interval → boost
+- Explicit user deadline → hard signal
+
+Pressure effects:
+- Long-running + unresolved increases pressure slowly
+- Time decay slowed for pinned items
+- Time signals never auto-switch focus; only increase eligibility, not authority
 
 ### Suppression
 
 - temporary, permanent, or per-session
 - reduces pressure to zero
 - retains audit trail
+
+### Persistence
+
+Persist candidate list with bounded size:
+- Keep last N candidates (**default 200**)
+- Persist to `~/.focusa/state/focus_gate.json`
 
 **Bridge mapping:** Focus Gate state → `/data/wirebot/focusa-state/gate.json`
 
@@ -2247,11 +2302,778 @@ The skill surface does not change — only gate behavior does.
 
 ---
 
-## 23. Events & Observability
+## 23. UXP / UFI (User Experience Calibration)
+
+Source: `14-uxp-ufi-schema.md`
+
+### Core Design Rules (Non-Negotiable — 7 rules)
+
+1. No opaque scores
+2. No hidden inference
+3. No emotion labels
+4. All learned values must: be weighted (0.0–1.0), have confidence, have citations, be user-adjustable
+5. Learning is slow, smoothed, and reversible
+6. Language signals are secondary to behavior
+7. Agent ≠ Model ≠ Harness (always separated)
+
+### Entity Separation
+
+Calibration is scoped across three axes:
+
+```
+User
+ ├─ Agent Persona
+ │   └─ Model / Harness
+```
+
+Every UXP dimension and UFI entry MUST declare its scope.
+
+### UXP (User Experience Profile) — Slow-moving Calibration
+
+#### UXP Root
+
+```json
+{
+  "user_id": "user_abc123",
+  "version": 1,
+  "last_updated": "2025-02-14T18:22:00Z",
+  "dimensions": [ ... ]
+}
+```
+
+#### UXP Dimension (Canonical Schema)
+
+```json
+{
+  "dimension_id": "verbosity_preference",
+
+  "value": 0.32,
+  "confidence": 0.81,
+
+  "scope": {
+    "user": true,
+    "agent_id": "focusa-default",
+    "model_id": "claude-3.5",
+    "harness_id": "claude-code"
+  },
+
+  "learning": {
+    "source": ["onboarding", "ufi_trend"],
+    "alpha": 0.05,
+    "window_size": 50,
+    "last_adjustment": "2025-02-12T09:41:33Z"
+  },
+
+  "citations": [
+    {
+      "event_id": "evt_91af",
+      "interaction_id": "int_3f92",
+      "quote": "Just give me the diff, not the explanation",
+      "timestamp": "2025-02-11T10:22:04Z"
+    }
+  ],
+
+  "user_override": {
+    "enabled": false,
+    "override_value": null,
+    "set_at": null
+  }
+}
+```
+
+#### UXP Dimension Field Semantics
+
+| Field | Meaning |
+|---|---|
+| `value` | Current calibrated preference (0–1) |
+| `confidence` | Evidence strength (not correctness) |
+| `scope` | Where this calibration applies |
+| `learning.alpha` | Update rate (small by design) |
+| `citations` | Exact, inspectable evidence |
+| `user_override` | Explicit human control |
+
+#### Canonical UXP Dimensions (Initial Set — 7)
+
+- `autonomy_tolerance`
+- `verbosity_preference`
+- `interruption_sensitivity`
+- `explanation_depth`
+- `confirmation_preference`
+- `risk_tolerance`
+- `review_cadence`
+
+All dimensions are optional but must follow the same schema.
+
+### UFI (User Friction Index) — Fast-moving Measurements
+
+UFI represents **interaction cost**, not emotion. Per-interaction, evidence-based, aggregated into trends.
+
+#### UFI Interaction Record
+
+```json
+{
+  "ufi_id": "ufi_482fa",
+  "interaction_id": "int_3f92",
+  "timestamp": "2025-02-11T10:22:10Z",
+
+  "context": {
+    "task_id": "beads-124",
+    "agent_id": "focusa-default",
+    "model_id": "claude-3.5",
+    "harness_id": "claude-code",
+    "difficulty_estimate": 0.62
+  },
+
+  "signals": [
+    { "signal_type": "immediate_correction", "weight": 0.7 },
+    { "signal_type": "rephrase", "weight": 0.3 }
+  ],
+
+  "aggregate": 0.54,
+
+  "citations": [
+    {
+      "event_id": "evt_83ab",
+      "quote": "No, that's not what I meant",
+      "timestamp": "2025-02-11T10:21:58Z"
+    }
+  ]
+}
+```
+
+#### Canonical UFI Signal Types (14 total, 3 tiers)
+
+**High-Weight (Objective — 5):**
+- `task_reopened`
+- `manual_override`
+- `immediate_correction`
+- `undo_or_revert`
+- `explicit_rejection`
+
+**Medium-Weight (4):**
+- `rephrase`
+- `repeat_request`
+- `scope_clarification`
+- `forced_simplification`
+
+**Low-Weight (Language-Only — 3):**
+- `negation_language`
+- `meta_language`
+- `impatience_marker`
+
+⚠️ Language-only signals may NEVER dominate an aggregate score.
+
+#### UFI Aggregation Rules
+
+- Signals are additive but capped
+- Aggregates are clamped `0.0–1.0`
+- No single interaction affects UXP
+- Trends only, not spikes
+
+### UFI → UXP Learning Bridge (Formula)
+
+```
+UXP_new = clamp(
+  UXP_old * (1 - α) + mean(UFI_window) * α,
+  0.0,
+  1.0
+)
+```
+
+Constraints:
+- **α ≤ 0.1**
+- **window_size ≥ 30**
+- confidence increases with sample size
+- user override freezes learning
+
+### Cascade Integration Points
+
+| Component | Allowed Influence |
+|---|---|
+| Intuition Engine | Weak trend signals only |
+| Focus Gate | Threshold modulation |
+| Expression Engine | **Primary consumer** (tunes verbosity, explanation depth, confirmations) |
+| Autonomy Scoring | Penalty / stability factor |
+| Focus Stack | **NO influence** |
+
+### Storage
+
+- Local SQLite DB
+- Indexed by: user, agent, model, harness
+- Append-only for UFI records
+- Versioned for UXP dimensions
+
+### Transparency Guarantees
+
+The system MUST answer: "Why is this value what it is?", "What evidence supports it?", "How confident are you?", "Can I change it?" Failure to answer any = violation.
+
+> **Focusa calibrates behavior through observable friction, not inferred emotion — and always shows its work.**
+
+**Bridge mapping:** UXP/UFI → SQLite at `/data/wirebot/focusa-state/uxp-ufi.sqlite`. UXP dimensions surfaced in dashboard "Profile" screen. Nightly snapshot to workspace `USER.md`.
+
+---
+
+## 24. Agent Schema & Constitution
+
+Source: `15-agent-schema.md`, `16-agent-constitution.md`
+
+### Agent Identity
+
+```json
+{
+  "agent_id": "focusa-default",
+  "display_name": "Focusa Default Agent",
+  "version": "1.0.0",
+  "created_at": "2025-02-01T00:00:00Z",
+  "active": true
+}
+```
+
+### Agent Role & Capability Envelope
+
+```json
+{
+  "role": "software_assistant",
+  "primary_capabilities": ["analysis", "code_editing", "task_execution"],
+  "non_goals": ["emotional_support", "open_ended_chat"]
+}
+```
+
+### Behavioral Defaults (Pre-Calibration)
+
+Starting points only. May be modulated by UXP but never silently overridden.
+
+```json
+{
+  "behavior_defaults": {
+    "verbosity": 0.5,
+    "initiative": 0.4,
+    "risk": 0.3,
+    "explanation_depth": 0.6,
+    "confirmation_bias": 0.5
+  }
+}
+```
+
+### Hard Policy Constraints (Non-Negotiable Runtime Limits)
+
+```json
+{
+  "policies": {
+    "max_autonomy_level": 3,
+    "requires_task_authority": true,
+    "human_approval_above_AL": 2,
+    "tool_access": {
+      "filesystem": "scoped",
+      "network": "read_only",
+      "shell": "restricted"
+    },
+    "forbidden_actions": [
+      "delete_unscoped_files",
+      "change_global_config",
+      "execute_unbounded_commands"
+    ]
+  }
+}
+```
+
+### Focus Behavior Tendencies
+
+Influence how focus candidates are framed, never selected:
+
+```json
+{
+  "focus_tendencies": {
+    "prefers_depth_over_breadth": 0.7,
+    "interrupt_tolerance": 0.3,
+    "parallelism_bias": 0.4,
+    "context_preservation_bias": 0.8
+  }
+}
+```
+
+### Expression Profile
+
+Consumed by Expression Engine:
+
+```json
+{
+  "expression_profile": {
+    "tone": "neutral",
+    "format_bias": "structured",
+    "uses_checklists": true,
+    "explains_uncertainty": true,
+    "default_response_length": "medium"
+  }
+}
+```
+
+### Learning Permissions
+
+```json
+{
+  "learning_permissions": {
+    "may_adapt_behavior": true,
+    "may_adapt_expression": true,
+    "may_adapt_focus_tendencies": false,
+    "may_adapt_policies": false,
+    "may_adapt_constitution": false,
+    "learning_rate_cap": 0.1
+  }
+}
+```
+
+> Constitutions NEVER self-modify.
+
+### Agent Constitution (ACP)
+
+Each agent has exactly one active constitution. Immutable during runtime.
+
+```json
+{
+  "constitution_id": "focusa-default-constitution",
+  "agent_id": "focusa-default",
+  "version": "1.0.0",
+  "immutable": true,
+
+  "principles": [
+    "Prefer correctness over speed",
+    "Avoid unnecessary verbosity",
+    "Do not assume user intent",
+    "Surface uncertainty explicitly",
+    "Never act outside task authority"
+  ],
+
+  "self_evaluation": {
+    "friction_triggers": ["immediate_correction", "task_reopened", "manual_override"],
+    "reflection_guidelines": [
+      "If corrected twice on the same task, lower confidence",
+      "If rephrase occurs, clarify assumptions earlier",
+      "If user intervenes, pause autonomy escalation"
+    ]
+  },
+
+  "autonomy": {
+    "default_level": 0,
+    "promotion_requires": ["stable_ari_trend", "low_ufi_trend", "explicit_permission"],
+    "demotion_triggers": ["policy_violation", "sustained_high_friction"]
+  },
+
+  "safety": {
+    "escalate_on": ["ambiguous_instructions", "conflicting_goals", "missing_task_authority"],
+    "never_do": ["hallucinate_requirements", "guess_intent", "modify_global_state"]
+  },
+
+  "expression_constraints": {
+    "no_hidden_reasoning": true,
+    "summarize_decisions": true,
+    "cite_assumptions": true
+  }
+}
+```
+
+### Constitution Lifecycle Rules
+
+- Agents load with a single active constitution
+- Constitution is immutable during a run
+- CS drafts apply only to future sessions
+- Rollback is instant and explicit
+- Version numbers: `MAJOR.MINOR.PATCH` (PATCH = wording, MINOR = scope/qualifier, MAJOR = philosophical shift)
+
+> **An Agent Constitution constrains behavior and reflection, not cognition, memory, or authority.**
+
+**Bridge mapping:** Agent schema → Letta agent configuration. Constitution text → workspace `SOUL.md`. Constitution versions → `/data/wirebot/focusa-state/constitutions/`.
+
+---
+
+## 25. Constitution Synthesizer (CS)
+
+Source: `16-constitution-synthesizer.md`
+
+### Purpose
+
+Answers: "Given accumulated evidence, would a revised agent constitution better express how this agent *should* reason under uncertainty?"
+
+CS is a **non-authoritative, offline analysis and authoring assistant**. It proposes versioned updates to an ACP based on long-term evidence.
+
+CS **never modifies runtime behavior**. CS **never activates changes**. CS **never runs during active agent execution**.
+
+### Non-Negotiable Design Rules (7)
+
+1. CS is **read-only** with respect to runtime state
+2. CS outputs **drafts only**
+3. CS requires **explicit human activation**
+4. All proposals must be: versioned, diffable, evidence-linked
+5. No CS output may be auto-applied
+6. CS must never reference hidden chain-of-thought
+7. CS must be fully replayable and auditable
+
+### Inputs (Evidence Sources — aggregated historical only)
+
+**Mandatory:**
+- UXP trends (saturated/unstable dimensions, persistent calibration pressure)
+- UFI trends (recurring friction patterns, normalized by difficulty)
+- ARI (promotion stalls, regressions after delegation)
+- Override & escalation events (frequency, correctness)
+- Task outcomes (reopen rates, rework ratios)
+- Agent-scoped performance metrics
+- Model / harness variance reports
+
+**Explicitly excluded:** single interactions, raw transcripts, emotional sentiment labels, private metadata, speculative intent inference.
+
+### Trigger Conditions
+
+May be invoked only when explicitly requested:
+- CLI: `focusa agent constitution suggest`
+- UI: "Suggest new constitution"
+
+Optional soft triggers (suggestive only, never auto-invoke):
+- prolonged ARI plateau
+- persistent UFI elevation in low-difficulty tasks
+- repeated human overrides at same decision boundary
+
+### Synthesis Process (5 Steps — Deterministic)
+
+**Step 1 — Evidence Aggregation:** Pull windowed metrics (configurable, **default ≥ 50 tasks**). Normalize by difficulty, model, harness.
+
+**Step 2 — Normative Tension Detection:** Detect: escalation > override mismatch, conservative bias blocking autonomy, repeated friction in reversible actions, mismatch between agent posture and user tolerance.
+
+**Step 3 — Principle Impact Mapping:** Map tensions to specific ACP principles. Example: Principle "Prefer escalation over guessing" + Evidence "Escalation frequently overridden" → Interpretation "Principle may be too strict for scoped actions."
+
+**Step 4 — Candidate Principle Rewrite:** Generate minimally invasive edits: add qualifiers, introduce scoped exceptions, clarify conditions. **Never invert core values.**
+
+**Step 5 — Draft Assembly:** Produce complete draft ACP version.
+
+### CS Output Schema
+
+```json
+{
+  "agent_id": "focusa-default",
+  "base_version": "1.1.0",
+  "proposed_version": "1.2.0",
+  "status": "draft",
+
+  "summary": "Reduced unnecessary escalation in low-risk, reversible actions",
+
+  "evidence_refs": ["ufi_trend_low_risk_escalation", "ari_plateau_report_8"],
+
+  "diff": [
+    {
+      "type": "modify",
+      "original": "You prefer escalation over guessing.",
+      "proposed": "You prefer escalation over guessing, except in reversible, low-risk actions where confidence is high.",
+      "rationale": "Human overrides indicate unnecessary escalation in reversible edits.",
+      "citations": ["evt_91af", "evt_103b"]
+    }
+  ],
+
+  "full_text": [
+    "You do not invent goals.",
+    "You do not act without task authority.",
+    "You prefer escalation over guessing, except in reversible, low-risk actions where confidence is high.",
+    "You treat autonomy as delegated, not assumed.",
+    "You preserve user intent over model cleverness.",
+    "You favor reversible actions.",
+    "You respect focus boundaries."
+  ]
+}
+```
+
+### Human Review Workflow (Required — Cannot Be Bypassed)
+
+1. View summary + rationale
+2. Inspect diff line-by-line
+3. Expand evidence citations
+4. Edit wording freely
+5. Choose: Save as draft / Discard / Activate
+6. Activation creates a new immutable version
+7. Rollback remains one-click
+
+### Runtime Guarantees
+
+- Running agents continue using the constitution version they started with
+- Constitution changes apply only to **new sessions**
+- No mid-run mutation allowed
+
+> **The Constitution Synthesizer may propose, but only a human may define who the agent is.**
+
+**Bridge mapping:** CS → scheduled bridge plugin job (e.g., monthly). Drafts stored at `/data/wirebot/focusa-state/constitutions/drafts/`. Review UI → dashboard "Profile" screen.
+
+---
+
+## 26. Cache Permission Matrix
+
+Source: `18-cache-permission-matrix.md`
+
+> **Cache structure and evidence — never conclusions. Caching must never become a cognitive constraint.**
+
+### Cache Classes (5)
+
+| Class | Name | Safety | Examples |
+|-------|------|--------|---------|
+| C0 | Immutable Content Cache | Safe | Content-addressed blobs (hash), stored tool outputs, file snapshots |
+| C1 | Deterministic Assembly Cache | Conditionally Safe | Prompt assembly, compiled context packs |
+| C2 | Ephemeral Compute Cache | Volatile | Focus Gate score tables, retrieval rankings |
+| C3 | Provider KV/Prompt Cache | Opportunistic | External KV tensors, stable scaffolding prefixes |
+| C4 | Forbidden Cache | Disallowed | Model completions as authoritative outputs |
+
+### Permission Matrix
+
+| Component | C0 | C1 | C2 | C3 | C4 |
+|---|---|---|---|---|---|
+| Reference Store | ✅ | ❌ | ❌ | ❌ | ⛔ |
+| CLT | ✅ | ❌ | ❌ | ❌ | ⛔ |
+| Focus State | ✅ | ❌ | ❌ | ❌ | ⛔ |
+| Focus Gate | ❌ | ⚠️ | ✅ | ❌ | ⛔ |
+| Expression Engine | ❌ | ⚠️ | ✅ | ⚠️ | ⛔ |
+| Intuition Engine | ❌ | ❌ | ✅ | ❌ | ⛔ |
+| Retrieval | ✅ | ⚠️ | ✅ | ❌ | ⛔ |
+| Autonomy (ARI) | ✅ | ⚠️ | ✅ | ❌ | ⛔ |
+| UXP / UFI | ✅ | ❌ | ✅ | ❌ | ⛔ |
+| CS | ✅ | ⚠️ | ✅ | ❌ | ⛔ |
+| Provider Response | ❌ | ❌ | ❌ | ❌ | ⛔ |
+
+(✅ = Allowed, ⚠️ = Allowed with strict constraints, ❌ = Disallowed, ⛔ = Forbidden)
+
+### Cache Key Requirements (Mandatory Fields)
+
+- `agent_id`
+- `constitution_version`
+- `model_id`
+- `harness_id`
+- `focus_state_revision` (or hash)
+- `token_budget`
+- `retrieval_policy_version`
+
+If any required key field is missing → caching disallowed.
+
+### Hard Invalidation Rules
+
+These events MUST invalidate all C1/C2 caches:
+- Agent ID changed
+- Constitution version changed
+- Model or harness changed
+- Focus State revision changed
+- Focus Stack push/pop
+- Focus Gate threshold/policy changed
+- Token budget changed
+- Tool schemas changed
+- Reference Store new high-priority artifact
+- Task authority changed (Beads task/epic switched)
+
+C0 caches are immutable — never invalidated.
+
+> **If caching and cognition disagree, cognition wins.**
+
+**Bridge mapping:** Cache policies → bridge plugin configuration. memory-core's embedding cache is C0 (content-addressed). Provider KV caching via Clawdbot's model failover layer.
+
+---
+
+## 27. Cognitive Telemetry Layer (CTL)
+
+Source: `29-telemetry-spec.md`, `30-telemetry-schema.md`
+
+> **Cognition must be observable before it can be improved.**
+
+### Scope
+
+CTL observes: model usage, token economics, cognitive transitions, tool usage, focus dynamics, gate decisions, intuition signals, cache behavior, human interaction signals, autonomy evolution.
+
+CTL does NOT: modify prompts, influence gates, enforce policy, control agents.
+
+### Design Constraints
+
+1. Low overhead (async write path, batched persistence, sampling-capable)
+2. Local-first (SQLite / DuckDB default)
+3. Append-only (no in-place mutation, immutable events)
+4. Schema-versioned (forward compatible)
+5. Queryable (API, CLI, TUI)
+6. Exportable (SFT, RLHF, research datasets)
+
+### Base Event Envelope
+
+```json
+{
+  "event_id": "uuid",
+  "event_type": "string",
+  "timestamp": "iso8601",
+  "session_id": "uuid",
+  "agent_id": "uuid",
+  "model_id": "string",
+  "focus_frame_id": "optional uuid",
+  "clt_id": "optional uuid",
+  "payload": { },
+  "schema_version": "1.0"
+}
+```
+
+### Canonical Event Types & Payloads
+
+**Token Usage (`model.tokens`):**
+```json
+{ "prompt_tokens": 1234, "completion_tokens": 456, "cached_tokens": 890,
+  "cache_hit": true, "latency_ms": 832, "provider": "anthropic",
+  "model": "claude-3.5", "temperature": 0.2 }
+```
+
+**Focus Transition (`focus.transition`):**
+```json
+{ "from_frame": "uuid", "to_frame": "uuid", "reason": "gate.accepted", "depth": 3 }
+```
+
+**CLT Node (`lineage.node.created`):**
+```json
+{ "node_type": "interaction | summary | branch", "parent_id": "uuid", "summary": "optional" }
+```
+
+**Gate Decision (`gate.decision`):**
+```json
+{ "candidates": 5, "accepted": 1, "scores": { "candidate_a": 0.92, "candidate_b": 0.41 } }
+```
+
+**Tool Invocation (`tool.call`):**
+```json
+{ "tool": "fs.read", "duration_ms": 120, "success": true, "output_refs": ["ref_uuid"] }
+```
+
+**UX Signal (`ux.signal`):**
+```json
+{ "type": "satisfaction | frustration", "weight": 0.73,
+  "evidence": [{ "type": "explicit", "source": "rating" }, { "type": "behavioral", "source": "override" }] }
+```
+
+**Autonomy Update (`autonomy.update`):**
+```json
+{ "previous_level": 2, "new_level": 3, "confidence": 0.84, "reason": "sustained_success" }
+```
+
+### Task-Centric Metrics (from UPDATE)
+
+**Task lifecycle events:** `task.started`, `task.completed`, `task.abandoned`, `task.restarted`, `task.refetch_required`
+
+A "task" = Focus Stack frame with status `completed | abandoned`.
+
+**Tokens Per Task (canonical optimization metric):**
+```
+tokens_per_task = Σ(tokens.input + tokens.output) / count(task.completed)
+```
+Tracked per: thread, focus frame, instance, model, harness.
+
+**Context Recovery Cost:**
+```
+context_recovery_cost = tokens_used_after_refetch / tokens_used_before_refetch
+```
+Triggered by: reference reloading, file re-reading, clarification prompts, hallucination recovery. High cost indicates over-aggressive compression or poor artifact preservation.
+
+**Compression Regret Signal:** Emitted when refetch_required occurs, validator failure due to missing artifact, or user explicitly re-provides known info. Stored as: `regret_score` (0–1), associated CLT nodes, triggering compression cycle id.
+
+### Telemetry Invariants
+
+- Every event MUST be timestamped
+- Every event MUST be attributable
+- Every metric MUST be derivable from events
+- No opaque aggregate-only metrics
+- All scores must be explainable
+
+### Storage
+
+Append-only. Never summarized. Never compacted. Always queryable. **Telemetry is ground truth, not cognition.**
+
+> **Events are facts. Metrics are interpretations.**
+
+**Bridge mapping:** Telemetry → append-only `/data/wirebot/focusa-state/telemetry.jsonl` + systemd journal.
+
+---
+
+## 28. Capabilities API
+
+Source: `23-capabilities-api.md`
+
+### Transport
+
+Local HTTP: `http://127.0.0.1:<port>/v1` (default port configurable, e.g., 4777). JSON request/response. SSE for streaming. API version in path.
+
+### Authentication
+
+Local bearer token: `Authorization: Bearer <token>`. Tokens bound to permission sets (see §21).
+
+### Resource Domains (13 namespaces)
+
+| Domain | Path | Type |
+|--------|------|------|
+| `state` | `/v1/state/*` | Focus State (current, history, stack, diff) |
+| `lineage` | `/v1/lineage/*` | CLT (head, node, path, children, summaries) |
+| `references` | `/v1/references/*` | Reference Store (list, meta, content, search) |
+| `gate` | `/v1/gate/*` | Focus Gate (policy, scores, explain) |
+| `intuition` | `/v1/intuition/*` | Signals, patterns, advisory submit |
+| `constitution` | `/v1/constitution/*` | ACP (active, versions, diff, drafts) |
+| `autonomy` | `/v1/autonomy/*` | ARI (status, ledger, explain) |
+| `metrics` | `/v1/metrics/*` | UXP, UFI, session metrics, system perf |
+| `cache` | `/v1/cache/*` | Status, policy, events (hit/miss/bust) |
+| `contribute` | `/v1/contribute/*` | Data contribution queue |
+| `export` | `/v1/export/*` | Dataset exports |
+| `agents` | `/v1/agents/*` | Agent registry, constitution, capabilities |
+| `events` | `/v1/events/stream` | SSE stream of all state changes |
+
+### Write Surface (Commands Only)
+
+All mutations via `/v1/commands/submit`:
+
+```json
+{
+  "command_type": "string",
+  "agent_id": "focusa-default",
+  "session_id": "session_42",
+  "reason": "human readable",
+  "payload": { }
+}
+```
+
+Command types (MVP): `contribute.set_policy`, `contribute.pause`, `contribute.resume`, `contribute.queue_approve`, `contribute.queue_reject`, `export.start`, `constitution.create_draft`, `constitution.activate_version`, `constitution.rollback`.
+
+### SSE Event Stream
+
+`GET /v1/events/stream` emits:
+- `focus_state.updated`
+- `lineage.node_added`
+- `reference.added`
+- `cache.bust`
+- `autonomy.event`
+- `constitution.draft_created`
+- `export.completed`
+- `contribute.queue_updated`
+
+### Error Model
+
+```json
+{
+  "error": { "code": "string", "message": "string", "details": { }, "hint": "string|null" }
+}
+```
+
+Codes: `unauthorized`, `forbidden`, `not_found`, `invalid_request`, `policy_violation`, `conflict`, `rate_limited`, `internal_error`.
+
+### Canonical Principles
+
+1. Everything observable (subject to policy)
+2. Authority is centralized
+3. Writes are commands (validated, audited)
+4. Deterministic & auditable
+5. Local-first
+6. Performance-safe (streaming + pagination)
+7. Policy-enforced
+
+> **The Capabilities API exposes everything you need to understand Focusa — but only explicit, audited commands may change it.**
+
+**Bridge mapping:** Capabilities API endpoints → Clawdbot registered tools. Each `GET` endpoint → read-only tool. `POST /v1/commands/submit` → guarded `focusa.request_command` tool.
+
+---
+
+## 29. Events & Observability (Reducer-Level)
 
 Source: `G1-detail-15-events-observability.md`
 
-### Event Types (from Gen1 — complete taxonomy)
+### Event Types (complete taxonomy)
 
 **Focus Stack events:** `focus.frame_pushed`, `focus.frame_completed`, `focus.active_changed`
 
@@ -2269,13 +3091,13 @@ Source: `G1-detail-15-events-observability.md`
 
 **Adapter/Turn events:** `adapter.turn_started`, `adapter.turn_completed`
 
-**Replay Invariant (from UPDATE):** Events must support deterministic replay. Given the same event sequence, the reducer must produce the same state. Events are the authoritative log — state snapshots are accelerators.
+**Replay Invariant:** Events must support deterministic replay. Given the same event sequence, the reducer must produce the same state. Events are the authoritative log — state snapshots are accelerators.
 
-**Bridge mapping:** Telemetry → append-only `/data/wirebot/focusa-state/telemetry.jsonl` + systemd journal.
+**Bridge mapping:** Reducer events → append-only `/data/wirebot/focusa-state/events.jsonl`. CTL telemetry events → separate `/data/wirebot/focusa-state/telemetry.jsonl`.
 
 ---
 
-## 24. Storage Mapping: Every Focusa Object → Bridge Backend
+## 30. Storage Mapping: Every Focusa Object → Bridge Backend
 
 ```
 FOCUSA OBJECT                         PRIMARY BACKEND           LOCATION
@@ -2301,10 +3123,18 @@ Thread Thesis (structured)            Letta blocks              human + goals
 Thread state                          Local file                /data/wirebot/focusa-state/threads/<id>.json
 Autonomy profile                      Letta block               autonomy
 Autonomy scoring DB                   Local SQLite/JSON         /data/wirebot/focusa-state/autonomy/
-Telemetry events                      Local append-only         /data/wirebot/focusa-state/telemetry.jsonl
+UXP dimensions (live)                 Local SQLite              /data/wirebot/focusa-state/uxp-ufi.sqlite
+UFI records (append-only)             Local SQLite              /data/wirebot/focusa-state/uxp-ufi.sqlite
+UXP snapshot (readable)               Workspace file            clawd/USER.md
+Telemetry events (CTL)                Local append-only         /data/wirebot/focusa-state/telemetry.jsonl
+Reducer events                        Local append-only         /data/wirebot/focusa-state/events.jsonl
 Telemetry (system)                    systemd journal           journalctl -u clawdbot-gateway
-Agent Constitution                    Workspace file            clawd/SOUL.md
+Agent schema                          Letta agent config        agent-82610d14-*
+Agent Constitution (active)           Workspace file            clawd/SOUL.md
+Agent Constitution (versions)         Local directory            /data/wirebot/focusa-state/constitutions/
+CS drafts                             Local directory            /data/wirebot/focusa-state/constitutions/drafts/
 Capability permissions                Local config              /data/wirebot/focusa-state/permissions.json
+Cache metadata                        In-memory                 (ephemeral, C2 class)
 Worker queue                          In-memory                 (ephemeral, bounded 100)
 ```
 
@@ -2312,7 +3142,7 @@ Design principle: Every piece of state has a **primary backend** (real-time) and
 
 ---
 
-## 25. Spec Document → Implementation File Mapping
+## 31. Spec Document → Implementation File Mapping
 
 ```
 FOCUSA SPEC                                       BRIDGE FILE
@@ -2330,22 +3160,49 @@ G1-09-memory.md                                →  bridge/memory.ts
 G1-10-workers.md                               →  bridge/workers.ts
 08-expression-engine.md + G1-detail-11         →  bridge/expression-engine.ts
 09-proxy-adapter.md + G1-detail-04             →  bridge/adapter.ts
+14-uxp-ufi-schema.md                          →  bridge/uxp-ufi.ts
+15-agent-schema.md                             →  bridge/agent.ts
+16-agent-constitution.md                       →  bridge/constitution.ts
+16-constitution-synthesizer.md                 →  bridge/synthesizer.ts
 17-context-lineage-tree.md                     →  bridge/clt.ts
+18-cache-permission-matrix.md                  →  bridge/cache.ts
+23-capabilities-api.md                         →  bridge/api.ts
+25-capability-permissions.md                   →  bridge/permissions.ts
+29-telemetry-spec.md + 30-schema               →  bridge/telemetry.ts
+G1-detail-15-events-observability.md           →  bridge/events.ts
+34-agent-skills-spec.md                        →  bridge/tools.ts
+36-reliability-focus-mode.md                   →  bridge/rfm.ts
+37-autonomy-calibration-spec.md                →  bridge/autonomy.ts
+12-autonomy-scoring.md                         →  bridge/autonomy.ts (scoring)
 38-thread-thesis-spec.md                       →  bridge/thesis.ts
 39-thread-lifecycle-spec.md                    →  bridge/threads.ts
 40-instance-session-attachment-spec.md         →  bridge/instances.ts
 41-proposal-resolution-engine.md               →  bridge/pre.ts
-12-autonomy-scoring.md + 37-calibration        →  bridge/autonomy.ts
-36-reliability-focus-mode.md                   →  bridge/rfm.ts
-16-agent-constitution.md + 16-synth            →  bridge/constitution.ts
-29-telemetry-spec.md + 30-schema               →  bridge/telemetry.ts
-G1-detail-15-events-observability.md           →  bridge/events.ts
-23-capabilities-api.md                         →  bridge/api.ts
-34-agent-skills-spec.md                        →  bridge/tools.ts
-25-capability-permissions.md                   →  bridge/permissions.ts
 00-glossary.md                                 →  bridge/types.ts
 01-architecture-overview.md                    →  (this document)
 ```
+
+---
+
+## 32. Precision Disclosure: Genuinely Unparameterized Items
+
+The following items are described architecturally in the Focusa specs but lack
+specific numeric parameters. These values will need to be determined during
+implementation through experimentation and tuning:
+
+| Item | What's Specified | What's Missing |
+|------|-----------------|----------------|
+| Intuition Engine detection thresholds | 4 signal categories, O(1) processing target | Frame duration bounds, repetition counts, contradiction detection algorithm |
+| Thread Thesis update safeguards | "Minimum confidence delta required", "Cooldown between updates" | Specific delta value, cooldown duration |
+| PRE scoring formula | 5 input categories (evidence, alignment, risk, trust, recency) | Weights, combination formula |
+| RFM behavioral triggers | "Low gate acceptance rate", "High rework ratio", "Rising UFI" | Numeric thresholds (exception: AIS thresholds ARE specified: ≥0.90 safe, <0.70 triggers RFM) |
+| Autonomy signal formulas | Signal names (`completion_rate`, `time_ratio`, `rework_penalty`, `focus_discipline_score`, `safety_penalty`, `escalation_correctness`) | Individual signal computation formulas |
+| Expected difficulty factor | Derived from: model capability class, harness behavior, task class, repo complexity, context pressure | Computation formula |
+
+**Design note:** The Intuition Engine is intentionally thin — it feeds signals
+to the Focus Gate, which has full pressure mechanics specified (§6 Step 3).
+The unparameterized items are concentrated in governance/intelligence layers
+(Layers 3-5) where real usage data should inform tuning.
 
 ---
 
