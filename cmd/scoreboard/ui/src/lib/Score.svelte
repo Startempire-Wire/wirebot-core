@@ -1,4 +1,5 @@
 <script>
+  import Tooltip from './Tooltip.svelte';
   let { data, lastUpdate } = $props();
 
   function signalClass(s) {
@@ -22,11 +23,11 @@
   <!-- Intent Bar -->
   {#if data.intent}
     <div class="intent">
-      🎯 <span>{data.intent}</span>
+      <Tooltip concept="intent">🎯</Tooltip> <span>{data.intent}</span>
     </div>
   {:else}
     <div class="intent empty">
-      🎯 <span>No intent declared — <code>wb intent "..."</code></span>
+      <Tooltip concept="intent">🎯</Tooltip> <span>No intent declared — <code>wb intent "..."</code></span>
     </div>
   {/if}
 
@@ -38,21 +39,21 @@
 
   <!-- Score -->
   <div class="sc {signalClass(data.signal)}">
-    <div class="sc-lbl">EXECUTION SCORE</div>
+    <div class="sc-lbl"><Tooltip concept="score">EXECUTION SCORE</Tooltip></div>
     <div class="sc-num">{data.score}</div>
-    <div class="sc-sub">{signalLabel(data.signal)}</div>
+    <div class="sc-sub"><Tooltip concept="signal">{signalLabel(data.signal)}</Tooltip></div>
   </div>
 
   <!-- Stats -->
   <div class="stats">
-    <div class="st"><span class="st-v">🔥 {data.streak?.current || 0}</span><span class="st-l">STREAK</span></div>
+    <div class="st"><span class="st-v">🔥 {data.streak?.current || 0}</span><span class="st-l"><Tooltip concept="streak" position="below">STREAK</Tooltip></span></div>
     <div class="st"><span class="st-v">🏆 {data.streak?.best || 0}</span><span class="st-l">BEST</span></div>
-    <div class="st"><span class="st-v">{data.record || '0-0'}</span><span class="st-l">W-L</span></div>
-    <div class="st"><span class="st-v">🚀 {data.ship_today || 0}</span><span class="st-l">SHIPS</span></div>
+    <div class="st"><span class="st-v">{data.record || '0-0'}</span><span class="st-l"><Tooltip concept="record" position="below">W-L</Tooltip></span></div>
+    <div class="st"><span class="st-v">🚀 {data.ship_today || 0}</span><span class="st-l"><Tooltip concept="ships" position="below">SHIPS</Tooltip></span></div>
   </div>
 
   <!-- Possession -->
-  <div class="pos">⚡ <strong>{data.possession || '—'}</strong></div>
+  <div class="pos"><Tooltip concept="possession">⚡</Tooltip> <strong>{data.possession || '—'}</strong></div>
 
   <!-- Lanes -->
   <div class="lanes">
@@ -76,10 +77,10 @@
   {#if data.streak_bonus > 0 || data.penalties > 0}
     <div class="mods">
       {#if data.streak_bonus > 0}
-        <span class="mod bonus">🔥 +{data.streak_bonus} streak bonus</span>
+        <Tooltip concept="bonus"><span class="mod bonus">🔥 +{data.streak_bonus} streak bonus</span></Tooltip>
       {/if}
       {#if data.penalties > 0}
-        <span class="mod penalty">⚠️ -{data.penalties} penalties</span>
+        <Tooltip concept="penalty"><span class="mod penalty">⚠️ -{data.penalties} penalties</span></Tooltip>
       {/if}
     </div>
   {/if}
@@ -91,17 +92,21 @@
 
   <!-- Clocks -->
   <div class="clk">
-    {#each [
-      ['DAY', data.clock?.day_progress, false],
-      ['WEEK', data.clock?.week_progress, false],
-      ['SEASON', data.clock?.season_progress, true],
-    ] as [label, progress, isSeason]}
-      <div class="ck">
-        <span class="ck-l">{label}</span>
-        <div class="ck-track"><div class="ck-fill {isSeason ? 'ck-season' : ''}" style="width:{pct(progress)}%"></div></div>
-        <span class="ck-p">{pct(progress)}%</span>
-      </div>
-    {/each}
+    <div class="ck">
+      <span class="ck-l"><Tooltip concept="clock_day" position="above">DAY</Tooltip></span>
+      <div class="ck-track"><div class="ck-fill" style="width:{pct(data.clock?.day_progress)}%"></div></div>
+      <span class="ck-p">{pct(data.clock?.day_progress)}%</span>
+    </div>
+    <div class="ck">
+      <span class="ck-l"><Tooltip concept="clock_week" position="above">WEEK</Tooltip></span>
+      <div class="ck-track"><div class="ck-fill" style="width:{pct(data.clock?.week_progress)}%"></div></div>
+      <span class="ck-p">{pct(data.clock?.week_progress)}%</span>
+    </div>
+    <div class="ck">
+      <span class="ck-l"><Tooltip concept="clock_season" position="above">SEASON</Tooltip></span>
+      <div class="ck-track"><div class="ck-fill ck-season" style="width:{pct(data.clock?.season_progress)}%"></div></div>
+      <span class="ck-p">{pct(data.clock?.season_progress)}%</span>
+    </div>
   </div>
 
   <div class="ft">{data.season?.theme || ''}</div>

@@ -5,6 +5,7 @@
   import Season from './lib/Season.svelte';
   import Wrapped from './lib/Wrapped.svelte';
   import Nav from './lib/Nav.svelte';
+  import Hints from './lib/Hints.svelte';
 
   let view = $state('score');
   let data = $state(null);
@@ -16,6 +17,8 @@
   let showFab = $state(false);
   let fabTitle = $state('');
   let fabLane = $state('shipping');
+  let showHints = $state(false);
+  let showFirstVisit = $state(false);
 
   const API = window.location.origin;
 
@@ -101,8 +104,23 @@
     if ('serviceWorker' in navigator) {
       navigator.serviceWorker.register('/sw.js').catch(() => {});
     }
+    // First-visit detection
+    if (!localStorage.getItem('wb_visited')) {
+      showFirstVisit = true;
+    }
     return () => clearInterval(interval);
   });
+
+  function dismissFirstVisit() {
+    showFirstVisit = false;
+    localStorage.setItem('wb_visited', '1');
+  }
+
+  function openHintsFromFirstVisit() {
+    showFirstVisit = false;
+    localStorage.setItem('wb_visited', '1');
+    showHints = true;
+  }
 </script>
 
 {#if error && !data}
@@ -185,12 +203,55 @@
 
     <!-- Pending badge -->
     {#if data.pending_count > 0}
-      <div class="pending-badge" onclick={() => view = 'feed'}>
+      <button class="pending-badge" onclick={() => view = 'feed'}>
         ⏳ {data.pending_count} pending
-      </div>
+      </button>
     {/if}
 
+    <!-- Help button -->
+    <button class="help-btn" onclick={() => showHints = true} title="How it works">?</button>
+
     <Nav active={view} on:nav={handleNav} />
+
+    <!-- Hints panel -->
+    <Hints bind:visible={showHints} />
+
+    <!-- First visit welcome -->
+    {#if showFirstVisit}
+      <div class="first-visit-overlay">
+        <div class="fv-card">
+          <div class="fv-icon">⚡</div>
+          <h2>Welcome to Scoreboard</h2>
+          <p>This is your <strong>execution accountability surface</strong>. It answers one question every day:</p>
+          <div class="fv-question">"Am I winning today?"</div>
+          <p>Not "am I busy." Not "did I work." But: <strong>did reality change because I worked?</strong></p>
+
+          <div class="fv-quick">
+            <div class="fv-q-item">
+              <span class="fv-q-icon">🚀</span>
+              <span><strong>Ship things</strong> → score goes up</span>
+            </div>
+            <div class="fv-q-item">
+              <span class="fv-q-icon">🎯</span>
+              <span><strong>Declare intent</strong> → focus sharpens</span>
+            </div>
+            <div class="fv-q-item">
+              <span class="fv-q-icon">🔥</span>
+              <span><strong>Keep shipping</strong> → streak bonus grows</span>
+            </div>
+            <div class="fv-q-item">
+              <span class="fv-q-icon">🏆</span>
+              <span><strong>Score ≥ 50</strong> → you win the day</span>
+            </div>
+          </div>
+
+          <div class="fv-buttons">
+            <button class="fv-btn secondary" onclick={openHintsFromFirstVisit}>📘 Learn More</button>
+            <button class="fv-btn primary" onclick={dismissFirstVisit}>Let's Go ⚡</button>
+          </div>
+        </div>
+      </div>
+    {/if}
   </div>
 {:else}
   <div class="loading">
@@ -303,6 +364,89 @@
     z-index: 50;
     cursor: pointer;
   }
+
+  /* Help button */
+  .help-btn {
+    position: fixed;
+    top: max(8px, env(safe-area-inset-top));
+    left: 12px;
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    background: rgba(124,124,255,0.15);
+    border: 1px solid rgba(124,124,255,0.3);
+    color: #7c7cff;
+    font-size: 14px;
+    font-weight: 700;
+    cursor: pointer;
+    z-index: 50;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  /* First visit */
+  .first-visit-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.9);
+    z-index: 300;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+  }
+  .fv-card {
+    background: #0d0d18;
+    border: 1px solid #2a2a4a;
+    border-radius: 16px;
+    padding: 24px 20px;
+    max-width: 360px;
+    width: 100%;
+    text-align: center;
+  }
+  .fv-icon { font-size: 48px; margin-bottom: 8px; }
+  .fv-card h2 { font-size: 20px; font-weight: 800; margin-bottom: 10px; }
+  .fv-card p { font-size: 13px; color: #aaa; line-height: 1.6; margin-bottom: 8px; }
+  .fv-card strong { color: #ddd; }
+  .fv-question {
+    font-size: 18px;
+    font-weight: 800;
+    color: #7c7cff;
+    padding: 12px 0;
+  }
+  .fv-quick {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin: 16px 0;
+    text-align: left;
+  }
+  .fv-q-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 13px;
+    color: #aaa;
+    padding: 6px 10px;
+    background: rgba(255,255,255,0.02);
+    border-radius: 8px;
+  }
+  .fv-q-icon { font-size: 18px; flex-shrink: 0; }
+  .fv-q-item strong { color: #ddd; }
+  .fv-buttons { display: flex; gap: 8px; margin-top: 16px; }
+  .fv-btn {
+    flex: 1;
+    padding: 10px;
+    border-radius: 8px;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    border: none;
+  }
+  .fv-btn.primary { background: #7c7cff; color: white; }
+  .fv-btn.secondary { background: transparent; border: 1px solid #333; color: #888; }
 
   /* Settings */
   .settings-view {
