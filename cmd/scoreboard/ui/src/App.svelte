@@ -24,7 +24,6 @@
     fetchScoreboard();
     const interval = setInterval(fetchScoreboard, 30000);
 
-    // Register PWA service worker
     if ('serviceWorker' in navigator) {
       navigator.serviceWorker.register('/sw.js').catch(() => {});
     }
@@ -33,54 +32,51 @@
   });
 </script>
 
-<main>
-  {#if error && !data}
-    <div class="loading">
-      <h1>⚡</h1>
-      <p>Connecting to scoreboard...</p>
-      <p class="error">{error}</p>
-    </div>
-  {:else if data}
-    <Stadium {data} {lastUpdate} />
-  {:else}
-    <div class="loading">
-      <h1>⚡</h1>
-      <p>Loading...</p>
-    </div>
-  {/if}
-</main>
+{#if error && !data}
+  <div class="loading">
+    <h1>⚡</h1>
+    <p>Connecting to scoreboard...</p>
+    <p class="error">{error}</p>
+  </div>
+{:else if data}
+  <Stadium {data} {lastUpdate} />
+{:else}
+  <div class="loading">
+    <h1>⚡</h1>
+    <p>Loading...</p>
+  </div>
+{/if}
 
 <style>
-  :global(body) {
+  :global(*) {
     margin: 0;
     padding: 0;
-    background: #0a0a0f;
-    color: #e0e0e0;
-    font-family: 'SF Mono', 'Fira Code', 'JetBrains Mono', monospace;
-    overflow: hidden;
-    height: 100vh;
-    width: 100vw;
+    box-sizing: border-box;
   }
 
-  main {
-    height: 100vh;
-    width: 100vw;
-    display: flex;
-    align-items: center;
-    justify-content: center;
+  :global(html, body) {
+    background: #0a0a0f;
+    color: #e0e0e0;
+    width: 100%;
+    height: 100%;
+    overflow-x: hidden;
   }
 
   .loading {
-    text-align: center;
+    min-height: 100dvh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    font-family: system-ui, -apple-system, sans-serif;
   }
 
   .loading h1 {
-    font-size: 4rem;
-    margin: 0;
+    font-size: 3rem;
   }
 
   .loading p {
-    font-size: 1.2rem;
+    font-size: 1rem;
     opacity: 0.6;
   }
 
