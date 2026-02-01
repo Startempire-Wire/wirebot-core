@@ -133,11 +133,11 @@
   <div class="app">
     <div class="content">
       {#if view === 'score'}
-        <Score {data} {lastUpdate} />
+        <Score {data} {lastUpdate} onHelp={() => showHints = true} />
       {:else if view === 'feed'}
-        <Feed items={feed} />
+        <Feed items={feed} onHelp={() => showHints = true} />
       {:else if view === 'season'}
-        <Season season={data.season} {history} streak={data.streak} />
+        <Season season={data.season} {history} streak={data.streak} onHelp={() => showHints = true} />
       {:else if view === 'wrapped'}
         <Wrapped {wrapped} />
       {:else if view === 'settings'}
@@ -208,9 +208,6 @@
       </button>
     {/if}
 
-    <!-- Help button -->
-    <button class="help-btn" onclick={() => showHints = true} title="How it works">?</button>
-
     <Nav active={view} on:nav={handleNav} />
 
     <!-- Hints panel -->
@@ -273,7 +270,7 @@
   }
 
   .app { display: flex; flex-direction: column; min-height: 100dvh; }
-  .content { flex: 1; overflow-y: auto; padding-bottom: 56px; padding-top: calc(max(8px, env(safe-area-inset-top)) + 36px); }
+  .content { flex: 1; overflow-y: auto; padding-bottom: 56px; }
 
   .loading { min-height: 100dvh; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; }
   .ld-icon { font-size: 48px; }
@@ -365,27 +362,6 @@
     cursor: pointer;
   }
 
-  /* Help button */
-  .help-btn {
-    position: fixed;
-    top: max(8px, env(safe-area-inset-top));
-    left: 12px;
-    width: 28px;
-    height: 28px;
-    border-radius: 50%;
-    background: rgba(124,124,255,0.15);
-    border: 1px solid rgba(124,124,255,0.3);
-    color: #7c7cff;
-    font-size: 14px;
-    font-weight: 700;
-    cursor: pointer;
-    z-index: 50;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    -webkit-tap-highlight-color: transparent;
-  }
-
   /* First visit */
   .first-visit-overlay {
     position: fixed;
@@ -451,7 +427,7 @@
   /* Settings */
   .settings-view {
     padding: 12px 16px;
-    padding-top: 0;
+    padding-top: max(12px, env(safe-area-inset-top));
     min-height: calc(100dvh - 56px);
     display: flex;
     flex-direction: column;

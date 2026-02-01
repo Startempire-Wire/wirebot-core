@@ -1,6 +1,6 @@
 <script>
   import Tooltip from './Tooltip.svelte';
-  let { data, lastUpdate } = $props();
+  let { data, lastUpdate, onHelp } = $props();
 
   function signalClass(s) {
     return s === 'green' ? 'sig-g' : s === 'yellow' ? 'sig-y' : 'sig-r';
@@ -34,7 +34,10 @@
   <!-- Header -->
   <div class="hdr">
     <span class="sn">{data.season?.name?.toUpperCase() || 'SCOREBOARD'}</span>
-    <span class="sd">{data.season_day || ''}</span>
+    <span class="hdr-right">
+      <span class="sd">{data.season_day || ''}</span>
+      <button class="hdr-help" onclick={onHelp} title="How it works">?</button>
+    </span>
   </div>
 
   <!-- Score -->
@@ -117,7 +120,7 @@
     display: flex;
     flex-direction: column;
     padding: 12px 16px;
-    padding-top: 0;
+    padding-top: max(12px, env(safe-area-inset-top));
     gap: 10px;
     min-height: calc(100dvh - 56px);
     background: linear-gradient(180deg, #0a0a1a 0%, #0d0d20 50%, #0a0a1a 100%);
@@ -162,7 +165,24 @@
     padding-bottom: 6px;
   }
   .sn { font-size: 12px; font-weight: 700; letter-spacing: .15em; color: #7c7cff; }
+  .hdr-right { display: flex; align-items: center; gap: 8px; }
   .sd { font-size: 12px; color: #555; }
+  .hdr-help {
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    background: rgba(124,124,255,0.1);
+    border: 1px solid rgba(124,124,255,0.25);
+    color: #7c7cff;
+    font-size: 12px;
+    font-weight: 700;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    -webkit-tap-highlight-color: transparent;
+    flex-shrink: 0;
+  }
 
   /* Score */
   .sc { text-align: center; padding: 12px 0; border-radius: 12px; }

@@ -96,7 +96,7 @@
 <style>
   .wrapped-view {
     padding: 12px 16px;
-    padding-top: 0;
+    padding-top: max(12px, env(safe-area-inset-top));
     min-height: calc(100dvh - 56px);
     display: flex;
     flex-direction: column;

@@ -1,5 +1,5 @@
 <script>
-  let { season, history, streak } = $props();
+  let { season, history, streak, onHelp } = $props();
 
   function pct(v) { return Math.round((v || 0) * 100); }
 
@@ -40,7 +40,10 @@
 <div class="season-view">
   <div class="s-hdr">
     <h2>{season?.name?.toUpperCase() || 'SEASON'}</h2>
-    <span class="s-num">Season {season?.number || 1}</span>
+    <span class="s-hdr-right">
+      <span class="s-num">Season {season?.number || 1}</span>
+      <button class="hdr-help" onclick={onHelp} title="How it works">?</button>
+    </span>
   </div>
 
   <!-- Season Progress -->
@@ -129,7 +132,7 @@
 <style>
   .season-view {
     padding: 12px 16px;
-    padding-top: 0;
+    padding-top: max(12px, env(safe-area-inset-top));
     min-height: calc(100dvh - 56px);
     display: flex;
     flex-direction: column;
@@ -144,7 +147,24 @@
     padding-bottom: 6px;
   }
   .s-hdr h2 { font-size: 16px; font-weight: 700; color: #7c7cff; }
+  .s-hdr-right { display: flex; align-items: center; gap: 8px; }
   .s-num { font-size: 12px; color: #555; }
+  .hdr-help {
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    background: rgba(124,124,255,0.1);
+    border: 1px solid rgba(124,124,255,0.25);
+    color: #7c7cff;
+    font-size: 12px;
+    font-weight: 700;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    -webkit-tap-highlight-color: transparent;
+    flex-shrink: 0;
+  }
 
   /* Progress */
   .s-progress { margin: 4px 0; }

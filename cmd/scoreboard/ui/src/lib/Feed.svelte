@@ -1,5 +1,5 @@
 <script>
-  let { items } = $props();
+  let { items, onHelp } = $props();
 
   function timeAgo(ts) {
     const d = new Date(ts);
@@ -22,7 +22,10 @@
 <div class="feed-view">
   <div class="feed-hdr">
     <h2>Activity Feed</h2>
-    <span class="feed-count">{items.length} events</span>
+    <span class="feed-right">
+      <span class="feed-count">{items.length} events</span>
+      <button class="hdr-help" onclick={onHelp} title="How it works">?</button>
+    </span>
   </div>
 
   {#if items.length === 0}
@@ -58,7 +61,7 @@
 <style>
   .feed-view {
     padding: 12px 16px;
-    padding-top: 0;
+    padding-top: max(12px, env(safe-area-inset-top));
     min-height: calc(100dvh - 56px);
   }
 
@@ -71,7 +74,24 @@
     padding-bottom: 8px;
   }
   .feed-hdr h2 { font-size: 16px; font-weight: 700; color: #7c7cff; }
+  .feed-right { display: flex; align-items: center; gap: 8px; }
   .feed-count { font-size: 12px; color: #555; }
+  .hdr-help {
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    background: rgba(124,124,255,0.1);
+    border: 1px solid rgba(124,124,255,0.25);
+    color: #7c7cff;
+    font-size: 12px;
+    font-weight: 700;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    -webkit-tap-highlight-color: transparent;
+    flex-shrink: 0;
+  }
 
   .empty {
     text-align: center;
