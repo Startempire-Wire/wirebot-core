@@ -1,10 +1,8 @@
 /**
- * Business Setup Checklist Engine — Data Model
+ * Business Setup Checklist Engine — Data Model v2
  *
- * Three stages: Idea → Launch → Growth
- * Each stage has categories, each category has tasks.
- * Tasks can be AI-suggested, user-created, or template-seeded.
- * Progress is tracked per-stage and overall.
+ * Operator-centric, multi-business architecture.
+ * The operator is the center. Businesses orbit around them.
  *
  * Storage: JSON file in workspace + Letta business_stage block sync
  */
@@ -13,75 +11,150 @@
 // Core Types
 // ============================================================================
 
-export type BusinessStage = "idea" | "launch" | "growth";
+export type BusinessStage = "idea" | "launch" | "growth" | "mature" | "sunset";
+
+export type OperatorRole = "founder" | "cofounder" | "operator" | "advisor" | "investor";
+
+export type RevenueStatus = "pre-revenue" | "active" | "declining" | "paused";
+
+export type BusinessPriority = "primary" | "secondary" | "supporting" | "passive";
 
 export type TaskStatus = "pending" | "in_progress" | "completed" | "skipped";
 
-export type TaskSource = "template" | "ai" | "user";
+export type TaskSource = "template" | "ai" | "user" | "inferred";
 
 export type TaskPriority = "critical" | "high" | "medium" | "low";
 
+// ============================================================================
+// Business Entity (NEW in v2)
+// ============================================================================
+
+export interface Business {
+  id: string;                      // UUID
+  name: string;                    // "Startempire Wire"
+  shortName: string;               // "SEW" — for CLI display
+  description: string;             // One-liner
+  stage: BusinessStage;
+  role: OperatorRole;
+  revenueStatus: RevenueStatus;
+  monthlyRevenue?: number;         // Current MRR if known
+  domain?: string;                 // startempirewire.com
+  priority: BusinessPriority;
+  relatedTo?: string[];            // Business IDs this depends on or supports
+  tags?: string[];                 // ["saas", "community", "marketplace"]
+  createdAt: string;
+  updatedAt: string;
+}
+
+// ============================================================================
+// Task (updated — now includes businessId)
+// ============================================================================
+
 export interface Task {
-  id: string;                    // UUID
-  title: string;                 // "Create Mission Statement"
-  description?: string;          // Detailed explanation
-  stage: BusinessStage;          // Which stage this belongs to
-  category: string;              // "Business Identity", "Legal", etc.
+  id: string;                      // UUID
+  title: string;                   // "Create Mission Statement"
+  description?: string;            // Detailed explanation
+  businessId: string;              // Which business this belongs to (or "operator" for cross-cutting)
+  stage: BusinessStage;            // Which stage this belongs to
+  category: string;                // "Business Identity", "Legal", etc.
   status: TaskStatus;
   priority: TaskPriority;
-  source: TaskSource;            // Who created it
-  aiSuggestion?: string;         // AI tip for completing this task
-  dueDate?: string;              // ISO date
-  completedAt?: string;          // ISO datetime
-  createdAt: string;             // ISO datetime
-  updatedAt: string;             // ISO datetime
-  dependencies?: string[];       // Task IDs that must complete first
-  notes?: string;                // User notes
-  order: number;                 // Sort order within category
+  source: TaskSource;              // Who created it
+  aiSuggestion?: string;           // AI tip for completing this task
+  dueDate?: string;                // ISO date
+  completedAt?: string;            // ISO datetime
+  createdAt: string;               // ISO datetime
+  updatedAt: string;               // ISO datetime
+  dependencies?: string[];         // Task IDs that must complete first
+  notes?: string;                  // User notes
+  order: number;                   // Sort order within category
+  crossCutting?: boolean;          // Spans multiple businesses
 }
+
+// ============================================================================
+// Categories
+// ============================================================================
 
 export interface TaskCategory {
   id: string;
-  name: string;                  // "Business Identity"
+  name: string;                    // "Business Identity"
   stage: BusinessStage;
   description?: string;
   order: number;
-  icon?: string;                 // Emoji or icon name
+  icon?: string;                   // Emoji or icon name
 }
+
+// ============================================================================
+// Progress
+// ============================================================================
 
 export interface StageProgress {
   stage: BusinessStage;
   total: number;
   completed: number;
   skipped: number;
-  percent: number;               // 0-100
+  percent: number;                 // 0-100
 }
 
+export interface BusinessHealth {
+  businessId: string;
+  businessName: string;
+  shortName: string;
+  stage: BusinessStage;
+  priority: BusinessPriority;
+  health: number;                  // 0-100
+  checklistPercent: number;
+  daysSinceActivity: number;
+  criticalBlocked: number;
+  revenueStatus: RevenueStatus;
+  signal: "healthy" | "attention" | "stale" | "critical";
+}
+
+// ============================================================================
+// State (v2 — multi-business)
+// ============================================================================
+
 export interface ChecklistState {
+  version: 2;
+  operatorId: string;              // "verious"
+  businesses: Business[];          // Multiple businesses
+  activeBusiness: string;          // Business ID currently focused on
+  tasks: Task[];                   // All tasks across all businesses
+  categories: TaskCategory[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+// Legacy v1 state for migration
+export interface ChecklistStateV1 {
   version: 1;
-  userId: string;                // "verious"
+  userId: string;
   businessName?: string;
   currentStage: BusinessStage;
-  tasks: Task[];
+  tasks: Array<Omit<Task, "businessId"> & { businessId?: string }>;
   categories: TaskCategory[];
   createdAt: string;
   updatedAt: string;
 }
 
 // ============================================================================
-// Daily Stand-Up
+// Daily Stand-Up (updated — multi-business)
 // ============================================================================
 
 export interface DailyStandUp {
-  date: string;                  // ISO date
+  date: string;                    // ISO date
   tasks: DailyTask[];
-  reflection?: string;           // EOD reflection
-  aiInsight?: string;            // AI-generated insight
+  crossCutting: DailyTask[];       // Operator-level tasks
+  reflection?: string;             // EOD reflection
+  aiInsight?: string;              // AI-generated insight
+  focusRecommendation?: string;    // Which business to focus on today
 }
 
 export interface DailyTask {
-  taskId: string;                // Reference to checklist task
-  title: string;                 // Denormalized for quick display
+  taskId: string;                  // Reference to checklist task
+  businessId: string;              // Which business
+  businessName: string;            // Denormalized for display
+  title: string;                   // Denormalized for quick display
   completed: boolean;
   notes?: string;
 }
@@ -113,7 +186,8 @@ export const DEFAULT_CATEGORIES: TaskCategory[] = [
   { id: "growth-network",  name: "Network & Partnerships",stage: "growth", order: 5, icon: "🌍" },
 ];
 
-export const SEED_TASKS: Omit<Task, "id" | "createdAt" | "updatedAt">[] = [
+// Seed tasks — businessId must be set when initializing per-business
+export const SEED_TASKS: Omit<Task, "id" | "createdAt" | "updatedAt" | "businessId">[] = [
   // ── Idea Stage: Business Identity ──
   { title: "Create Mission Statement",           stage: "idea", category: "idea-identity",  status: "pending", priority: "critical", source: "template", order: 1,
     aiSuggestion: "A strong mission statement answers: What do you do? Who do you serve? Why does it matter?" },
