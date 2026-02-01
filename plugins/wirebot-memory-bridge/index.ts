@@ -18,7 +18,7 @@
  */
 
 import { Type } from "@sinclair/typebox";
-import type { ClawdbotPluginApi } from "clawdbot/plugin-sdk";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 
 // ============================================================================
 // Config
@@ -32,7 +32,7 @@ interface BridgeConfig {
   autoExtract: boolean;
 }
 
-function getConfig(api: ClawdbotPluginApi): BridgeConfig {
+function getConfig(api: OpenClawPluginApi): BridgeConfig {
   const raw = api.pluginConfig as Record<string, unknown>;
   return {
     mem0Url: (raw.mem0Url as string) ?? "http://127.0.0.1:8200",
@@ -201,7 +201,7 @@ const wirebotMemoryBridge = {
     "Coordinates memory across memory-core, Mem0, and Letta for unified recall and business state",
   kind: "extension" as const,
 
-  register(api: ClawdbotPluginApi) {
+  register(api: OpenClawPluginApi) {
     const cfg = getConfig(api);
 
     api.logger.info(
