@@ -586,12 +586,17 @@ const wirebotMemoryBridge = {
         name: "wirebot_checklist",
         label: "Business Checklist",
         description:
-          "Business Setup Checklist Engine. Track tasks across Idea → Launch → Growth stages. " +
-          "Actions: status (show progress), next (get next task), complete (mark done), " +
-          "skip, add (new task), daily (stand-up), list (filter tasks), detail, set-stage.",
+          "Multi-business Checklist Engine. Track tasks across businesses and stages. " +
+          "Actions: overview (all businesses), businesses (list with health), focus (switch business), " +
+          "add-business, status (active business progress), next (get next task — global or per-business), " +
+          "complete, skip, add, daily (multi-biz standup), list, detail, set-stage.",
         parameters: Type.Object({
           action: Type.Union([
             Type.Literal("status"),
+            Type.Literal("overview"),
+            Type.Literal("businesses"),
+            Type.Literal("focus"),
+            Type.Literal("add-business"),
             Type.Literal("next"),
             Type.Literal("complete"),
             Type.Literal("skip"),
@@ -606,12 +611,17 @@ const wirebotMemoryBridge = {
               Type.Literal("idea"),
               Type.Literal("launch"),
               Type.Literal("growth"),
+              Type.Literal("mature"),
+              Type.Literal("sunset"),
             ], { description: "Business stage filter" }),
           ),
           category: Type.Optional(Type.String({ description: "Category filter" })),
           taskId: Type.Optional(Type.String({ description: "Task ID for complete/skip/detail" })),
-          title: Type.Optional(Type.String({ description: "Task title (for add)" })),
-          description: Type.Optional(Type.String({ description: "Task description (for add)" })),
+          businessName: Type.Optional(Type.String({ description: "Business name for focus/add-business/status" })),
+          businessId: Type.Optional(Type.String({ description: "Business UUID" })),
+          title: Type.Optional(Type.String({ description: "Task title (for add) or business name (for add-business)" })),
+          description: Type.Optional(Type.String({ description: "Task or business description" })),
+          shortName: Type.Optional(Type.String({ description: "Business short name (for add-business)" })),
           priority: Type.Optional(
             Type.Union([
               Type.Literal("critical"),
@@ -620,6 +630,15 @@ const wirebotMemoryBridge = {
               Type.Literal("low"),
             ], { description: "Task priority (for add)" }),
           ),
+          businessPriority: Type.Optional(
+            Type.Union([
+              Type.Literal("primary"),
+              Type.Literal("secondary"),
+              Type.Literal("supporting"),
+              Type.Literal("passive"),
+            ], { description: "Business priority (for add-business)" }),
+          ),
+          domain: Type.Optional(Type.String({ description: "Business domain (for add-business)" })),
           status: Type.Optional(
             Type.Union([
               Type.Literal("pending"),
@@ -631,33 +650,57 @@ const wirebotMemoryBridge = {
         }),
         async execute(_toolCallId, params) {
           try {
-            // Dynamic import — checklist engine lives outside the plugin dir
             const { readFileSync, writeFileSync, existsSync } = await import("node:fs");
             const { randomUUID } = await import("node:crypto");
 
             const CHECKLIST_PATH = "/home/wirebot/clawd/checklist.json";
 
-            // Inline minimal engine for the plugin context
-            // (avoiding cross-module import complexity in openclaw plugin loader)
-            interface TaskData {
-              id: string; title: string; description?: string; stage: string;
-              category: string; status: string; priority: string; source: string;
-              aiSuggestion?: string; dueDate?: string; completedAt?: string;
-              createdAt: string; updatedAt: string; dependencies?: string[];
-              notes?: string; order: number;
+            // ── Types ──
+            interface BizData {
+              id: string; name: string; shortName: string; description: string;
+              stage: string; role: string; revenueStatus: string; monthlyRevenue?: number;
+              domain?: string; priority: string; relatedTo?: string[]; tags?: string[];
+              createdAt: string; updatedAt: string;
             }
-            interface ChecklistData {
-              version: number; userId: string; businessName?: string;
-              currentStage: string; tasks: TaskData[];
+            interface TaskData {
+              id: string; title: string; description?: string; businessId: string;
+              stage: string; category: string; status: string; priority: string;
+              source: string; aiSuggestion?: string; dueDate?: string;
+              completedAt?: string; createdAt: string; updatedAt: string;
+              dependencies?: string[]; notes?: string; order: number; crossCutting?: boolean;
+            }
+            interface ChecklistV2 {
+              version: 2; operatorId: string; businesses: BizData[];
+              activeBusiness: string; tasks: TaskData[];
               categories: Array<{ id: string; name: string; stage: string; order: number }>;
               createdAt: string; updatedAt: string;
             }
 
-            let data: ChecklistData;
+            let data: ChecklistV2;
             if (existsSync(CHECKLIST_PATH)) {
-              data = JSON.parse(readFileSync(CHECKLIST_PATH, "utf-8"));
+              const raw = JSON.parse(readFileSync(CHECKLIST_PATH, "utf-8"));
+              // Auto-migrate v1 → v2
+              if (!raw.version || raw.version === 1) {
+                const defaultBiz: BizData = {
+                  id: randomUUID(), name: raw.businessName || "My Business",
+                  shortName: (raw.businessName || "BIZ").slice(0, 3).toUpperCase(),
+                  description: "", stage: raw.currentStage || "idea", role: "founder",
+                  revenueStatus: "pre-revenue", priority: "primary",
+                  createdAt: raw.createdAt, updatedAt: raw.updatedAt,
+                };
+                data = {
+                  version: 2, operatorId: raw.userId || "verious",
+                  businesses: [defaultBiz], activeBusiness: defaultBiz.id,
+                  tasks: raw.tasks.map((t: any) => ({ ...t, businessId: t.businessId || defaultBiz.id })),
+                  categories: raw.categories, createdAt: raw.createdAt,
+                  updatedAt: new Date().toISOString(),
+                };
+                writeFileSync(CHECKLIST_PATH, JSON.stringify(data, null, 2));
+              } else {
+                data = raw as ChecklistV2;
+              }
             } else {
-              return { content: [{ type: "text" as const, text: "Checklist not initialized. Run the onboarding flow first." }] };
+              return { content: [{ type: "text" as const, text: "Checklist not initialized. Run: wb add-business \"Name\"" }] };
             }
 
             const save = () => {
@@ -665,112 +708,225 @@ const wirebotMemoryBridge = {
               writeFileSync(CHECKLIST_PATH, JSON.stringify(data, null, 2));
             };
 
-            const { action, stage, category, taskId, title, description: desc, priority, status: statusFilter } = params as any;
-            const currentStage = stage || data.currentStage;
-
+            const p = params as any;
             const progressBar = (pct: number) => "█".repeat(Math.round(pct / 5)) + "░".repeat(20 - Math.round(pct / 5));
 
-            const getProgress = (s: string) => {
-              const tasks = data.tasks.filter(t => t.stage === s);
-              const completed = tasks.filter(t => t.status === "completed").length;
-              const total = tasks.length;
-              return { stage: s, completed, total, percent: total > 0 ? Math.round(completed / total * 100) : 0 };
+            const findBiz = (nameOrId?: string): BizData | undefined => {
+              if (!nameOrId) return data.businesses.find(b => b.id === data.activeBusiness);
+              return data.businesses.find(b => b.id === nameOrId)
+                || data.businesses.find(b => b.name.toLowerCase() === nameOrId.toLowerCase())
+                || data.businesses.find(b => b.shortName.toLowerCase() === nameOrId.toLowerCase());
             };
 
-            switch (action) {
-              case "status": {
-                const stages = stage ? [stage] : ["idea", "launch", "growth"];
-                const all = data.tasks;
-                const totalDone = all.filter(t => t.status === "completed").length;
-                let text = `📊 Business Setup — ${data.currentStage.toUpperCase()}\n`;
-                text += `Overall: ${totalDone}/${all.length} (${all.length > 0 ? Math.round(totalDone/all.length*100) : 0}%)\n\n`;
-                for (const s of stages) {
-                  const p = getProgress(s);
-                  text += `${s.toUpperCase()}: ${progressBar(p.percent)} ${p.percent}% (${p.completed}/${p.total})\n`;
+            const bizTasks = (bizId: string, stage?: string) => {
+              let t = data.tasks.filter(x => x.businessId === bizId);
+              if (stage) t = t.filter(x => x.stage === stage);
+              return t;
+            };
+
+            const getProgress = (bizId: string, s: string) => {
+              const tasks = bizTasks(bizId, s);
+              const completed = tasks.filter(t => t.status === "completed").length;
+              return { stage: s, completed, total: tasks.length, percent: tasks.length > 0 ? Math.round(completed / tasks.length * 100) : 0 };
+            };
+
+            const bizHealth = (biz: BizData) => {
+              const tasks = bizTasks(biz.id);
+              const completed = tasks.filter(t => t.status === "completed").length;
+              const checkPct = tasks.length > 0 ? Math.round(completed / tasks.length * 100) : 0;
+              const lastAct = tasks.reduce((m, t) => Math.max(m, new Date(t.updatedAt).getTime()), new Date(biz.updatedAt).getTime());
+              const daysSince = Math.floor((Date.now() - lastAct) / 86400000);
+              const blocked = tasks.filter(t => t.priority === "critical" && (t.status === "pending" || t.status === "in_progress")).length;
+              const rev: Record<string, number> = { active: 25, "pre-revenue": 10, declining: 5, paused: 0 };
+              let h = checkPct * 0.2 + (rev[biz.revenueStatus] || 0) + Math.max(0, 15 - daysSince) + Math.max(0, 20 - blocked * 4) + (tasks.length > 0 ? 10 : 0) + 10;
+              h = Math.min(100, Math.max(0, Math.round(h)));
+              const sig = h < 30 ? "critical" : (h < 50 || daysSince > 14) ? "stale" : h < 70 ? "attention" : "healthy";
+              return { health: h, signal: sig, checkPct, daysSince, blocked };
+            };
+
+            const sigIcon: Record<string, string> = { healthy: "🟢", attention: "🟡", stale: "🟠", critical: "🔴" };
+
+            switch (p.action) {
+              case "overview": {
+                let text = `BUSINESSES  ${data.businesses.length} total\n\n`;
+                for (const biz of data.businesses) {
+                  const h = bizHealth(biz);
+                  text += `${sigIcon[h.signal]} ${biz.shortName.padEnd(16)} [${biz.stage.padEnd(6)}] ${progressBar(h.health)} ${h.health}%`;
+                  if (h.signal === "stale") text += `  ⚠️ ${h.daysSince}d stale`;
+                  if (h.blocked > 0) text += `  ${h.blocked} blocked`;
+                  text += "\n";
                 }
-                const next = data.tasks
-                  .filter(t => t.stage === currentStage && t.status === "pending")
+                return { content: [{ type: "text" as const, text }] };
+              }
+
+              case "businesses": {
+                if (data.businesses.length === 0) return { content: [{ type: "text" as const, text: "No businesses. Use add-business." }] };
+                const active = data.activeBusiness;
+                let text = "⚡ Your Businesses\n\n";
+                for (const biz of data.businesses) {
+                  const h = bizHealth(biz);
+                  const isActive = biz.id === active ? " ◀ active" : "";
+                  text += `${sigIcon[h.signal]} ${biz.name.padEnd(24)} [${biz.stage}]  Health: ${h.health}/100${isActive}\n`;
+                  text += `   ${h.checkPct}% setup | ${biz.revenueStatus} | ${biz.priority}`;
+                  if (h.daysSince > 7) text += ` | ${h.daysSince}d stale`;
+                  if (h.blocked > 0) text += ` | ${h.blocked} blocked`;
+                  text += "\n";
+                }
+                return { content: [{ type: "text" as const, text }] };
+              }
+
+              case "focus": {
+                const name = p.businessName || p.businessId;
+                if (!name) return { content: [{ type: "text" as const, text: "❌ businessName required" }] };
+                const biz = findBiz(name);
+                if (!biz) return { content: [{ type: "text" as const, text: `❌ Business not found: ${name}` }] };
+                data.activeBusiness = biz.id;
+                save();
+                const h = bizHealth(biz);
+                const prog = getProgress(biz.id, biz.stage);
+                return { content: [{ type: "text" as const, text: `⚡ Active: ${biz.name} [${biz.stage}]\nHealth: ${h.health}/100 | ${prog.completed}/${prog.total} (${prog.percent}%)` }] };
+              }
+
+              case "add-business": {
+                const name = p.businessName || p.title;
+                if (!name) return { content: [{ type: "text" as const, text: "❌ businessName required" }] };
+                const newBiz: BizData = {
+                  id: randomUUID(), name, shortName: p.shortName || name.slice(0, 3).toUpperCase(),
+                  description: p.description || "", stage: p.stage || "idea", role: "founder",
+                  revenueStatus: "pre-revenue", priority: p.businessPriority || "secondary",
+                  domain: p.domain, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+                };
+                data.businesses.push(newBiz);
+                // Note: seed tasks would need the template list — for now, no auto-seed from plugin inline
+                save();
+                return { content: [{ type: "text" as const, text: `➕ Added: ${newBiz.name} (${newBiz.shortName}) [${newBiz.stage}]\nID: ${newBiz.id}` }] };
+              }
+
+              case "status": {
+                const biz = findBiz(p.businessName || p.businessId);
+                if (!biz) return { content: [{ type: "text" as const, text: "❌ No active business" }] };
+                const h = bizHealth(biz);
+                const stages = p.stage ? [p.stage] : ["idea", "launch", "growth"];
+                const allTasks = bizTasks(biz.id);
+                const totalDone = allTasks.filter(t => t.status === "completed").length;
+                let text = `📊 ${biz.name} — ${biz.stage.toUpperCase()}\n`;
+                text += `${sigIcon[h.signal]} Health: ${h.health}/100 | Overall: ${totalDone}/${allTasks.length} (${allTasks.length > 0 ? Math.round(totalDone/allTasks.length*100) : 0}%)\n\n`;
+                for (const s of stages) {
+                  const prog = getProgress(biz.id, s);
+                  text += `${s.toUpperCase()}: ${progressBar(prog.percent)} ${prog.percent}% (${prog.completed}/${prog.total})\n`;
+                }
+                const next = bizTasks(biz.id, biz.stage)
+                  .filter(t => t.status === "pending" || t.status === "in_progress")
                   .sort((a, b) => { const pr: Record<string, number> = {critical:0,high:1,medium:2,low:3}; return (pr[a.priority]??2) - (pr[b.priority]??2) || a.order - b.order; })[0];
                 if (next) text += `\n▶ Next: ${next.title} [${next.priority}]`;
                 return { content: [{ type: "text" as const, text }] };
               }
 
               case "next": {
-                const task = data.tasks
-                  .filter(t => t.stage === currentStage && (t.status === "pending" || t.status === "in_progress"))
-                  .sort((a, b) => { const pr: Record<string, number> = {critical:0,high:1,medium:2,low:3}; return (pr[a.priority]??2) - (pr[b.priority]??2) || a.order - b.order; })[0];
-                if (!task) return { content: [{ type: "text" as const, text: "✅ All tasks in this stage are complete!" }] };
-                let text = `▶ ${task.title}\nPriority: ${task.priority} | ${task.stage}/${task.category}\n`;
-                if (task.aiSuggestion) text += `💡 ${task.aiSuggestion}\n`;
-                text += `ID: ${task.id}`;
-                return { content: [{ type: "text" as const, text }] };
+                // Per-business or global
+                if (p.businessName || p.businessId) {
+                  const biz = findBiz(p.businessName || p.businessId);
+                  if (!biz) return { content: [{ type: "text" as const, text: "❌ Business not found" }] };
+                  const task = bizTasks(biz.id, biz.stage)
+                    .filter(t => t.status === "pending" || t.status === "in_progress")
+                    .sort((a, b) => { const pr: Record<string, number> = {critical:0,high:1,medium:2,low:3}; return (pr[a.priority]??2) - (pr[b.priority]??2) || a.order - b.order; })[0];
+                  if (!task) return { content: [{ type: "text" as const, text: `✅ All tasks in ${biz.name} are complete!` }] };
+                  let text = `▶ ${task.title} (${biz.shortName})\nPriority: ${task.priority} | ${task.stage}/${task.category}`;
+                  if (task.aiSuggestion) text += `\n💡 ${task.aiSuggestion}`;
+                  text += `\nID: ${task.id}`;
+                  return { content: [{ type: "text" as const, text }] };
+                }
+                // Global: active business first
+                const activeBiz = findBiz();
+                if (activeBiz) {
+                  const task = bizTasks(activeBiz.id, activeBiz.stage)
+                    .filter(t => t.status === "pending" || t.status === "in_progress")
+                    .sort((a, b) => { const pr: Record<string, number> = {critical:0,high:1,medium:2,low:3}; return (pr[a.priority]??2) - (pr[b.priority]??2) || a.order - b.order; })[0];
+                  if (task) {
+                    let text = `▶ ${task.title} (${activeBiz.shortName})\nPriority: ${task.priority} | ${task.stage}/${task.category}`;
+                    if (task.aiSuggestion) text += `\n💡 ${task.aiSuggestion}`;
+                    text += `\nID: ${task.id}`;
+                    return { content: [{ type: "text" as const, text }] };
+                  }
+                }
+                return { content: [{ type: "text" as const, text: "✅ All tasks complete!" }] };
               }
 
               case "complete": {
-                if (!taskId) return { content: [{ type: "text" as const, text: "❌ taskId required" }] };
-                const task = data.tasks.find(t => t.id === taskId);
+                if (!p.taskId) return { content: [{ type: "text" as const, text: "❌ taskId required" }] };
+                const task = data.tasks.find(t => t.id === p.taskId);
                 if (!task) return { content: [{ type: "text" as const, text: "❌ Task not found" }] };
-                task.status = "completed";
-                task.completedAt = new Date().toISOString();
-                task.updatedAt = new Date().toISOString();
+                task.status = "completed"; task.completedAt = new Date().toISOString(); task.updatedAt = new Date().toISOString();
                 save();
-                const p = getProgress(task.stage);
-                return { content: [{ type: "text" as const, text: `✅ ${task.title}\nProgress: ${p.completed}/${p.total} (${p.percent}%)` }] };
+                const biz = findBiz(task.businessId);
+                const prog = getProgress(task.businessId, task.stage);
+                return { content: [{ type: "text" as const, text: `✅ ${task.title}${biz ? ` (${biz.shortName})` : ""}\nProgress: ${prog.completed}/${prog.total} (${prog.percent}%)` }] };
               }
 
               case "skip": {
-                if (!taskId) return { content: [{ type: "text" as const, text: "❌ taskId required" }] };
-                const task = data.tasks.find(t => t.id === taskId);
+                if (!p.taskId) return { content: [{ type: "text" as const, text: "❌ taskId required" }] };
+                const task = data.tasks.find(t => t.id === p.taskId);
                 if (!task) return { content: [{ type: "text" as const, text: "❌ Task not found" }] };
-                task.status = "skipped";
-                task.updatedAt = new Date().toISOString();
+                task.status = "skipped"; task.updatedAt = new Date().toISOString();
                 save();
                 return { content: [{ type: "text" as const, text: `⏭ Skipped: ${task.title}` }] };
               }
 
               case "add": {
-                if (!title) return { content: [{ type: "text" as const, text: "❌ title required" }] };
+                if (!p.title) return { content: [{ type: "text" as const, text: "❌ title required" }] };
+                const biz = findBiz(p.businessName || p.businessId);
+                const bizId = biz?.id || data.activeBusiness;
+                const stg = p.stage || (biz?.stage || "idea");
                 const newTask: TaskData = {
-                  id: randomUUID(), title, description: desc, stage: stage || data.currentStage,
-                  category: category || `${stage || data.currentStage}-custom`,
-                  status: "pending", priority: priority || "medium", source: "user",
+                  id: randomUUID(), title: p.title, description: p.description, businessId: bizId,
+                  stage: stg, category: p.category || `${stg}-custom`,
+                  status: "pending", priority: p.priority || "medium", source: "user",
                   order: 999, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
                 };
                 data.tasks.push(newTask);
                 save();
-                return { content: [{ type: "text" as const, text: `➕ ${newTask.title}\nID: ${newTask.id}` }] };
+                return { content: [{ type: "text" as const, text: `➕ ${newTask.title}${biz ? ` (${biz.shortName})` : ""}\nID: ${newTask.id}` }] };
               }
 
               case "daily": {
-                const tasks = data.tasks
-                  .filter(t => t.stage === data.currentStage && (t.status === "pending" || t.status === "in_progress") && (t.priority === "critical" || t.priority === "high"))
-                  .sort((a, b) => a.order - b.order)
-                  .slice(0, 3);
-                if (tasks.length === 0) return { content: [{ type: "text" as const, text: "📋 No tasks for today" }] };
-                let text = `📋 Daily Stand-Up\n\n`;
-                for (const t of tasks) text += `☐ ${t.title} [${t.priority}]\n`;
+                let text = `📋 Daily Stand-Up\n`;
+                for (const biz of data.businesses) {
+                  const tasks = bizTasks(biz.id, biz.stage)
+                    .filter(t => (t.status === "pending" || t.status === "in_progress") && (t.priority === "critical" || t.priority === "high"))
+                    .sort((a, b) => a.order - b.order)
+                    .slice(0, 2);
+                  if (tasks.length > 0) {
+                    text += `\n${biz.shortName}:\n`;
+                    for (const t of tasks) text += `  ☐ ${t.title} [${t.priority}]\n`;
+                  }
+                }
                 return { content: [{ type: "text" as const, text }] };
               }
 
               case "list": {
-                let tasks = data.tasks;
-                if (stage) tasks = tasks.filter(t => t.stage === stage);
-                if (category) tasks = tasks.filter(t => t.category === category);
-                if (statusFilter) tasks = tasks.filter(t => t.status === statusFilter);
+                const biz = findBiz(p.businessName || p.businessId);
+                let tasks = biz ? bizTasks(biz.id) : data.tasks;
+                if (p.stage) tasks = tasks.filter(t => t.stage === p.stage);
+                if (p.category) tasks = tasks.filter(t => t.category === p.category);
+                if (p.status) tasks = tasks.filter(t => t.status === p.status);
                 const icons: Record<string, string> = { pending: "☐", in_progress: "⏳", completed: "✅", skipped: "⏭" };
                 let text = `Tasks (${tasks.length}):\n\n`;
                 for (const t of tasks.slice(0, 25)) {
-                  text += `${icons[t.status] || "?"} ${t.title} [${t.priority}] ${t.id.slice(0,8)}\n`;
+                  const b = findBiz(t.businessId);
+                  text += `${icons[t.status] || "?"} ${b ? `[${b.shortName}] ` : ""}${t.title} [${t.priority}] ${t.id.slice(0,8)}\n`;
                 }
                 if (tasks.length > 25) text += `\n... +${tasks.length - 25} more`;
                 return { content: [{ type: "text" as const, text }] };
               }
 
               case "detail": {
-                if (!taskId) return { content: [{ type: "text" as const, text: "❌ taskId required" }] };
-                const task = data.tasks.find(t => t.id === taskId);
+                if (!p.taskId) return { content: [{ type: "text" as const, text: "❌ taskId required" }] };
+                const task = data.tasks.find(t => t.id === p.taskId);
                 if (!task) return { content: [{ type: "text" as const, text: "❌ Task not found" }] };
-                let text = `📌 ${task.title}\nStatus: ${task.status} | Priority: ${task.priority}\n`;
+                const biz = findBiz(task.businessId);
+                let text = `📌 ${task.title}\n`;
+                if (biz) text += `Business: ${biz.name} (${biz.shortName})\n`;
+                text += `Status: ${task.status} | Priority: ${task.priority}\n`;
                 text += `Stage: ${task.stage} | Category: ${task.category}\n`;
                 if (task.aiSuggestion) text += `💡 ${task.aiSuggestion}\n`;
                 if (task.notes) text += `📝 ${task.notes}\n`;
@@ -779,15 +935,17 @@ const wirebotMemoryBridge = {
               }
 
               case "set-stage": {
-                if (!stage) return { content: [{ type: "text" as const, text: "❌ stage required (idea/launch/growth)" }] };
-                data.currentStage = stage;
+                if (!p.stage) return { content: [{ type: "text" as const, text: "❌ stage required" }] };
+                const biz = findBiz(p.businessName || p.businessId);
+                if (!biz) return { content: [{ type: "text" as const, text: "❌ Business not found" }] };
+                biz.stage = p.stage; biz.updatedAt = new Date().toISOString();
                 save();
-                const p = getProgress(stage);
-                return { content: [{ type: "text" as const, text: `🔄 Stage: ${stage.toUpperCase()} — ${p.completed}/${p.total} (${p.percent}%)` }] };
+                const prog = getProgress(biz.id, p.stage);
+                return { content: [{ type: "text" as const, text: `🔄 ${biz.name} → ${p.stage.toUpperCase()} — ${prog.completed}/${prog.total} (${prog.percent}%)` }] };
               }
             }
 
-            return { content: [{ type: "text" as const, text: "❌ Unknown action" }] };
+            return { content: [{ type: "text" as const, text: `❌ Unknown action: ${p.action}` }] };
           } catch (err) {
             return { content: [{ type: "text" as const, text: `Error: ${String(err)}` }] };
           }
