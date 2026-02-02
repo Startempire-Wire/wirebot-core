@@ -204,7 +204,7 @@
 
   function switchTab(t) {
     tab = t;
-    if (t === 'projects' && projects.length === 0) loadPending();
+    if (t === 'projects') loadPending();
   }
 
   // ─── Helpers ────────────────────────────────────────────────────────
