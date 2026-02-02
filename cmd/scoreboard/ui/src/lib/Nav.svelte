@@ -6,8 +6,8 @@
   const tabs = [
     { id: 'score', icon: '⚡', label: 'Score' },
     { id: 'feed', icon: '📋', label: 'Feed' },
-    { id: 'profile', icon: '🧬', label: 'Profile' },
     { id: 'season', icon: '🏆', label: 'Season' },
+    { id: 'wrapped', icon: '🎬', label: 'Wrapped' },
     { id: 'settings', icon: '⚙️', label: 'Settings' },
   ];
 </script>

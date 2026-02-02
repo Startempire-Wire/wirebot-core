@@ -24,6 +24,10 @@
   let showChat = $state(false);
   let showPairing = $state(false);
   let pairingInstrument = $state('');
+  let eqBars = $state([]);
+  let eqScore = $state(0);
+  let eqLevel = $state('');
+  let eqAcc = $state(0);
   let showFirstVisit = $state(false);
   let tokenStatus = $state(null);  // null | 'ok' | 'fail' | 'saving'
   let tokenMsg = $state('');
@@ -576,6 +580,43 @@
     } catch {}
   }
 
+  async function fetchProfile() {
+    const token = getToken();
+    if (!token) return;
+    try {
+      const res = await fetch(`${API}/v1/pairing/profile/effective`, { headers: authHeaders() });
+      if (!res.ok) return;
+      const eff = await res.json();
+      eqScore = Math.round(eff.pairing_score || 0);
+      eqLevel = eff.level || '';
+      eqAcc = Math.round((eff.accuracy || 0) * 100);
+
+      // Build equalizer bars from all dimensions
+      const colors = {
+        action_style: '#7c7cff', disc: '#ff7c7c', energy: '#7cff7c',
+        risk: '#ffd700', cognitive: '#ff7cff'
+      };
+      const codeLabels = {
+        FF: 'Fact', FT: 'Follow', QS: 'Quick', IM: 'Impl',
+        D: 'Dom', I: 'Infl', S: 'Steady', C: 'Consc',
+        W: 'Wonder', N: 'Invent', D_disc: 'Discern', G: 'Galv', E: 'Enable', T: 'Tenac',
+        tolerance: 'Tol', speed: 'Speed', loss_aversion: 'Loss', ambiguity: 'Ambig',
+        bias_to_action: 'Action', sunk_cost: 'Sunk',
+        holistic: 'Holist', abstract: 'Abstr', sequential: 'Seq', concrete: 'Concr'
+      };
+      const bars = [];
+      for (const [construct, color] of Object.entries(colors)) {
+        const dims = eff[construct];
+        if (!dims || typeof dims !== 'object') continue;
+        for (const [code, val] of Object.entries(dims)) {
+          if (typeof val !== 'number') continue;
+          bars.push({ code: code.substring(0, 2).toUpperCase(), label: codeLabels[code] || code, pct: Math.min(100, val * 10), color });
+        }
+      }
+      eqBars = bars;
+    } catch {}
+  }
+
   async function submitFabEvent() {
     if (!fabTitle.trim()) return;
     const token = getToken();
@@ -610,6 +651,7 @@
     handleOAuthCallback();
     if (loggedInUser) {
       fetchAll();
+      fetchProfile();
       loadIntegrations();
     }
     const interval = setInterval(() => { if (loggedInUser) fetchAll(); }, 30000);
@@ -673,8 +715,6 @@
         <Score {data} {lastUpdate} onHelp={() => showHints = true} user={loggedInUser} onPairing={() => showPairing = true} />
       {:else if view === 'feed'}
         <Feed items={feed} pendingCount={data?.pending_count || 0} onHelp={() => showHints = true} />
-      {:else if view === 'profile'}
-        <Profile apiBase={window.location.origin} token={getToken()} onAssess={(inst) => { showPairing = true; pairingInstrument = inst; }} />
       {:else if view === 'season'}
         <Season season={data.season} {history} streak={data.streak} onHelp={() => showHints = true} />
       {:else if view === 'wrapped'}
@@ -735,6 +775,28 @@
                 {#if loggedInUser.description}
                   <div class="sc-bio">{loggedInUser.description.substring(0, 200)}{loggedInUser.description.length > 200 ? '...' : ''}</div>
                 {/if}
+
+                <!-- Founder Profile Equalizer (inside profile card) -->
+                <div class="eq-strip" onclick={() => showPairing = true}>
+                  <div class="eq-label">
+                    <span>🧬 Founder Profile</span>
+                    <span class="eq-arrow">→</span>
+                  </div>
+                  <div class="eq-viz">
+                    {#each eqBars as bar}
+                      <div class="eq-col" title="{bar.label}">
+                        <div class="eq-bar-track">
+                          <div class="eq-bar-fill" style="height:{bar.pct}%; background:{bar.color}"></div>
+                        </div>
+                        <span class="eq-bar-code">{bar.code}</span>
+                      </div>
+                    {/each}
+                  </div>
+                  <div class="eq-foot">
+                    <span class="eq-score-line">{eqScore}/100 · {eqLevel || 'Initializing'}</span>
+                    <span class="eq-acc-line">{eqAcc}% accurate</span>
+                  </div>
+                </div>
 
                 <button class="btn-logout" onclick={logout}>Sign out</button>
               </div>
@@ -974,7 +1036,7 @@
               instrument={pairingInstrument}
               apiBase={window.location.origin}
               token={getToken()}
-              onComplete={() => { pairingInstrument = ''; }}
+              onComplete={() => { pairingInstrument = ''; fetchProfile(); }}
               onBack={() => { pairingInstrument = ''; }}
             />
           {:else}
@@ -1366,6 +1428,50 @@
   .tier-freewire { background: #1a2a1a; color: #4caf50; }
   .tier-wire { background: #1a1a2e; color: #7c7cff; }
   .tier-extrawire { background: #2e1a2e; color: #ff7cff; }
+
+  /* Equalizer strip inside profile card */
+  .eq-strip {
+    margin: 12px 0 8px;
+    padding: 10px 12px;
+    background: rgba(124,124,255,0.04);
+    border: 1px solid rgba(124,124,255,0.12);
+    border-radius: 10px;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+    transition: background 0.2s;
+  }
+  .eq-strip:active { background: rgba(124,124,255,0.1); }
+  .eq-label {
+    display: flex; justify-content: space-between; align-items: center;
+    font-size: 12px; font-weight: 600; color: #7c7cff; margin-bottom: 8px;
+  }
+  .eq-arrow { opacity: 0.5; }
+  .eq-viz {
+    display: flex; gap: 2px; align-items: flex-end; height: 40px;
+  }
+  .eq-col {
+    flex: 1; display: flex; flex-direction: column; align-items: center; gap: 2px;
+    min-width: 0;
+  }
+  .eq-bar-track {
+    width: 100%; height: 32px; background: rgba(255,255,255,0.04);
+    border-radius: 2px; display: flex; flex-direction: column; justify-content: flex-end;
+    overflow: hidden;
+  }
+  .eq-bar-fill {
+    width: 100%; border-radius: 2px 2px 0 0;
+    transition: height 0.6s cubic-bezier(0.34, 1.56, 0.64, 1);
+  }
+  .eq-bar-code {
+    font-size: 6px; color: #555; letter-spacing: -0.02em;
+    overflow: hidden; text-overflow: clip; white-space: nowrap;
+    max-width: 100%;
+  }
+  .eq-foot {
+    display: flex; justify-content: space-between;
+    font-size: 10px; color: #666; margin-top: 6px;
+  }
+  .eq-score-line { color: #7c7cff; font-weight: 500; }
 
   .btn-logout {
     background: transparent; border: 1px solid #333; color: #666; border-radius: 6px;
