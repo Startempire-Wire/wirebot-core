@@ -34,7 +34,7 @@
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': token.startsWith('ey') ? `Bearer ${token}` : token,
+          'Authorization': token ? (token.startsWith('Bearer ') ? token : `Bearer ${token}`) : '',
         },
         body: JSON.stringify({ intent: text }),
       });
