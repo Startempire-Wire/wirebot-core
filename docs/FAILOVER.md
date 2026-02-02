@@ -1,452 +1,723 @@
-# Wirebot Failover Architecture
+# Wirebot Resilience Architecture
 
-> **Goal:** Zero-downtime failover for sovereign client instances. Sub-minute data loss, <2 minute recovery.
+> **Philosophy:** Local-first. Every surface owns its data. The hub aggregates and provides AI — it is never the sole copy of anything that matters.
 
 ---
 
-## 1. Current Infrastructure (Primary)
+## 1. The Principle
+
+```
+OLD (hub-centric):
+  Client → thin window → HUB HAS ALL DATA → hub dies → client has NOTHING
+
+NEW (local-first):
+  Client → holds OWN data → syncs TO hub → hub dies → client keeps working
+  Hub recovers → client syncs back → zero data lost
+```
+
+**Every surface is a first-class data citizen.** The browser, the extension, the CLI, the Connect Plugin overlay — each one stores what it creates and what it receives. The hub is the intelligence layer (AI inference, memory search, cross-client aggregation), not the storage layer.
+
+The standby VPS exists for one reason: **AI availability.** Not data preservation. Local-first handles data.
+
+---
+
+## 2. Local-First by Surface
+
+### Scoreboard PWA (wins.wirebot.chat)
+
+**Storage:** IndexedDB via `idb-keyval` or Dexie.js
+
+```
+IndexedDB: wirebot-scoreboard
+├── events        (all scored events, append-only)
+├── feed          (activity feed cache)
+├── season        (current season state)
+├── projects      (project list + approval status)
+├── profile       (user identity, tier, preferences)
+└── sync_queue    (events created offline, pending upload)
+```
+
+**Behavior:**
+- On load: render from IndexedDB immediately (instant paint, no spinner)
+- Background: fetch latest from hub API, merge into IndexedDB
+- On event creation (ship, intent, submit): write to IndexedDB first, queue sync
+- If hub is down: full read access to all historical data, write to queue
+- When hub returns: drain sync_queue, reconcile
+
+**Conflict resolution:** Events are append-only with UUIDs. No conflicts possible — hub deduplicates by event ID.
+
+### Chrome Extension
+
+**Storage:** `chrome.storage.local`
+
+```
+chrome.storage.local:
+├── sewn_auth      (JWT, user profile, tier, expiry)
+├── wb_events      (recent scoreboard events)
+├── wb_score       (current score snapshot)
+├── wb_checklist   (business setup progress)
+├── wb_feed        (cached activity feed)
+├── wb_sync_queue  (offline actions pending sync)
+└── wb_wirebot     (last Wirebot conversation context)
+```
+
+**Behavior:**
+- Wirebot tab works offline with cached checklist + score
+- "Ask Wirebot" queues message locally if hub is down, sends when available
+- Network tab shows cached stats, marks as stale with timestamp
+- Score badge updates from local data, no hub needed
+
+### Connect Plugin Overlay (member websites)
+
+**Storage:** `localStorage` + `sessionStorage`
+
+```
+localStorage:
+├── sewn_auth        (Ring Leader JWT)
+├── sewn_profile     (member profile cache)
+├── sewn_network     (cached network stats, content feed)
+├── sewn_scoreboard  (member's score snapshot)
+└── sewn_sync_queue  (queued interactions)
+```
+
+**Behavior:**
+- Overlay renders from localStorage on open (no loading state)
+- Background sync to Ring Leader for fresh content
+- Member interactions (content clicks, profile views) queued for analytics
+- Hub down: overlay still shows cached content, member profile, score
+
+### White-Label Client Frontend (ai.clientbiz.com)
+
+**Storage:** IndexedDB
+
+```
+IndexedDB: wirebot-client
+├── conversations  (full chat history, all sessions)
+├── sessions       (session list + metadata)
+├── workspace      (cached workspace state — checklist, identity)
+├── skills         (skill status cache)
+├── cron           (scheduled job list + last run)
+├── sync_queue     (messages queued while offline)
+└── config         (brand.json + runtime state)
+```
+
+**Behavior:**
+- Chat history is fully local — scrollable offline
+- New message: write to local, send to hub, show immediately with pending indicator
+- Hub down: read all history, see workspace state, view skills/cron status
+- Hub returns: queued messages send, responses stream back, local DB updates
+- **Sovereign clients have COMPLETE local copy of everything**
+
+### wb CLI (operator terminal)
+
+**Storage:** Local filesystem (already there)
+
+```
+/data/wirebot/
+├── scoreboard/events.db     (SQLite — canonical on this VPS)
+├── discovery/               (project registry, watermarks)
+├── users/verious/           (gateway config, memory)
+└── local-journal.jsonl      (all CLI actions, always written locally first)
+```
+
+**Behavior:**
+- `wb ship`, `wb intent`, `wb complete` write to local events.db AND queue to hub API
+- If hub API fails, event is still in local DB — retry on next command
+- `wb score` reads from local DB, no hub needed
+- Discovery engine writes locally, syncs to scoreboard API asynchronously
+
+---
+
+## 3. Sync Protocol
+
+### Event Sync (all surfaces → hub)
+
+Events use **append-only log with UUIDs.** No conflicts by design.
+
+```
+Surface creates event:
+  1. Generate UUID v4
+  2. Write to local store (IndexedDB / chrome.storage / SQLite)
+  3. POST to hub API (async, non-blocking)
+  4. Hub acknowledges → mark synced locally
+  5. Hub unreachable → stays in sync_queue → retry with exponential backoff
+
+Hub processes event:
+  1. Check UUID — if exists, skip (idempotent)
+  2. Score the event (calcScoreDelta)
+  3. Store in canonical DB
+  4. Broadcast to other connected surfaces (WebSocket)
+```
+
+### State Sync (hub → surfaces)
+
+State snapshots (score, season, projects) flow from hub to surfaces:
+
+```
+Surface requests state:
+  1. Read from local store (instant)
+  2. Fetch from hub API (background)
+  3. If hub response is newer → update local store
+  4. If hub is down → show local data with "last synced: X ago" indicator
+
+Hub pushes state:
+  1. On event scored → broadcast updated score via WebSocket
+  2. Connected surfaces update local store in real-time
+  3. Disconnected surfaces catch up on next fetch
+```
+
+### Conversation Sync (client frontend ↔ hub)
+
+Chat is the one interaction that REQUIRES the hub (AI inference). Local-first handles it gracefully:
+
+```
+User sends message:
+  1. Append to local conversations (IndexedDB)
+  2. Show in UI immediately with "sending..." state
+  3. Send to hub via WebSocket (or HTTP fallback)
+  4. Hub processes → streams response tokens
+  5. Each token appended to local store in real-time
+  6. If hub is down:
+     - Message stays in sync_queue with "queued" indicator
+     - User sees full conversation history (local)
+     - User sees "AI is temporarily unavailable" banner
+     - When hub returns → message sends → response streams
+```
+
+### Conflict Resolution Rules
+
+| Data Type | Strategy | Rationale |
+|-----------|----------|-----------|
+| Events | UUID dedup (append-only) | Events are immutable facts — no conflicts |
+| Score | Hub authoritative | Score computation is server-side |
+| Projects | Hub authoritative | Approval state is operator-controlled |
+| Conversations | Ordered log, local-first | Messages have timestamps + sequence numbers |
+| Profile/Auth | Hub authoritative (JWT) | Identity comes from Ring Leader |
+| Checklist | Last-write-wins with timestamp | Single operator per business |
+| Workspace files | Last-write-wins with timestamp | Files have mtime |
+
+---
+
+## 4. Hub Architecture (Primary VPS)
+
+The hub's role shrinks to three functions:
+
+1. **AI Inference** — OpenClaw gateway, model routing, tool execution
+2. **Aggregation** — Cross-surface event collection, scoring, analytics
+3. **Coordination** — Memory search, fact extraction, cross-client state
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │  PRIMARY VPS (AlmaLinux, cPanel)                            │
 │  IP: 199.167.200.52                                        │
 │                                                             │
-│  Services:                                                  │
-│    openclaw-gateway.service    :18789  (AI gateway)         │
-│    wirebot-scoreboard.service  :8100   (scoreboard API+PWA) │
+│  AI Layer:                                                  │
+│    openclaw-gateway.service    :18789  (inference + tools)   │
 │    mem0-wirebot.service        :8200   (fact memory)        │
 │    wirebot-memory-syncd        :8201   (memory bridge)      │
 │    letta-wirebot (podman)      :8283   (business state)     │
+│                                                             │
+│  Aggregation Layer:                                         │
+│    wirebot-scoreboard.service  :8100   (event store + API)  │
+│                                                             │
+│  Network Layer:                                             │
 │    cloudflared-wirebot.service         (CF tunnel)          │
 │                                                             │
-│  Domains (via Cloudflare Tunnel):                           │
+│  Domains:                                                   │
 │    helm.wirebot.chat  → :18789                              │
 │    wins.wirebot.chat  → :8100                               │
 │    api.wirebot.chat   → :8100                               │
-│    ai.CLIENT.com      → :18789  (future client instances)   │
+│    ai.CLIENT.com      → :18789  (client instances)          │
 │                                                             │
-│  Data (~45MB total):                                        │
-│    /data/wirebot/users/verious/memory/verious.sqlite  6.4MB │
-│    /data/wirebot/scoreboard/events.db                 128KB │
-│    /data/wirebot/scoreboard/tenants/*/events.db       528KB │
-│    /data/wirebot/mem0/ (history + qdrant)             52KB  │
-│    /data/wirebot/letta/                               680KB │
-│    /home/wirebot/clawd/ (workspace)                   944KB │
-│    /data/wirebot/users/verious/ (config)              6.6MB │
-│    /data/wirebot/discovery/                           64KB  │
-│    /data/wirebot/bin/ (binaries)                      24MB  │
-│    /home/wirebot/wirebot-core/plugins/                6.2MB │
+│  Canonical Data (~45MB):                                    │
+│    memory-core.sqlite       6.4MB  (embeddings + BM25)      │
+│    scoreboard events.db     128KB  (aggregated events)       │
+│    tenant DBs               528KB  (client scoreboards)      │
+│    mem0                     52KB   (conversation facts)      │
+│    letta                    680KB  (business state blocks)   │
+│    workspace                944KB  (agent identity files)    │
+│    config                   6.6MB  (gateway + auth)          │
+│    binaries + plugins       30MB   (runtime)                 │
 └─────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-## 2. Standby VPS (Hetzner)
+## 5. Standby VPS (AI Availability Only)
 
-**Recommended:** Hetzner CAX11 (ARM64) — €3.79/mo (~$4/mo)
+With local-first, the standby's job is simple: **keep the AI online.**
+
+Surfaces have their data. They just need somewhere to send chat messages and receive AI responses. The standby doesn't need perfect data — it needs a working OpenClaw gateway with the right model keys and agent config.
+
+### Standby Spec
+
+**Hetzner CAX11 (ARM64):** €3.79/mo (~$4/mo)
 - 2 vCPU (Ampere), 4GB RAM, 40GB NVMe
-- Ashburn, VA datacenter (same coast as primary)
-- 99.9% uptime SLA
+- Ashburn, VA datacenter
 
-**Alternative:** Hetzner CX22 (x86_64) — €4.35/mo (~$5/mo)
-- If ARM compatibility is a concern (Go binaries need GOARCH=arm64 build)
+**What it runs on activation:**
+- OpenClaw gateway (AI inference — the critical path)
+- Scoreboard API (event ingestion — so surfaces can sync)
+- cloudflared (tunnel connector)
 
-**OS:** AlmaLinux 8 or Ubuntu 22.04 (minimal, no cPanel needed)
+**What it does NOT need to run:**
+- Mem0 (facts are cached locally on surfaces, AI can work without history temporarily)
+- Letta (business state blocks change slowly, gateway works without them)
+- memory-syncd (no memory bridge needed in degraded mode)
+
+This means the standby is **much lighter** — just the gateway + scoreboard + tunnel.
+
+### Replication (hub → standby)
+
+Since local-first handles client data, the standby only needs enough to run the AI:
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│  STANDBY VPS (Hetzner)                                      │
-│                                                             │
-│  State: WARM STANDBY                                        │
-│  - Services installed but STOPPED                           │
-│  - Data continuously replicated from primary                │
-│  - cloudflared installed, config ready, tunnel DISCONNECTED │
-│  - Activates only on failover trigger                       │
-│                                                             │
-│  Replicated data (real-time):                               │
-│    SQLite DBs via Litestream → local replicas               │
-│    Workspace + config via sync daemon → local mirror        │
-│    Letta PG via pg_dump cron → hourly snapshot              │
-│                                                             │
-│  Pre-installed:                                             │
-│    - Node.js 22 + OpenClaw (npm)                            │
-│    - wirebot-scoreboard binary (Go, built for target arch)  │
-│    - wirebot-memory-syncd binary                            │
-│    - mem0-server.py + Python deps                           │
-│    - Letta container image (podman)                         │
-│    - cloudflared                                            │
-│    - systemd units (identical, but disabled)                │
-└─────────────────────────────────────────────────────────────┘
+wirebot-replicator (Go daemon on primary)
+│
+├── Litestream (real-time SQLite WAL streaming)
+│   ├── events.db           → standby  (so scoreboard API can ingest)
+│   ├── tenant/*.db         → standby  (client scoreboards)
+│   └── memory-core.sqlite  → standby  (AI memory search)
+│
+├── File Sync (inotify + rsync, ~10s lag)
+│   ├── gateway config      → standby  (openclaw.json, auth-profiles)
+│   ├── workspace files     → standby  (agent identity)
+│   ├── binaries            → standby  (scoreboard binary)
+│   └── runtime secrets     → standby  (API keys)
+│
+└── Health Heartbeat (every 30s)
+    └── POST standby:8300/heartbeat
+        3 missed → standby self-activates
 ```
+
+**Data loss on failover (with local-first):**
+
+| Data Type | Loss | Why |
+|-----------|------|-----|
+| Client's own events | **Zero** | In their IndexedDB, sync_queue retries |
+| Client's conversation history | **Zero** | In their IndexedDB |
+| Client's score/profile | **Zero** | In their local store |
+| AI memory (Mem0 facts) | ~1 second | Litestream |
+| AI memory (Letta blocks) | **Skipped** | Not on standby, AI works without |
+| Workspace files | ~10 seconds | rsync |
+
+**vs. old hub-centric model:** every row was "up to 24 hours" or worse.
 
 ---
 
-## 3. Sync Daemon: `wirebot-replicator`
-
-A single Go daemon running on the **primary** VPS that handles all replication.
-
-### Architecture
-
-```
-wirebot-replicator (Go daemon, runs on primary)
-│
-├── Litestream Manager
-│   ├── memory-core.sqlite  → standby:/data/wirebot/.../verious.sqlite
-│   ├── events.db           → standby:/data/wirebot/scoreboard/events.db
-│   ├── tenant/*.db         → standby:/data/wirebot/scoreboard/tenants/*/events.db
-│   ├── mem0/history.db     → standby:/data/wirebot/mem0/history.db
-│   └── mem0/qdrant/*.sqlite→ standby:/data/wirebot/mem0/qdrant/...
-│
-├── File Sync (inotify + rsync)
-│   ├── /home/wirebot/clawd/        → standby (workspace files)
-│   ├── /data/wirebot/users/        → standby (config, auth-profiles)
-│   ├── /data/wirebot/discovery/    → standby (projects, watermarks)
-│   ├── /data/wirebot/bin/          → standby (binaries)
-│   └── /home/wirebot/wirebot-core/plugins/ → standby (bridge plugin)
-│
-├── Letta Snapshot (cron, hourly)
-│   └── pg_dump via podman exec → standby:/data/wirebot/letta/pg_dump.sql
-│
-├── Health Reporter
-│   └── POST standby:8300/health every 30s
-│       (standby knows primary is alive)
-│
-└── HTTP API (:8300 on primary)
-    ├── GET  /status          → replication lag, last sync times
-    ├── GET  /health          → daemon health
-    └── POST /trigger-sync    → force immediate full sync
-```
-
-### Replication Methods
-
-#### A. SQLite — Litestream (real-time WAL streaming)
-
-Litestream continuously replicates SQLite WAL changes over SFTP to the standby.
-- **Lag:** sub-second (WAL frames streamed as written)
-- **Restore:** `litestream restore` on standby recovers to latest frame
-- **DBs replicated:** 5-8 files, ~7MB total
-
-```yaml
-# /etc/litestream.yml (on primary)
-dbs:
-  - path: /data/wirebot/users/verious/memory/verious.sqlite
-    replicas:
-      - type: sftp
-        host: STANDBY_IP
-        path: /data/wirebot/users/verious/memory/verious.sqlite
-        
-  - path: /data/wirebot/scoreboard/events.db
-    replicas:
-      - type: sftp
-        host: STANDBY_IP
-        path: /data/wirebot/scoreboard/events.db
-
-  - path: /data/wirebot/mem0/history.db
-    replicas:
-      - type: sftp
-        host: STANDBY_IP
-        path: /data/wirebot/mem0/history.db
-
-  # Tenant DBs added dynamically when provisioned
-```
-
-**Cost:** 0. Litestream is open source. SFTP bandwidth is negligible (<1MB/day for WAL diffs).
-
-#### B. Workspace + Config — inotify + rsync (near-real-time)
-
-Daemon watches directories with inotify. On change, debounces 5s, then rsync diffs.
-
-```
-Watched paths:
-  /home/wirebot/clawd/                    → workspace identity, checklist, memory
-  /data/wirebot/users/verious/            → gateway config, auth-profiles
-  /data/wirebot/discovery/                → project registry, watermarks
-  /data/wirebot/bin/                      → compiled binaries
-  /home/wirebot/wirebot-core/plugins/     → bridge plugin source
-  /run/wirebot/                           → runtime secrets (scoreboard.env)
-```
-
-- **Lag:** 5-10 seconds after file change
-- **Bandwidth:** <100KB per sync (rsync diffs only)
-- **Fallback:** Full rsync every 15 minutes regardless of inotify events
-
-#### C. Letta PostgreSQL — pg_dump hourly
-
-```bash
-# Runs hourly via daemon's internal cron
-podman exec letta-wirebot pg_dumpall -U letta > /tmp/letta-dump.sql
-rsync -az /tmp/letta-dump.sql standby:/data/wirebot/letta/pg_dump.sql
-```
-
-- **Lag:** up to 1 hour
-- **Acceptable:** Letta holds structured business state blocks that change slowly.
-  The 4 blocks (identity, soul, user, business) only update on major events.
-- **Restore:** `psql < pg_dump.sql` on standby Letta container
-
-#### D. Health Heartbeat
-
-Primary sends heartbeat to standby every 30 seconds:
-```
-POST standby:8300/health
-Body: { "timestamp": "...", "services": {...}, "replication_lag": {...} }
-```
-
-Standby tracks heartbeat. If **3 consecutive misses (90 seconds)**, standby
-can auto-activate (optional) or send alert.
-
----
-
-## 4. Failover Procedure
-
-### Automatic (recommended for sovereign clients)
+## 6. Failover Timeline
 
 ```
 Primary dies
     │
-    ▼ (90 seconds: 3 missed heartbeats)
-Standby detects failure
+    ▼  IMMEDIATELY
+Surfaces detect API failure:
+    - Show "offline" indicator
+    - Continue rendering from local data
+    - Queue new writes to sync_queue
+    - User keeps working (read + write locally)
     │
-    ▼ (10 seconds)
-Standby activates:
-    1. Litestream restore (latest SQLite frames)
-    2. Start all systemd services
-    3. Connect cloudflared tunnel (standby has same tunnel config)
+    ▼  90 seconds (3 missed heartbeats)
+Standby detects failure:
+    1. Litestream restore (latest SQLite frames, ~5s)
+    2. Start openclaw-gateway + scoreboard (~15s)
+    3. Connect cloudflared tunnel (~10s)
     │
-    ▼ (30-60 seconds)
-Cloudflare routes traffic to standby
+    ▼  ~2 minutes
+Standby is live:
+    - AI inference available
+    - Scoreboard API accepting events
+    - CF tunnel routes traffic to standby
     │
     ▼
-Client never notices (CF tunnel handles DNS, no IP change needed)
+Surfaces auto-reconnect:
+    - Drain sync_queue (queued events upload)
+    - Resume real-time AI chat
+    - "Online" indicator returns
+    - User never lost data, only waited ~2 min for AI
 ```
 
-**Total downtime: ~2 minutes**
-
-### Manual (operator-triggered)
-
-```bash
-# On standby VPS:
-ssh standby
-wirebot-failover activate
-
-# This runs:
-# 1. litestream restore (all DBs)
-# 2. systemctl start openclaw-gateway wirebot-scoreboard mem0-wirebot ...
-# 3. cloudflared tunnel run wirebot
-```
-
-### Recovery (primary comes back)
-
-```
-Primary restored
-    │
-    ▼
-STOP standby services (prevent split-brain)
-    │
-    ▼
-Merge standby writes back to primary:
-    - rsync standby SQLite DBs → primary (if standby took new writes)
-    - Compare and merge scoreboard events (dedup by event ID)
-    │
-    ▼
-Restart primary services
-    │
-    ▼
-Reconnect primary tunnel (standby disconnects)
-    │
-    ▼
-Resume normal replication
-```
+**Client experience during outage:**
+- Scoreboard: fully usable, all data visible, new events queued
+- Chat: "AI temporarily unavailable" banner, history visible
+- Extension: cached data shown, actions queued
+- After recovery: everything syncs seamlessly
 
 ---
 
-## 5. Cloudflare Tunnel Strategy
+## 7. Cloudflare Tunnel Strategy
 
-### Option A: Same tunnel, different connectors (recommended)
+**Option A: Same tunnel, different connectors (recommended)**
 
-Both VPS boxes run `cloudflared` with the **same tunnel ID** and credentials.
-Only ONE is connected at a time.
+Both VPS boxes have the **same tunnel ID** and credentials.
+Only ONE connector is active at a time.
 
 - Primary: `cloudflared-wirebot.service` (enabled, running)
-- Standby: `cloudflared-wirebot.service` (installed, stopped)
+- Standby: `cloudflared-wirebot.service` (installed, stopped until failover)
 
-On failover: start standby connector, CF routes to it.
-On recovery: stop standby, primary reconnects.
+On failover: standby starts its connector → CF routes to it.
+On recovery: stop standby connector → primary reconnects.
 
-**Requirement:** Copy tunnel credentials from primary to standby:
+**Zero DNS propagation.** Client's domain doesn't change.
+
+Credentials to copy:
 ```
 /root/.cloudflared/57df17a8-b9d1-4790-bab9-8157ac51641b.json
 /etc/cloudflared/wirebot.yml
 ```
 
-### Option B: Cloudflare Load Balancer (better but costs)
-
-CF Load Balancer with health checks on both origins.
-- Automatic failover, no manual tunnel switching
-- Cost: $5/mo for CF LB
-
-### Option C: Two tunnels, DNS failover
-
-Two separate tunnels. Primary's DNS active. On failure, update DNS to standby.
-- Slower (DNS propagation 30-300 seconds)
-- No cost
-
-**Recommendation:** Option A for now. Zero cost, <60 second failover.
-
 ---
 
-## 6. Data Loss Matrix
-
-| Data Type | Sync Method | Max Data Loss | Impact |
-|-----------|-------------|---------------|--------|
-| Scoreboard events | Litestream | ~1 second | Negligible |
-| Memory-core (embeddings) | Litestream | ~1 second | Negligible |
-| Mem0 facts | Litestream | ~1 second | Negligible |
-| Workspace files | inotify+rsync | ~10 seconds | Low |
-| Gateway config | inotify+rsync | ~10 seconds | Low |
-| Discovery state | inotify+rsync | ~10 seconds | Low |
-| Letta business state | pg_dump hourly | ~1 hour | Medium* |
-| Active conversations | Not synced | Session lost | Low** |
-| In-flight webhooks | Not synced | Events lost | Low*** |
-
-\* Letta blocks change slowly. Hourly is adequate.
-\** Client starts new conversation. No history lost (sessions synced via Litestream).
-\*** Stripe/GitHub will retry failed webhooks automatically.
-
----
-
-## 7. Client Instance Considerations
-
-For sovereign client instances (`ai.clientbiz.com`):
-
-- **Client's agent workspace** synced same as operator workspace
-- **Client's scoreboard tenant DB** covered by Litestream (auto-discovered)
-- **Client's domain** routes via same CF tunnel — failover is transparent
-- **Client-specific secrets** in `/run/wirebot/` — synced via file sync
-
-### Multi-client scaling
-
-Each new client adds:
-- ~1MB SQLite (tenant scoreboard)
-- ~5MB workspace
-- ~100KB config
-- One agent entry in `openclaw.json`
-
-The standby box comfortably handles 50+ clients before needing an upgrade.
-
----
-
-## 8. Standby Setup Checklist
-
-### One-time provisioning
-
-```bash
-# 1. Provision Hetzner CAX11 (Ashburn)
-# 2. OS setup
-apt update && apt install -y rsync python3 python3-pip podman
-
-# 3. Install Node.js 22
-curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
-apt install -y nodejs
-
-# 4. Install OpenClaw
-npm install -g openclaw
-
-# 5. Install Litestream (on PRIMARY)
-curl -L https://github.com/benbjohnson/litestream/releases/latest/download/litestream-linux-amd64.tar.gz | tar xz
-mv litestream /usr/local/bin/
-
-# 6. Install cloudflared (on standby)
-curl -L https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 -o /usr/local/bin/cloudflared
-chmod +x /usr/local/bin/cloudflared
-
-# 7. Copy tunnel credentials
-scp /root/.cloudflared/57df17a8-*.json standby:/root/.cloudflared/
-scp /etc/cloudflared/wirebot.yml standby:/etc/cloudflared/
-
-# 8. Copy systemd units
-scp /etc/systemd/system/openclaw-gateway.service standby:/etc/systemd/system/
-scp /etc/systemd/system/wirebot-scoreboard.service standby:/etc/systemd/system/
-scp /etc/systemd/system/mem0-wirebot.service standby:/etc/systemd/system/
-# ... all wirebot-* services
-
-# 9. Create directory structure
-ssh standby 'mkdir -p /data/wirebot/{users/verious/memory,scoreboard/tenants,mem0,bin,discovery,letta}'
-ssh standby 'mkdir -p /home/wirebot/{clawd,wirebot-core/plugins}'
-
-# 10. Initial full sync
-rsync -avz /data/wirebot/ standby:/data/wirebot/
-rsync -avz /home/wirebot/clawd/ standby:/home/wirebot/clawd/
-
-# 11. Start replicator daemon on primary
-systemctl enable --now wirebot-replicator
-```
-
-### Ongoing (automated by replicator)
-
-- Litestream: continuous WAL streaming
-- inotify+rsync: file changes within 10 seconds
-- pg_dump: hourly Letta snapshots
-- Heartbeat: every 30 seconds
-
----
-
-## 9. Monitoring
-
-The replicator daemon exposes metrics:
+## 8. Recovery (Primary Returns)
 
 ```
-GET http://localhost:8300/status
-{
-  "primary": true,
-  "standby_reachable": true,
-  "last_heartbeat": "2026-02-02T12:00:30Z",
-  "replication": {
-    "litestream": { "status": "streaming", "lag_ms": 450 },
-    "file_sync":  { "status": "idle", "last_sync": "2026-02-02T11:59:55Z", "pending": 0 },
-    "letta_dump": { "status": "ok", "last_dump": "2026-02-02T11:00:03Z" }
-  },
-  "standby": {
-    "ip": "...",
-    "services": "stopped",
-    "disk_free": "34GB",
-    "last_restore_test": "2026-01-26T03:00:00Z"
+Primary restored
+    │
+    ▼
+Stop standby services + tunnel
+    │
+    ▼
+Merge standby writes → primary:
+    - Scoreboard events: dedup by UUID (append-only, no conflict)
+    - Any new tenant DBs: copy over
+    │
+    ▼
+Start primary services + tunnel
+    │
+    ▼
+Resume normal replication (primary → standby)
+    │
+    ▼
+Surfaces auto-reconnect to primary (CF tunnel handles routing)
+    - Any remaining sync_queue items drain to primary
+```
+
+No split-brain risk because:
+1. Events are UUID-keyed and append-only
+2. Only one tunnel connector is active at a time
+3. Surfaces sync to whichever hub is reachable — the data is the same
+
+---
+
+## 9. Implementation Per Surface
+
+### Scoreboard PWA Changes
+
+```javascript
+// lib/localStore.js — new module
+import { openDB } from 'idb';
+
+const db = await openDB('wirebot-scoreboard', 1, {
+  upgrade(db) {
+    db.createObjectStore('events', { keyPath: 'id' });
+    db.createObjectStore('state',  { keyPath: 'key' });
+    db.createObjectStore('sync_queue', { keyPath: 'id', autoIncrement: true });
+  }
+});
+
+// Write-local-first pattern
+export async function submitEvent(event) {
+  event.id = event.id || crypto.randomUUID();
+  event.synced = false;
+  await db.put('events', event);
+
+  try {
+    await fetch('/v1/events', {
+      method: 'POST',
+      headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+      body: JSON.stringify(event)
+    });
+    event.synced = true;
+    await db.put('events', event);
+  } catch (e) {
+    // Hub down — event is safe in IndexedDB, will retry
+    await db.put('sync_queue', { eventId: event.id, payload: event });
+  }
+}
+
+// Background sync drain
+export async function drainSyncQueue() {
+  const queue = await db.getAll('sync_queue');
+  for (const item of queue) {
+    try {
+      await fetch('/v1/events', {
+        method: 'POST',
+        headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+        body: JSON.stringify(item.payload)
+      });
+      await db.delete('sync_queue', item.id);
+    } catch (e) {
+      break; // Hub still down, stop draining
+    }
+  }
+}
+
+// Read-local-first pattern
+export async function getScore() {
+  const local = await db.get('state', 'score');
+
+  try {
+    const res = await fetch('/v1/scoreboard', { headers: authHeaders() });
+    const remote = await res.json();
+    await db.put('state', { key: 'score', ...remote, lastSync: Date.now() });
+    return { data: remote, source: 'live' };
+  } catch (e) {
+    return { data: local, source: 'cache', stale: true };
   }
 }
 ```
 
-Guardian integration: replicator reports to Guardian health checks.
-Alert channels: Discord webhook, SMS (via existing infra).
+### Chrome Extension Changes
+
+```javascript
+// services/localCache.js — new module
+const KEYS = ['wb_events', 'wb_score', 'wb_checklist', 'wb_feed', 'wb_sync_queue'];
+
+export async function cacheScore(score) {
+  await chrome.storage.local.set({ wb_score: { ...score, cachedAt: Date.now() } });
+}
+
+export async function getCachedScore() {
+  const { wb_score } = await chrome.storage.local.get('wb_score');
+  return wb_score;
+}
+
+export async function queueAction(action) {
+  const { wb_sync_queue = [] } = await chrome.storage.local.get('wb_sync_queue');
+  wb_sync_queue.push({ ...action, id: crypto.randomUUID(), queuedAt: Date.now() });
+  await chrome.storage.local.set({ wb_sync_queue });
+}
+
+// Background script: periodic sync drain
+chrome.alarms.create('sync-drain', { periodInMinutes: 1 });
+chrome.alarms.onAlarm.addListener(async (alarm) => {
+  if (alarm.name === 'sync-drain') {
+    const { wb_sync_queue = [] } = await chrome.storage.local.get('wb_sync_queue');
+    // ... drain to hub API, remove succeeded items
+  }
+});
+```
+
+### White-Label Client Frontend
+
+```javascript
+// chat.js — local-first conversation
+async function sendMessage(text) {
+  const msg = {
+    id: crypto.randomUUID(),
+    role: 'user',
+    content: text,
+    timestamp: Date.now(),
+    synced: false
+  };
+
+  // 1. Write locally (instant)
+  await db.put('conversations', msg);
+  renderMessage(msg);
+
+  // 2. Send to hub
+  try {
+    const ws = getWebSocket();
+    ws.send(JSON.stringify({ method: 'chat.send', params: { message: text } }));
+    msg.synced = true;
+    await db.put('conversations', msg);
+  } catch (e) {
+    // Hub down — show queued indicator
+    showOfflineBanner();
+    await db.put('sync_queue', { msgId: msg.id, payload: msg });
+  }
+}
+
+// On page load: render from local, then background refresh
+async function init() {
+  const localHistory = await db.getAll('conversations');
+  renderConversation(localHistory); // instant, no spinner
+
+  try {
+    // Fetch latest from hub to catch up
+    const remote = await rpc('chat.history');
+    await mergeConversation(localHistory, remote);
+  } catch (e) {
+    showStaleIndicator();
+  }
+}
+```
 
 ---
 
-## 10. Monthly Fire Drill
+## 10. Offline UX Patterns
 
-Scheduled monthly (first Sunday, 3am PT):
+Every surface follows the same visual language:
 
-1. Stop primary tunnel
-2. Activate standby
-3. Verify all endpoints respond
-4. Run test query against gateway
-5. Check scoreboard data integrity
-6. Deactivate standby
-7. Reconnect primary
-8. Log results
+| State | Indicator | Behavior |
+|-------|-----------|----------|
+| **Online** | Green dot / no indicator | Real-time sync, live AI |
+| **Syncing** | Amber pulse | Draining queue, catching up |
+| **Offline** | Red dot + "Last synced: X ago" | Full local data, writes queued |
+| **AI unavailable** | Banner: "AI is temporarily offline" | History visible, new messages queued |
+| **Reconnected** | Brief green flash + "Back online" | Queue drained, indicators clear |
 
-Automated via `wirebot-replicator drill` command.
+Queued events show a subtle clock icon. When synced, the icon disappears. No user action required.
 
 ---
 
-## 11. Cost Summary
+## 11. Standby Setup
+
+### Provisioning
+
+```bash
+# 1. Hetzner CAX11, Ashburn datacenter (~$4/mo)
+
+# 2. Minimal OS setup (no cPanel needed)
+apt update && apt install -y rsync nodejs cloudflared
+
+# 3. Install OpenClaw
+npm install -g openclaw
+
+# 4. Copy tunnel credentials
+scp /root/.cloudflared/57df17a8-*.json standby:/root/.cloudflared/
+scp /etc/cloudflared/wirebot.yml standby:/etc/cloudflared/
+
+# 5. Copy systemd units (gateway + scoreboard only)
+scp /etc/systemd/system/openclaw-gateway.service standby:/etc/systemd/system/
+scp /etc/systemd/system/wirebot-scoreboard.service standby:/etc/systemd/system/
+
+# 6. Create directory structure
+ssh standby 'mkdir -p /data/wirebot/{users/verious/memory,scoreboard/tenants,bin}'
+ssh standby 'mkdir -p /home/wirebot/clawd'
+
+# 7. Initial full sync
+rsync -avz /data/wirebot/ standby:/data/wirebot/
+rsync -avz /home/wirebot/clawd/ standby:/home/wirebot/clawd/
+
+# 8. Install Litestream on primary
+curl -L https://github.com/benbjohnson/litestream/releases/latest/... | tar xz
+mv litestream /usr/local/bin/
+
+# 9. Start replicator on primary
+systemctl enable --now wirebot-replicator
+```
+
+### Lighter than before
+
+With local-first, the standby box doesn't need:
+- ❌ Mem0 (facts cached on surfaces)
+- ❌ Letta + PostgreSQL (business state is non-critical for degraded mode)
+- ❌ memory-syncd (no memory bridge in failover)
+- ❌ Full data replication (surfaces hold their own data)
+
+Just: **OpenClaw gateway + Scoreboard API + cloudflared.** That's it.
+
+RAM requirement drops from ~4GB to ~1-2GB. The cheapest Hetzner box is overkill.
+
+---
+
+## 12. Replicator Daemon Spec
+
+```
+wirebot-replicator (Go binary, ~10MB, runs on primary)
+│
+├── Litestream Manager
+│   ├── Wraps litestream process lifecycle
+│   ├── Watches /data/wirebot/scoreboard/tenants/ for new tenant DBs
+│   ├── Auto-adds new DBs to replication
+│   └── Reports lag per DB
+│
+├── File Sync
+│   ├── inotify on watched paths
+│   ├── Debounce 5s → rsync diff to standby
+│   ├── Full sync every 15 min (safety net)
+│   └── Paths:
+│       ├── /data/wirebot/users/verious/  (config)
+│       ├── /home/wirebot/clawd/          (workspace)
+│       ├── /data/wirebot/bin/            (binaries)
+│       └── /run/wirebot/                 (secrets)
+│
+├── Health Heartbeat
+│   ├── POST standby:8300/heartbeat every 30s
+│   └── Includes: timestamp, service status, replication lag
+│
+├── HTTP API (:8300)
+│   ├── GET  /status         (replication state)
+│   ├── GET  /health         (daemon health)
+│   ├── POST /trigger-sync   (force full sync now)
+│   └── POST /drill          (failover fire drill)
+│
+└── Config: /etc/wirebot/replicator.yml
+    standby:
+      host: <hetzner-ip>
+      user: root
+      ssh_key: /root/.ssh/wirebot-standby
+    litestream:
+      dbs:
+        - /data/wirebot/users/verious/memory/verious.sqlite
+        - /data/wirebot/scoreboard/events.db
+        - /data/wirebot/mem0/history.db
+      tenant_dir: /data/wirebot/scoreboard/tenants
+    file_sync:
+      paths:
+        - /data/wirebot/users/verious
+        - /home/wirebot/clawd
+        - /data/wirebot/bin
+        - /run/wirebot
+      debounce_seconds: 5
+      full_sync_minutes: 15
+    heartbeat:
+      interval_seconds: 30
+      miss_threshold: 3
+```
+
+---
+
+## 13. Data Loss Summary (Local-First vs Hub-Centric)
+
+| Data Type | Hub-Centric Loss | Local-First Loss |
+|-----------|-----------------|------------------|
+| Client's scoreboard events | Up to 24 hours | **Zero** |
+| Client's conversation history | Up to 24 hours | **Zero** |
+| Client's score/streak | Up to 24 hours | **Zero** |
+| Client's workspace state | Up to 10 seconds | **Zero** |
+| AI memory (embeddings) | ~1 second | ~1 second (hub-side only) |
+| AI memory (facts) | ~1 second | ~1 second (hub-side only) |
+| AI business state (Letta) | ~1 hour | **Skipped** (not on standby) |
+| Active AI response | Lost | **Queued** (resends on recovery) |
+
+Local-first turns "data loss" into "AI pause." The client's data is always safe. They just wait ~2 minutes for the AI to come back.
+
+---
+
+## 14. Monthly Fire Drill
+
+First Sunday, 3am PT. Automated via `wirebot-replicator drill`:
+
+1. Stop primary tunnel connector
+2. Verify surfaces show "offline" indicator (not error)
+3. Activate standby (gateway + scoreboard + tunnel)
+4. Verify all endpoints respond
+5. Send test chat message → receive AI response
+6. Submit test event → verify in scoreboard
+7. Deactivate standby
+8. Reconnect primary
+9. Verify surfaces reconnect and drain queues
+10. Log results to `/var/log/wirebot/fire-drill.log`
+11. Alert operator with summary (Discord webhook)
+
+---
+
+## 15. Cost Summary
 
 | Item | Monthly Cost |
 |------|-------------|
-| Hetzner CAX11 (standby VPS) | ~$4 |
-| Bandwidth (replication) | $0 (included) |
+| Hetzner CAX11 (standby) | ~$4 |
 | Litestream | $0 (open source) |
+| Bandwidth | $0 (included, <1MB/day) |
 | Cloudflare tunnel | $0 (free tier) |
 | **Total** | **~$4/mo** |
 
-vs. client revenue: $2,500/mo → **0.16% of revenue on infrastructure redundancy**
+Client revenue: $2,500/mo → **0.16% on infrastructure redundancy**
+
+Client data loss on worst-case failure: **Zero.**
+AI downtime on worst-case failure: **~2 minutes.**
 
 ---
 
