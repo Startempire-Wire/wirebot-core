@@ -1021,6 +1021,7 @@ func (s *Server) postEvent(w http.ResponseWriter, r *http.Request) {
 		ArtifactURL       string          `json:"artifact_url"`
 		ArtifactTitle     string          `json:"artifact_title"`
 		Confidence        float64         `json:"confidence"`
+		ScoreDelta        int             `json:"score_delta"`
 		Verifiers         json.RawMessage `json:"verifiers"`
 		VerificationLevel string          `json:"verification_level"`
 		BusinessID        string          `json:"business_id"`
@@ -1063,10 +1064,18 @@ func (s *Server) postEvent(w http.ResponseWriter, r *http.Request) {
 	// Everything else is gated (pending) until operator approves.
 	// This prevents gaming — you can't self-report your way to a high score.
 	trustedSources := map[string]bool{
-		"github-webhook": true,
-		"stripe-webhook": true,
-		"rss-poller":     true,
-		"youtube-poller": true,
+		"github-webhook":  true,
+		"stripe-webhook":  true,
+		"rss-poller":      true,
+		"youtube-poller":  true,
+		"git-discovery":   true,
+		"sendy-poller":    true,
+		"cloudflare-poller": true,
+		"woo-poller":      true,
+		"uptime-poller":   true,
+		"posthog-poller":  true,
+		"discord-poller":  true,
+		"automated":       true,
 	}
 	status := "pending"
 	if trustedSources[evt.Source] {
@@ -1099,7 +1108,11 @@ func (s *Server) postEvent(w http.ResponseWriter, r *http.Request) {
 		status = "pending"
 	}
 
-	scoreDelta := calcScoreDelta(evt.Lane, evt.EventType, evt.Confidence)
+	scoreDelta := evt.ScoreDelta
+	if scoreDelta == 0 {
+		// No explicit score — calculate from event type
+		scoreDelta = calcScoreDelta(evt.Lane, evt.EventType, evt.Confidence)
+	}
 	// Apply verification multiplier
 	scoreDelta = int(float64(scoreDelta) * verificationMultiplier(verLevel))
 	// Pending events get 0 score until approved
@@ -3255,14 +3268,19 @@ func calcScoreDelta(lane, eventType string, confidence float64) int {
 		"distribution": {
 			"BLOG_PUBLISHED": 6, "VIDEO_PUBLISHED": 7, "EMAIL_CAMPAIGN_SENT": 5,
 			"SOCIAL_POST_BUSINESS": 4, "COLD_OUTREACH": 4, "PODCAST_PUBLISHED": 6,
+			"DOCS_PUBLISHED": 4, "EXTENSION_PUBLISHED": 5, "CODE_PUBLISHED": 3,
+			"CAMPAIGN_SENT": 5, "DEPLOY": 3, "EMAIL_HEALTH": 1,
 		},
 		"revenue": {
 			"PAYMENT_RECEIVED": 10, "SUBSCRIPTION_CREATED": 12, "DEAL_CLOSED": 8,
-			"PROPOSAL_SENT": 4, "INVOICE_PAID": 8,
+			"PROPOSAL_SENT": 4, "INVOICE_PAID": 8, "PAYOUT_RECEIVED": 2,
+			"PAYMENT_FAILED": 0, "REFUND_ISSUED": -2,
 		},
 		"systems": {
 			"AUTOMATION_DEPLOYED": 6, "SOP_DOCUMENTED": 4, "TOOL_INTEGRATED": 5,
 			"DELEGATION_COMPLETED": 6, "MONITORING_ENABLED": 4,
+			"DEPLOY": 3, "SERVICE_HEALTH": 2, "INFRA_CHECK": 2,
+			"MEMORY_FIX": 5, "FEATURE_SHIPPED": 5,
 		},
 	}
 	// Special: context switch and penalties return 0 (handled separately in updateDailyScore)
@@ -4376,15 +4394,72 @@ func (s *Server) handleIntegrationConfig(w http.ResponseWriter, r *http.Request)
 // ─── RSS Poller ─────────────────────────────────────────────────────────
 
 func (s *Server) startPoller() {
-	// Run immediately on start, then every 60 seconds
+	// Integration poller: immediately then every 60 seconds
 	go func() {
-		time.Sleep(5 * time.Second) // Wait for server to be ready
+		time.Sleep(5 * time.Second)
 		s.pollDueIntegrations()
 		ticker := time.NewTicker(60 * time.Second)
 		for range ticker.C {
 			s.pollDueIntegrations()
 		}
 	}()
+
+	// Systems health check: on startup then every 6 hours
+	go func() {
+		time.Sleep(10 * time.Second)
+		s.checkSystemsHealth()
+		ticker := time.NewTicker(6 * time.Hour)
+		for range ticker.C {
+			s.checkSystemsHealth()
+		}
+	}()
+}
+
+func (s *Server) checkSystemsHealth() {
+	today := time.Now().Format("2006-01-02")
+
+	// Only emit one health event per day
+	var count int
+	s.db.QueryRow(`SELECT COUNT(*) FROM events WHERE event_type='SERVICE_HEALTH' AND date(timestamp)=?`, today).Scan(&count)
+	if count > 0 {
+		return
+	}
+
+	// Check services
+	services := []struct{ name, check string }{
+		{"gateway", "http://127.0.0.1:18789/__openclaw__/health"},
+		{"mem0", "http://127.0.0.1:8200/health"},
+		{"syncd", "http://127.0.0.1:8201/health"},
+		{"scoreboard", "http://127.0.0.1:8100/v1/score?token=" + os.Getenv("SCOREBOARD_TOKEN")},
+	}
+
+	up := 0
+	total := len(services)
+	client := &http.Client{Timeout: 3 * time.Second}
+	for _, svc := range services {
+		resp, err := client.Get(svc.check)
+		if err == nil && resp.StatusCode < 400 {
+			up++
+			resp.Body.Close()
+		}
+	}
+
+	delta := 0
+	if up == total {
+		delta = 2 // All services healthy
+	} else if up > 0 {
+		delta = 1 // Partial
+	}
+
+	title := fmt.Sprintf("Systems health: %d/%d services up", up, total)
+	id := fmt.Sprintf("evt-health-%s", today)
+	now := time.Now().UTC().Format(time.RFC3339)
+
+	s.db.Exec(`INSERT OR IGNORE INTO events (id, event_type, lane, source, timestamp, artifact_title, score_delta, status, created_at)
+		VALUES (?, 'SERVICE_HEALTH', 'systems', 'automated', ?, ?, ?, 'approved', ?)`,
+		id, now, title, delta, now)
+
+	log.Printf("Systems health: %d/%d up, +%d pts", up, total, delta)
 }
 
 func (s *Server) pollDueIntegrations() {
