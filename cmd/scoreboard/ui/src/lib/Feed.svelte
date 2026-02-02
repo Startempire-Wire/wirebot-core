@@ -25,10 +25,10 @@
   async function loadPending() {
     loadingProjects = true;
     try {
-      // Fetch projects + all pending events in parallel
+      // Fetch projects + all pending events in parallel (auth required)
       const [projRes, evtRes] = await Promise.all([
-        fetch('/v1/projects'),
-        fetch('/v1/feed?status=pending&limit=500')
+        fetch('/v1/projects', { headers: headers() }),
+        fetch('/v1/feed?status=pending&limit=500', { headers: headers() })
       ]);
       const projData = await projRes.json();
       const evtData = await evtRes.json();

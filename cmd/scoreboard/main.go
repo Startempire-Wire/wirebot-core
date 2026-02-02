@@ -403,10 +403,11 @@ func main() {
 	mux.HandleFunc("/v1/projects", s.authMember(s.handleProjects))
 	mux.HandleFunc("/v1/projects/", s.auth(s.handleProjectAction)) // POST .../approve|reject
 
-	// Social cards (auth required)
-	mux.HandleFunc("/v1/card/daily", s.authMember(s.handleCard))
-	mux.HandleFunc("/v1/card/weekly", s.authMember(s.handleCard))
-	mux.HandleFunc("/v1/card/season", s.authMember(s.handleCard))
+	// Social share cards — intentionally public (OG embeds for Twitter/Discord/etc)
+	// Cards show minimal info (score + streak) and only when user explicitly shares a link
+	mux.HandleFunc("/v1/card/daily", s.handleCard)
+	mux.HandleFunc("/v1/card/weekly", s.handleCard)
+	mux.HandleFunc("/v1/card/season", s.handleCard)
 
 	// EOD score lock
 	mux.HandleFunc("/v1/lock", s.auth(s.handleLock))
