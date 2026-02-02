@@ -78,16 +78,23 @@ async function mem0Store(
   baseUrl: string,
   namespace: string,
   text: string,
+  messages?: Array<{ role: string; content: string }>,
 ): Promise<{ ok: boolean }> {
   try {
+    const body: Record<string, unknown> = {
+      namespace,
+      category: "conversation",
+    };
+    // Prefer structured messages (Mem0's designed API) over raw text
+    if (messages && messages.length > 0) {
+      body.messages = messages;
+    } else {
+      body.text = text;
+    }
     const resp = await fetch(`${baseUrl}/v1/store`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        text,
-        namespace,
-        category: "conversation",
-      }),
+      body: JSON.stringify(body),
       signal: AbortSignal.timeout(15000),
     });
     return { ok: resp.ok };
@@ -190,6 +197,30 @@ async function lettaSendMessage(
   }
 }
 
+async function lettaArchivalSearch(
+  baseUrl: string,
+  agentId: string,
+  query: string,
+  limit = 3,
+): Promise<Array<{ text: string; id: string }>> {
+  try {
+    const resp = await fetch(
+      `${baseUrl}/v1/agents/${agentId}/archival-memory/search?query=${encodeURIComponent(query)}&limit=${limit}`,
+      { signal: AbortSignal.timeout(10000) },
+    );
+    if (!resp.ok) return [];
+    const data = await resp.json();
+    const results = data.results || data;
+    if (!Array.isArray(results)) return [];
+    return results.map((p: Record<string, unknown>) => ({
+      text: String(p.content || p.text || ""),
+      id: String(p.id || ""),
+    }));
+  } catch {
+    return [];
+  }
+}
+
 // ============================================================================
 // Plugin
 // ============================================================================
@@ -270,6 +301,7 @@ const wirebotMemoryBridge = {
 
           // Letta: ALWAYS include all blocks — they're the operator's structured
           // identity, goals, KPIs, and business stage. 2KB total, always relevant.
+          // Also search archival memory for deep doc context (PAIRING, SCOREBOARD, etc.)
           if (searchAll || layers?.includes("letta")) {
             promises.push(
               lettaGetBlocks(cfg.lettaUrl, cfg.lettaAgentId).then((blocks) => {
@@ -279,6 +311,23 @@ const wirebotMemoryBridge = {
                   }
                 }
               }),
+            );
+            // Archival search for complex "why" / doc-level queries
+            promises.push(
+              lettaArchivalSearch(cfg.lettaUrl, cfg.lettaAgentId, query, 2).then(
+                (passages) => {
+                  for (const p of passages) {
+                    if (p.text) {
+                      // Truncate long passages to ~500 chars for tool response
+                      const snippet =
+                        p.text.length > 500
+                          ? p.text.slice(0, 500) + "..."
+                          : p.text;
+                      results.push(`[archival] ${snippet}`);
+                    }
+                  }
+                },
+              ),
             );
           }
 
@@ -379,8 +428,10 @@ const wirebotMemoryBridge = {
           "Read or update structured business state stored in Letta memory blocks. " +
           "Blocks: business_stage (Idea/Launch/Growth), goals (active goals with " +
           "deadlines), kpis (key metrics), human (user context). " +
-          "Use 'read' to see current state. Use 'update' to change a specific block. " +
-          "Use 'message' to let the Letta agent decide how to update (slower, uses LLM).",
+          "Use 'read' to see current state. " +
+          "Use 'message' (PREFERRED) to let the Letta agent decide how to update — " +
+          "send it context and it self-edits the right blocks intelligently. " +
+          "Use 'update' ONLY for bulk resets or initialization — it overwrites the entire block.",
         parameters: Type.Object({
           action: Type.Union([
             Type.Literal("read"),
@@ -1219,16 +1270,12 @@ const wirebotMemoryBridge = {
 
           if (conversation.length < 2) return; // Need at least 1 exchange
 
-          // Concatenate conversation into a single text for Mem0's /v1/store
-          // Mem0's LLM handles dedup, contradiction resolution, extraction
-          const text = conversation
-            .map((m) => `${m.role}: ${m.content}`)
-            .join("\n\n");
-
+          // Send structured messages to Mem0 (its designed API for conversation-aware extraction)
           const result = await mem0Store(
             cfg.mem0Url,
             cfg.mem0Namespace,
-            text,
+            "", // text fallback unused when messages provided
+            conversation,
           );
 
           if (result.ok) {
@@ -1239,6 +1286,87 @@ const wirebotMemoryBridge = {
             api.logger.warn(
               "wirebot-memory-bridge: Mem0 fact extraction failed",
             );
+          }
+
+          // ── Flow 2: Route business-relevant context to Letta agent ──
+          // Letta's agent self-edits its blocks (human, goals, kpis, business_stage)
+          // We detect if the conversation contains business-relevant info and
+          // send it as a message to the Letta agent for intelligent processing.
+          try {
+            const lastUser = conversation.filter((m) => m.role === "user").pop();
+            const lastAssistant = conversation
+              .filter((m) => m.role === "assistant")
+              .pop();
+            if (lastUser && lastAssistant) {
+              const combined = (
+                lastUser.content +
+                " " +
+                lastAssistant.content
+              ).toLowerCase();
+
+              // Detect business-relevant topics
+              const businessKeywords = [
+                "revenue",
+                "goal",
+                "kpi",
+                "stage",
+                "milestone",
+                "shipped",
+                "launched",
+                "customer",
+                "beta tester",
+                "pricing",
+                "debt",
+                "break even",
+                "profit",
+                "business",
+                "startup",
+              ];
+              // Detect pairing-relevant topics
+              const pairingKeywords = [
+                "my name is",
+                "call me",
+                "timezone",
+                "i started",
+                "my business",
+                "i'm working on",
+                "i run",
+                "money",
+                "income",
+                "debt",
+                "accountability",
+                "mentor",
+                "prefer",
+                "success looks like",
+              ];
+
+              const isBusinessRelevant = businessKeywords.some((kw) =>
+                combined.includes(kw),
+              );
+              const isPairingRelevant = pairingKeywords.some((kw) =>
+                combined.includes(kw),
+              );
+
+              if (isBusinessRelevant || isPairingRelevant) {
+                const context = isPairingRelevant
+                  ? `Pairing update from operator conversation:\nUser: ${lastUser.content}\nAssistant: ${lastAssistant.content}\n\nUpdate your human, goals, or business_stage blocks with any new information.`
+                  : `Business context from operator conversation:\nUser: ${lastUser.content}\nAssistant: ${lastAssistant.content}\n\nUpdate kpis, goals, or business_stage blocks if relevant.`;
+
+                lettaSendMessage(
+                  cfg.lettaUrl,
+                  cfg.lettaAgentId,
+                  context,
+                ).then((res) => {
+                  if (res.ok) {
+                    api.logger.info(
+                      `wirebot-memory-bridge: sent ${isPairingRelevant ? "pairing" : "business"} context to Letta agent`,
+                    );
+                  }
+                });
+              }
+            }
+          } catch {
+            // Letta routing is best-effort, don't fail the hook
           }
         } catch (err) {
           api.logger.warn(
