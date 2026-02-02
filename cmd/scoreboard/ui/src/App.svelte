@@ -41,6 +41,10 @@
   // Credential services: paste API key or URL directly
   const PROVIDERS = [
     // ── Revenue ──
+    { id: 'plaid', name: 'Bank Account', icon: '🏦', lane: 'revenue',
+      auth: 'plaid', desc: 'Real bank data — balances, deposits, expenses',
+      hint: 'Connect via Plaid — supports Novo, Chase, BofA, Wells Fargo, and 12,000+ banks',
+      plaidProducts: 'transactions' },
     { id: 'stripe', name: 'Stripe', icon: '💳', lane: 'revenue',
       auth: 'oauth', desc: 'Payment & subscription tracking',
       oauthUrl: '/v1/oauth/stripe/authorize',
@@ -144,8 +148,114 @@
     window.location.href = `${API}${provider.oauthUrl}`;
   }
 
+  // ── Plaid Link ──
+  let plaidReady = $state(false);
+
+  function loadPlaidScript() {
+    if (document.getElementById('plaid-link-script')) { plaidReady = true; return; }
+    const s = document.createElement('script');
+    s.id = 'plaid-link-script';
+    s.src = 'https://cdn.plaid.com/link/v2/stable/link-initialize.js';
+    s.onload = () => { plaidReady = true; };
+    document.head.appendChild(s);
+  }
+
+  async function startPlaidLink(provider) {
+    connectStatus = 'saving';
+    connectMsg = 'Preparing bank connection...';
+
+    // 1. Get a link_token from our server
+    try {
+      const res = await fetch(`${API}/v1/plaid/link-token`, {
+        method: 'POST',
+        headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ products: provider.plaidProducts || 'transactions' }),
+      });
+      const data = await res.json();
+
+      if (!data.link_token) {
+        connectStatus = 'fail';
+        connectMsg = data.error || 'Failed to create link token';
+        setTimeout(() => { connectStatus = null; }, 5000);
+        return;
+      }
+
+      // 2. Load Plaid Link script if not loaded
+      loadPlaidScript();
+      await new Promise(resolve => {
+        const check = setInterval(() => {
+          if (window.Plaid) { clearInterval(check); resolve(); }
+        }, 100);
+        setTimeout(() => { clearInterval(check); resolve(); }, 5000);
+      });
+
+      if (!window.Plaid) {
+        connectStatus = 'fail';
+        connectMsg = 'Failed to load Plaid — check your connection';
+        setTimeout(() => { connectStatus = null; }, 5000);
+        return;
+      }
+
+      connectStatus = null;
+
+      // 3. Open Plaid Link
+      const handler = window.Plaid.create({
+        token: data.link_token,
+        onSuccess: async (publicToken, metadata) => {
+          connectStatus = 'saving';
+          connectMsg = 'Connecting bank account...';
+
+          // 4. Exchange public_token for access_token on server
+          try {
+            const exchRes = await fetch(`${API}/v1/plaid/exchange`, {
+              method: 'POST',
+              headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                public_token: publicToken,
+                institution: metadata.institution,
+                accounts: metadata.accounts,
+              }),
+            });
+            const exchData = await exchRes.json();
+            if (exchData.ok) {
+              connectStatus = 'ok';
+              connectMsg = `✓ ${metadata.institution?.name || 'Bank'} connected`;
+              await loadIntegrations();
+            } else {
+              connectStatus = 'fail';
+              connectMsg = exchData.error || 'Exchange failed';
+            }
+          } catch (e) {
+            connectStatus = 'fail';
+            connectMsg = 'Network error during exchange';
+          }
+          setTimeout(() => { connectStatus = null; }, 5000);
+        },
+        onExit: (err) => {
+          if (err) {
+            connectStatus = 'fail';
+            connectMsg = err.display_message || 'Bank connection canceled';
+            setTimeout(() => { connectStatus = null; }, 4000);
+          }
+        },
+      });
+      handler.open();
+
+    } catch (e) {
+      connectStatus = 'fail';
+      connectMsg = 'Failed to start bank connection';
+      setTimeout(() => { connectStatus = null; }, 5000);
+    }
+  }
+
   async function connectProvider(provider) {
     if (provider.comingSoon) return;
+
+    // Plaid → Plaid Link widget flow
+    if (provider.auth === 'plaid') {
+      startPlaidLink(provider);
+      return;
+    }
 
     // OAuth providers → redirect flow
     if (provider.auth === 'oauth' && provider.oauthUrl) {

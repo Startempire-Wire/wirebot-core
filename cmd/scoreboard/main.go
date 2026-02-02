@@ -44,6 +44,9 @@ var (
 	rlJWTSecret    = envOr("RL_JWT_SECRET", "")         // Ring Leader JWT secret (HMAC-SHA256)
 	stripeKey      = envOr("STRIPE_SECRET_KEY", "")    // Stripe live secret key
 	stripeWHSecret = envOr("STRIPE_WEBHOOK_SECRET", "") // Stripe webhook signing secret
+	plaidClientID  = envOr("PLAID_CLIENT_ID", "")       // Plaid client_id
+	plaidSecret    = envOr("PLAID_SECRET", "")           // Plaid secret (sandbox/development/production)
+	plaidEnv       = envOr("PLAID_ENV", "sandbox")       // sandbox | development | production
 )
 
 func envOr(key, def string) string {
@@ -420,6 +423,10 @@ func main() {
 	mux.HandleFunc("/v1/webhooks/github", s.auth(s.handleGitHubWebhook))
 	mux.HandleFunc("/v1/webhooks/stripe", s.handleStripeWebhook) // Stripe signs its own webhooks
 	mux.HandleFunc("/v1/financial/snapshot", s.auth(s.handleFinancialSnapshot))
+
+	// Plaid (bank account connections)
+	mux.HandleFunc("/v1/plaid/link-token", s.auth(s.handlePlaidLinkToken))
+	mux.HandleFunc("/v1/plaid/exchange", s.auth(s.handlePlaidExchange))
 
 	// OAuth flows (provider authorization + callbacks)
 	mux.HandleFunc("/v1/oauth/stripe/authorize", s.auth(s.handleOAuthStart))
@@ -2456,6 +2463,377 @@ func (s *Server) handleFinancialSnapshot(w http.ResponseWriter, r *http.Request)
 // Receives JWT via URL fragment from Connect Plugin SSO redirect.
 // Serves a tiny HTML page that reads the fragment and stores in localStorage.
 
+// ─── Plaid (Bank Account Connections) ────────────────────────────────────
+
+func plaidBaseURL() string {
+	switch plaidEnv {
+	case "production":
+		return "https://production.plaid.com"
+	case "development":
+		return "https://development.plaid.com"
+	default:
+		return "https://sandbox.plaid.com"
+	}
+}
+
+func plaidRequest(endpoint string, body interface{}) (map[string]interface{}, error) {
+	payload, _ := json.Marshal(body)
+	client := &http.Client{Timeout: 15 * time.Second}
+	req, _ := http.NewRequest("POST", plaidBaseURL()+endpoint, strings.NewReader(string(payload)))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	var result map[string]interface{}
+	json.NewDecoder(resp.Body).Decode(&result)
+	if errMsg, ok := result["error_message"].(string); ok && errMsg != "" {
+		return result, fmt.Errorf("plaid: %s", errMsg)
+	}
+	return result, nil
+}
+
+// POST /v1/plaid/link-token — create a Plaid Link token for the frontend widget
+func (s *Server) handlePlaidLinkToken(w http.ResponseWriter, r *http.Request) {
+	cors(w)
+	if r.Method == "OPTIONS" {
+		w.WriteHeader(200)
+		return
+	}
+	if r.Method != "POST" {
+		http.Error(w, `{"error":"POST only"}`, 405)
+		return
+	}
+
+	if plaidClientID == "" || plaidSecret == "" {
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"error": "Plaid not configured. Set PLAID_CLIENT_ID and PLAID_SECRET.",
+		})
+		return
+	}
+
+	// Get auth context for user ID
+	auth := resolveAuth(r)
+	userID := "user-default"
+	if auth.Username != "" {
+		userID = fmt.Sprintf("user-%s", auth.Username)
+	}
+
+	var body struct {
+		Products string `json:"products"` // "transactions" or "transactions,investments"
+	}
+	json.NewDecoder(r.Body).Decode(&body)
+	products := []string{"transactions"}
+	if body.Products != "" {
+		products = strings.Split(body.Products, ",")
+	}
+
+	result, err := plaidRequest("/link/token/create", map[string]interface{}{
+		"client_id":    plaidClientID,
+		"secret":       plaidSecret,
+		"user":         map[string]string{"client_user_id": userID},
+		"client_name":  "Wirebot Scoreboard",
+		"products":     products,
+		"country_codes": []string{"US"},
+		"language":     "en",
+		"redirect_uri": fmt.Sprintf("%s/v1/plaid/oauth-redirect", oauthCallbackBase),
+	})
+	if err != nil {
+		log.Printf("Plaid link token error: %v", err)
+		json.NewEncoder(w).Encode(map[string]interface{}{"error": err.Error()})
+		return
+	}
+
+	linkToken, _ := result["link_token"].(string)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"link_token": linkToken,
+		"expiration": result["expiration"],
+	})
+}
+
+// POST /v1/plaid/exchange — exchange public_token for access_token, store as integration
+func (s *Server) handlePlaidExchange(w http.ResponseWriter, r *http.Request) {
+	cors(w)
+	if r.Method == "OPTIONS" {
+		w.WriteHeader(200)
+		return
+	}
+	if r.Method != "POST" {
+		http.Error(w, `{"error":"POST only"}`, 405)
+		return
+	}
+
+	var body struct {
+		PublicToken string `json:"public_token"`
+		Institution struct {
+			ID   string `json:"institution_id"`
+			Name string `json:"name"`
+		} `json:"institution"`
+		Accounts []struct {
+			ID      string `json:"id"`
+			Name    string `json:"name"`
+			Mask    string `json:"mask"`
+			Type    string `json:"type"`
+			Subtype string `json:"subtype"`
+		} `json:"accounts"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, `{"error":"invalid json"}`, 400)
+		return
+	}
+
+	if body.PublicToken == "" {
+		http.Error(w, `{"error":"public_token required"}`, 400)
+		return
+	}
+
+	// Exchange public_token → access_token
+	result, err := plaidRequest("/item/public_token/exchange", map[string]interface{}{
+		"client_id":    plaidClientID,
+		"secret":       plaidSecret,
+		"public_token": body.PublicToken,
+	})
+	if err != nil {
+		log.Printf("Plaid exchange error: %v", err)
+		json.NewEncoder(w).Encode(map[string]interface{}{"error": err.Error()})
+		return
+	}
+
+	accessToken, _ := result["access_token"].(string)
+	itemID, _ := result["item_id"].(string)
+
+	if accessToken == "" {
+		json.NewEncoder(w).Encode(map[string]interface{}{"error": "No access token received"})
+		return
+	}
+
+	// Build display name from institution + accounts
+	displayName := body.Institution.Name
+	if len(body.Accounts) > 0 {
+		acctNames := []string{}
+		for _, a := range body.Accounts {
+			name := a.Name
+			if a.Mask != "" {
+				name = fmt.Sprintf("%s ••%s", a.Name, a.Mask)
+			}
+			acctNames = append(acctNames, name)
+		}
+		displayName = fmt.Sprintf("%s (%s)", body.Institution.Name, strings.Join(acctNames, ", "))
+	}
+
+	// Build config with account IDs for polling
+	acctIDs := []string{}
+	for _, a := range body.Accounts {
+		acctIDs = append(acctIDs, a.ID)
+	}
+	config := map[string]interface{}{
+		"institution_id":   body.Institution.ID,
+		"institution_name": body.Institution.Name,
+		"account_ids":      acctIDs,
+		"item_id":          itemID,
+	}
+	configJSON, _ := json.Marshal(config)
+
+	// Encrypt access_token
+	tokenJSON, _ := json.Marshal(map[string]string{"access_token": accessToken, "item_id": itemID})
+	encrypted, nonce, err := s.encryptCredential(tokenJSON)
+	if err != nil {
+		json.NewEncoder(w).Encode(map[string]interface{}{"error": "Encryption failed"})
+		return
+	}
+
+	// Store integration
+	id := fmt.Sprintf("int-%d", time.Now().UnixNano())
+	now := time.Now().UTC().Format(time.RFC3339)
+	nextPoll := time.Now().Add(30 * time.Minute).UTC().Format(time.RFC3339)
+
+	s.mu.Lock()
+	s.db.Exec(`INSERT INTO integrations (id, user_id, provider, auth_type, encrypted_data, nonce,
+		display_name, poll_interval_seconds, config, created_at, updated_at, next_poll_at, sensitivity)
+		VALUES (?, 'default', 'plaid', 'plaid', ?, ?, ?, 1800, ?, ?, ?, ?, 'sensitive')`,
+		id, encrypted, nonce, displayName, string(configJSON), now, now, nextPoll)
+	s.mu.Unlock()
+
+	log.Printf("Plaid: connected %s (%s), %d accounts, integration %s", body.Institution.Name, itemID, len(body.Accounts), id)
+
+	// Immediately poll for recent transactions
+	go s.pollPlaid(id, accessToken, string(configJSON), "")
+
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"ok":          true,
+		"id":          id,
+		"institution": body.Institution.Name,
+		"accounts":    len(body.Accounts),
+	})
+}
+
+// pollPlaid fetches recent transactions and creates scoreboard events
+func (s *Server) pollPlaid(integrationID, accessToken, configJSON, lastPoll string) error {
+	if plaidClientID == "" || plaidSecret == "" || accessToken == "" {
+		return fmt.Errorf("plaid not configured or no access token")
+	}
+
+	// Date range: last poll to now (or last 30 days on first poll)
+	endDate := time.Now().Format("2006-01-02")
+	startDate := time.Now().AddDate(0, 0, -7).Format("2006-01-02") // Last 7 days
+	if lastPoll != "" {
+		if t, err := time.Parse(time.RFC3339, lastPoll); err == nil {
+			startDate = t.Format("2006-01-02")
+		}
+	}
+
+	result, err := plaidRequest("/transactions/get", map[string]interface{}{
+		"client_id":    plaidClientID,
+		"secret":       plaidSecret,
+		"access_token": accessToken,
+		"start_date":   startDate,
+		"end_date":     endDate,
+		"options":      map[string]int{"count": 100, "offset": 0},
+	})
+	if err != nil {
+		return fmt.Errorf("plaid transactions: %w", err)
+	}
+
+	// Parse accounts for balance info
+	accounts, _ := result["accounts"].([]interface{})
+	for _, acctRaw := range accounts {
+		acct, ok := acctRaw.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		balances, _ := acct["balances"].(map[string]interface{})
+		current, _ := balances["current"].(float64)
+		available, _ := balances["available"].(float64)
+		name, _ := acct["name"].(string)
+		mask, _ := acct["mask"].(string)
+
+		// Store balance snapshot as a metadata update (not a scored event)
+		balMeta, _ := json.Marshal(map[string]interface{}{
+			"account":   name,
+			"mask":      mask,
+			"current":   current,
+			"available": available,
+			"source":    "plaid",
+			"timestamp": time.Now().UTC().Format(time.RFC3339),
+		})
+		_ = balMeta // balance metadata logged above
+		s.mu.Lock()
+		s.db.Exec(`UPDATE integrations SET last_used_at=?,
+			config=json_set(config, '$.balance_current', ?, '$.balance_available', ?, '$.balance_account', ?)
+			WHERE id=?`,
+			time.Now().UTC().Format(time.RFC3339), current, available, name+" ••"+mask, integrationID)
+		s.mu.Unlock()
+
+		log.Printf("Plaid: %s ••%s balance: $%.2f current, $%.2f available", name, mask, current, available)
+	}
+
+	// Parse transactions → revenue events
+	transactions, _ := result["transactions"].([]interface{})
+	newCount := 0
+	for _, txnRaw := range transactions {
+		txn, ok := txnRaw.(map[string]interface{})
+		if !ok {
+			continue
+		}
+
+		amount, _ := txn["amount"].(float64)
+		txnName, _ := txn["name"].(string)
+		txnDate, _ := txn["date"].(string)
+		txnID, _ := txn["transaction_id"].(string)
+		merchantName, _ := txn["merchant_name"].(string)
+		category, _ := txn["category"].([]interface{})
+
+		// Plaid amounts: positive = money leaving (expense), negative = money coming in (income)
+		// We want income events (negative amounts = deposits/payments received)
+		isIncome := amount < 0
+		absAmount := math.Abs(amount)
+
+		// Skip tiny transactions
+		if absAmount < 1.0 {
+			continue
+		}
+
+		// Check for duplicate
+		evtID := fmt.Sprintf("evt-plaid-%s", txnID)
+		var exists int
+		s.db.QueryRow("SELECT COUNT(*) FROM events WHERE id=?", evtID).Scan(&exists)
+		if exists > 0 {
+			continue
+		}
+
+		var evtType, lane, title string
+		var scoreDelta int
+		catStr := ""
+		if len(category) > 0 {
+			cats := []string{}
+			for _, c := range category {
+				if cs, ok := c.(string); ok {
+					cats = append(cats, cs)
+				}
+			}
+			catStr = strings.Join(cats, "/")
+		}
+
+		displayName := txnName
+		if merchantName != "" {
+			displayName = merchantName
+		}
+
+		if isIncome {
+			evtType = "PAYMENT_RECEIVED"
+			lane = "revenue"
+			title = fmt.Sprintf("🏦 Deposit: $%.2f — %s", absAmount, displayName)
+			scoreDelta = 5
+			if absAmount >= 500 {
+				scoreDelta = 8
+			}
+			if absAmount >= 2000 {
+				scoreDelta = 10
+			}
+		} else {
+			// Expense — track but don't score positively
+			evtType = "EXPENSE"
+			lane = "revenue"
+			title = fmt.Sprintf("💸 Expense: $%.2f — %s", absAmount, displayName)
+			scoreDelta = 0 // Expenses don't add score, but are visible
+		}
+
+		meta, _ := json.Marshal(map[string]interface{}{
+			"amount":        absAmount,
+			"is_income":     isIncome,
+			"merchant":      merchantName,
+			"category":      catStr,
+			"transaction_id": txnID,
+			"plaid_source":  true,
+		})
+
+		now := time.Now().UTC().Format(time.RFC3339)
+		txnTimestamp := txnDate + "T12:00:00Z" // Plaid dates are date-only
+
+		s.mu.Lock()
+		s.db.Exec(`INSERT INTO events (id, event_type, lane, source, timestamp,
+			artifact_title, confidence, verifiers, verification_level,
+			score_delta, metadata, created_at, status)
+			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			evtID, evtType, lane, "plaid", txnTimestamp,
+			title, 0.95, `["plaid_api"]`, "STRONG",
+			scoreDelta, string(meta), now, "approved")
+		s.mu.Unlock()
+
+		pubTime, _ := time.Parse("2006-01-02", txnDate)
+		if !pubTime.IsZero() {
+			s.updateDailyScore(pubTime.Format("2006-01-02"))
+		}
+		newCount++
+	}
+
+	if newCount > 0 {
+		log.Printf("Plaid: %d new transactions from integration %s", newCount, integrationID)
+	}
+	return nil
+}
+
 // ─── OAuth Flow (Provider Authorization) ────────────────────────────────
 // Handles OAuth initiation and callback for Stripe, GitHub, Google/YouTube.
 // OAuth app credentials stored as env vars:
@@ -3526,8 +3904,12 @@ func (s *Server) pollDueIntegrations() {
 		switch provider {
 		case "rss", "blog_rss", "podcast_rss":
 			pollErr = s.pollRSS(id, credential, lastPoll)
-		case "youtube":
+		case "youtube", "youtube_key":
 			pollErr = s.pollYouTube(id, credential, config, lastPoll)
+		case "plaid":
+			var creds map[string]string
+			json.Unmarshal([]byte(credential), &creds)
+			pollErr = s.pollPlaid(id, creds["access_token"], config, lastPoll)
 		default:
 			log.Printf("Poller: unknown provider %s for integration %s", provider, id)
 		}
