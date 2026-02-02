@@ -765,9 +765,12 @@ func (s *Server) recalcSeason() {
 type AuthContext struct {
 	Authenticated bool
 	UserID        int
+	Username      string
 	Email         string
 	Tier          string // "free", "freewire", "wire", "extrawire", "operator"
 	TierLevel     int    // 0-3, or 99 for operator
+	IsAdmin       bool   // WordPress administrator per bigpicture.mdx
+	Roles         []string
 }
 
 func contextKey(key string) string { return "auth." + key }
@@ -826,10 +829,13 @@ func verifyRingLeaderJWT(token string) (AuthContext, bool) {
 	var payload struct {
 		Exp  int64 `json:"exp"`
 		Data struct {
-			UserID    int    `json:"user_id"`
-			Email     string `json:"email"`
-			Tier      string `json:"tier"`
-			TierLevel int    `json:"tier_level"`
+			UserID    int      `json:"user_id"`
+			Username  string   `json:"username"`
+			Email     string   `json:"email"`
+			Tier      string   `json:"tier"`
+			TierLevel int      `json:"tier_level"`
+			IsAdmin   bool     `json:"is_admin"`
+			Roles     []string `json:"roles"`
 		} `json:"data"`
 	}
 	if json.Unmarshal(payloadBytes, &payload) != nil {
@@ -847,12 +853,21 @@ func verifyRingLeaderJWT(token string) (AuthContext, bool) {
 	}
 	tierLevel := payload.Data.TierLevel
 
+	// Per bigpicture.mdx: "WordPress Admin? → Allow All Access"
+	// Admin gets operator-equivalent tier level
+	if payload.Data.IsAdmin {
+		tierLevel = 99
+	}
+
 	return AuthContext{
 		Authenticated: true,
 		UserID:        payload.Data.UserID,
+		Username:      payload.Data.Username,
 		Email:         payload.Data.Email,
 		Tier:          tier,
 		TierLevel:     tierLevel,
+		IsAdmin:       payload.Data.IsAdmin,
+		Roles:         payload.Data.Roles,
 	}, true
 }
 
