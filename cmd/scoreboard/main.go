@@ -198,9 +198,139 @@ type FeedItem struct {
 // ─── Server ─────────────────────────────────────────────────────────────────
 
 type Server struct {
-	db     *sql.DB
-	mu     sync.RWMutex
-	season Season
+	db       *sql.DB
+	mu       sync.RWMutex
+	season   Season
+	tenantID string // empty = operator (default), otherwise randID
+}
+
+// ─── Tenant Manager ─────────────────────────────────────────────────────────
+
+type TenantManager struct {
+	mu       sync.RWMutex
+	tenants  map[string]*Server // randID → Server
+	basePath string
+}
+
+type TenantInfo struct {
+	TenantID  string `json:"tenant_id"`
+	UserID    int    `json:"user_id,omitempty"`
+	Tier      string `json:"tier,omitempty"`
+	CreatedAt string `json:"created_at"`
+	Active    bool   `json:"active"`
+	DBPath    string `json:"db_path,omitempty"`
+}
+
+func NewTenantManager(basePath string) *TenantManager {
+	os.MkdirAll(basePath+"/tenants", 0750)
+	tm := &TenantManager{
+		tenants:  make(map[string]*Server),
+		basePath: basePath,
+	}
+	// Load existing tenants from disk
+	tm.loadExisting()
+	return tm
+}
+
+func (tm *TenantManager) loadExisting() {
+	entries, err := os.ReadDir(tm.basePath + "/tenants")
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		if e.IsDir() {
+			tid := e.Name()
+			infoPath := fmt.Sprintf("%s/tenants/%s/info.json", tm.basePath, tid)
+			if _, err := os.Stat(infoPath); err == nil {
+				// Load tenant lazily on first request
+				log.Printf("Found tenant: %s", tid)
+			}
+		}
+	}
+}
+
+func (tm *TenantManager) GetOrCreate(tenantID string) (*Server, error) {
+	tm.mu.RLock()
+	if s, ok := tm.tenants[tenantID]; ok {
+		tm.mu.RUnlock()
+		return s, nil
+	}
+	tm.mu.RUnlock()
+
+	tm.mu.Lock()
+	defer tm.mu.Unlock()
+
+	// Double-check after acquiring write lock
+	if s, ok := tm.tenants[tenantID]; ok {
+		return s, nil
+	}
+
+	tenantDir := fmt.Sprintf("%s/tenants/%s", tm.basePath, tenantID)
+	os.MkdirAll(tenantDir, 0750)
+
+	dbFile := tenantDir + "/events.db"
+	db, err := sql.Open("sqlite3", dbFile+"?_journal_mode=WAL")
+	if err != nil {
+		return nil, fmt.Errorf("open tenant db: %w", err)
+	}
+
+	s := &Server{db: db, tenantID: tenantID}
+	s.initDB()
+	s.loadSeason()
+	tm.tenants[tenantID] = s
+
+	log.Printf("Loaded tenant: %s (db: %s)", tenantID, dbFile)
+	return s, nil
+}
+
+func (tm *TenantManager) Provision(tenantID string, userID int, tier string) (*TenantInfo, error) {
+	tenantDir := fmt.Sprintf("%s/tenants/%s", tm.basePath, tenantID)
+	os.MkdirAll(tenantDir, 0750)
+
+	info := &TenantInfo{
+		TenantID:  tenantID,
+		UserID:    userID,
+		Tier:      tier,
+		CreatedAt: time.Now().UTC().Format(time.RFC3339),
+		Active:    true,
+		DBPath:    tenantDir + "/events.db",
+	}
+
+	// Write info.json
+	data, _ := json.MarshalIndent(info, "", "  ")
+	if err := os.WriteFile(tenantDir+"/info.json", data, 0640); err != nil {
+		return nil, err
+	}
+
+	// Ensure DB is initialized
+	if _, err := tm.GetOrCreate(tenantID); err != nil {
+		return nil, err
+	}
+
+	return info, nil
+}
+
+func (tm *TenantManager) List() []TenantInfo {
+	entries, err := os.ReadDir(tm.basePath + "/tenants")
+	if err != nil {
+		return nil
+	}
+	var result []TenantInfo
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		infoPath := fmt.Sprintf("%s/tenants/%s/info.json", tm.basePath, e.Name())
+		data, err := os.ReadFile(infoPath)
+		if err != nil {
+			continue
+		}
+		var info TenantInfo
+		if err := json.Unmarshal(data, &info); err == nil {
+			result = append(result, info)
+		}
+	}
+	return result
 }
 
 func main() {
@@ -268,8 +398,145 @@ func main() {
 	// Start integration poller
 	s.startPoller()
 
-	log.Printf("Scoreboard listening on %s", listenAddr)
-	log.Fatal(http.ListenAndServe(listenAddr, mux))
+	// ─── Tenant Manager ─────────────────────────────────────────────
+	tm := NewTenantManager("/data/wirebot/scoreboard")
+
+	// Tenant provisioning (called by Ring Leader)
+	mux.HandleFunc("/v1/tenants", func(w http.ResponseWriter, r *http.Request) {
+		cors(w)
+		if r.Method == "OPTIONS" {
+			return
+		}
+		// Auth: accept operator token or Ring Leader JWT secret
+		auth := r.Header.Get("Authorization")
+		token := strings.TrimPrefix(auth, "Bearer ")
+		if token != authToken {
+			http.Error(w, `{"error":"unauthorized"}`, 401)
+			return
+		}
+
+		switch r.Method {
+		case "POST":
+			var req struct {
+				TenantID  string `json:"tenant_id"`
+				UserID    int    `json:"user_id"`
+				Tier      string `json:"tier"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				http.Error(w, `{"error":"invalid json"}`, 400)
+				return
+			}
+			if req.TenantID == "" {
+				http.Error(w, `{"error":"tenant_id required"}`, 400)
+				return
+			}
+			info, err := tm.Provision(req.TenantID, req.UserID, req.Tier)
+			if err != nil {
+				http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err), 500)
+				return
+			}
+			w.WriteHeader(201)
+			json.NewEncoder(w).Encode(info)
+
+		case "GET":
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"tenants": tm.List(),
+			})
+
+		default:
+			http.Error(w, `{"error":"method not allowed"}`, 405)
+		}
+	})
+
+	// ─── Tenant-scoped route multiplexer ────────────────────────────
+	// Routes: /{randID}/v1/scoreboard (public view-only)
+	//         /{randID}/v1/... (write requires ?key= or Bearer token)
+	// The SPA is also served at /{randID}/ with the tenant context
+
+	topHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		path := r.URL.Path
+
+		// Skip known top-level paths — route to operator's mux
+		if strings.HasPrefix(path, "/v1/") || strings.HasPrefix(path, "/health") ||
+			path == "/" || strings.Contains(path, ".") {
+			mux.ServeHTTP(w, r)
+			return
+		}
+
+		// Extract potential tenant ID: /{randID}/...
+		parts := strings.SplitN(strings.TrimPrefix(path, "/"), "/", 2)
+		if len(parts) == 0 {
+			mux.ServeHTTP(w, r)
+			return
+		}
+
+		tenantID := parts[0]
+		subPath := "/"
+		if len(parts) > 1 {
+			subPath = "/" + parts[1]
+		}
+
+		// Validate tenant exists
+		tenantServer, err := tm.GetOrCreate(tenantID)
+		if err != nil {
+			// Not a valid tenant — fall back to SPA
+			mux.ServeHTTP(w, r)
+			return
+		}
+
+		// Check if info.json exists (provisioned)
+		infoPath := fmt.Sprintf("/data/wirebot/scoreboard/tenants/%s/info.json", tenantID)
+		if _, err := os.Stat(infoPath); err != nil {
+			mux.ServeHTTP(w, r)
+			return
+		}
+
+		// Route tenant API calls
+		if strings.HasPrefix(subPath, "/v1/") {
+			// For tenant, scoreboard view is public, everything else needs ?key=
+			if subPath == "/v1/scoreboard" || r.Method == "GET" && subPath == "/v1/feed" {
+				// Public read-only for view-only URLs
+				r.URL.Path = subPath
+				tenantMux := buildTenantMux(tenantServer)
+				tenantMux.ServeHTTP(w, r)
+				return
+			}
+			// Write access needs key param matching tenant's write token
+			// For now, accept the operator token
+			r.URL.Path = subPath
+			tenantMux := buildTenantMux(tenantServer)
+			tenantMux.ServeHTTP(w, r)
+			return
+		}
+
+		// Serve PWA for tenant
+		r.URL.Path = "/"
+		mux.ServeHTTP(w, r)
+	})
+
+	log.Printf("Scoreboard listening on %s (multi-tenant enabled)", listenAddr)
+	log.Fatal(http.ListenAndServe(listenAddr, topHandler))
+}
+
+// ─── Tenant Mux Builder ─────────────────────────────────────────────────────
+
+func buildTenantMux(s *Server) *http.ServeMux {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v1/scoreboard", s.handleScoreboard)
+	mux.HandleFunc("/v1/events", s.auth(s.handleEvents))
+	mux.HandleFunc("/v1/events/batch", s.auth(s.handleEventsBatch))
+	mux.HandleFunc("/v1/score", s.auth(s.handleScore))
+	mux.HandleFunc("/v1/feed", s.handleFeed) // Public for tenants
+	mux.HandleFunc("/v1/season", s.auth(s.handleSeason))
+	mux.HandleFunc("/v1/season/wrapped", s.auth(s.handleWrapped))
+	mux.HandleFunc("/v1/intent", s.auth(s.handleIntent))
+	mux.HandleFunc("/v1/audit", s.auth(s.handleAudit))
+	mux.HandleFunc("/v1/history", s.auth(s.handleHistory))
+	mux.HandleFunc("/v1/pending", s.auth(s.handlePending))
+	mux.HandleFunc("/v1/events/", s.auth(s.handleEventAction))
+	mux.HandleFunc("/v1/lock", s.auth(s.handleLock))
+	mux.HandleFunc("/health", s.handleHealth)
+	return mux
 }
 
 // ─── Database ───────────────────────────────────────────────────────────────

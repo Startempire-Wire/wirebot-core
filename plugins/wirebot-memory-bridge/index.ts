@@ -955,6 +955,120 @@ const wirebotMemoryBridge = {
     );
 
     // ========================================================================
+    // Tool: wirebot_score — scoreboard query & event submission
+    // ========================================================================
+
+    const scoreboardUrl = "http://127.0.0.1:8100";
+    const scoreboardToken = "65b918ba-baf5-4996-8b53-6fb0f662a0c3";
+
+    api.registerTool(
+      {
+        name: "wirebot_score",
+        description:
+          "Query the Business Performance Scoreboard — get today's score, season record, " +
+          "activity feed, streak, or submit a new event. The scoreboard tracks execution " +
+          "across 4 lanes: shipping, distribution, revenue, systems.",
+        parameters: Type.Object({
+          action: Type.Union([
+            Type.Literal("dashboard"),
+            Type.Literal("feed"),
+            Type.Literal("season"),
+            Type.Literal("intent"),
+            Type.Literal("submit"),
+          ], { description: "dashboard=score+feed, feed=recent events, season=record, intent=set/get intent, submit=new event" }),
+          // For "submit" action
+          event_type: Type.Optional(Type.String({ description: "e.g. TASK_COMPLETED, CODE_SHIPPED, REVENUE_EVENT" })),
+          lane: Type.Optional(Type.String({ description: "shipping|distribution|revenue|systems" })),
+          artifact_title: Type.Optional(Type.String({ description: "What was shipped/done" })),
+          artifact_url: Type.Optional(Type.String({ description: "URL to artifact" })),
+          source: Type.Optional(Type.String({ description: "Event source (default: wirebot)" })),
+          business_id: Type.Optional(Type.String({ description: "Business ID (STA, WIR, PHI, SEW)" })),
+          // For "intent" action
+          intent_text: Type.Optional(Type.String({ description: "Today's intent statement" })),
+        }),
+        async execute(toolCallId: string, params: Record<string, unknown>) {
+          const p = params as {
+            action: string;
+            event_type?: string;
+            lane?: string;
+            artifact_title?: string;
+            artifact_url?: string;
+            source?: string;
+            business_id?: string;
+            intent_text?: string;
+          };
+
+          const headers = {
+            "Authorization": `Bearer ${scoreboardToken}`,
+            "Content-Type": "application/json",
+          };
+
+          try {
+            switch (p.action) {
+              case "dashboard": {
+                const resp = await fetch(`${scoreboardUrl}/v1/scoreboard?mode=dashboard`, { headers });
+                const data = await resp.json();
+                return { content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }] };
+              }
+              case "feed": {
+                const resp = await fetch(`${scoreboardUrl}/v1/feed?limit=10`, { headers });
+                const data = await resp.json();
+                return { content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }] };
+              }
+              case "season": {
+                const resp = await fetch(`${scoreboardUrl}/v1/season`, { headers });
+                const data = await resp.json();
+                return { content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }] };
+              }
+              case "intent": {
+                if (p.intent_text) {
+                  const resp = await fetch(`${scoreboardUrl}/v1/intent`, {
+                    method: "POST",
+                    headers,
+                    body: JSON.stringify({ intent: p.intent_text }),
+                  });
+                  const data = await resp.json();
+                  return { content: [{ type: "text" as const, text: `Intent set: ${p.intent_text}\n${JSON.stringify(data)}` }] };
+                }
+                const resp = await fetch(`${scoreboardUrl}/v1/scoreboard`, { headers });
+                const data = await resp.json() as { intent?: string };
+                return { content: [{ type: "text" as const, text: `Current intent: ${data.intent || "(none set)"}` }] };
+              }
+              case "submit": {
+                if (!p.event_type || !p.lane) {
+                  return { content: [{ type: "text" as const, text: "❌ submit requires event_type and lane" }] };
+                }
+                const resp = await fetch(`${scoreboardUrl}/v1/events`, {
+                  method: "POST",
+                  headers,
+                  body: JSON.stringify({
+                    event_type: p.event_type,
+                    lane: p.lane,
+                    source: p.source || "wirebot",
+                    artifact_title: p.artifact_title || "",
+                    artifact_url: p.artifact_url || "",
+                    business_id: p.business_id || "",
+                    status: "pending", // Wirebot-submitted events are gated
+                  }),
+                });
+                const data = await resp.json() as { ok?: boolean; event_id?: string; status?: string; score_delta?: number };
+                if (data.ok) {
+                  return { content: [{ type: "text" as const, text: `✅ Event submitted (${data.status}): ${p.artifact_title || p.event_type} → ${p.lane} | delta: ${data.score_delta} | id: ${data.event_id}` }] };
+                }
+                return { content: [{ type: "text" as const, text: `❌ ${JSON.stringify(data)}` }] };
+              }
+              default:
+                return { content: [{ type: "text" as const, text: `❌ Unknown action: ${p.action}` }] };
+            }
+          } catch (err) {
+            return { content: [{ type: "text" as const, text: `Error querying scoreboard: ${String(err)}` }] };
+          }
+        },
+      },
+      { name: "wirebot_score" },
+    );
+
+    // ========================================================================
     // Hook: agent_end — async fact extraction to Mem0
     // ========================================================================
 
