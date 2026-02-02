@@ -19,6 +19,8 @@
   let fabLane = $state('shipping');
   let showHints = $state(false);
   let showFirstVisit = $state(false);
+  let tokenStatus = $state(null);  // null | 'ok' | 'fail'
+  let tokenMsg = $state('');
 
   const API = window.location.origin;
 
@@ -30,6 +32,43 @@
   function authHeaders() {
     const token = getToken();
     return token ? { 'Authorization': `Bearer ${token}` } : {};
+  }
+
+  async function saveToken() {
+    const input = document.getElementById('token-input');
+    const val = (input?.value || '').trim();
+    if (!val) {
+      localStorage.removeItem('wb_token');
+      tokenStatus = 'ok';
+      tokenMsg = 'Token cleared';
+      setTimeout(() => { tokenStatus = null; }, 3000);
+      return;
+    }
+
+    // Save immediately
+    localStorage.setItem('wb_token', val);
+
+    // Verify by calling a gated endpoint
+    tokenStatus = null;
+    tokenMsg = 'Verifying...';
+    try {
+      const res = await fetch(`${API}/v1/events?limit=1`, {
+        headers: { 'Authorization': `Bearer ${val}` }
+      });
+      if (res.ok) {
+        tokenStatus = 'ok';
+        tokenMsg = '✓ Connected — write features enabled';
+      } else {
+        tokenStatus = 'fail';
+        tokenMsg = `✗ Invalid token (${res.status})`;
+        localStorage.removeItem('wb_token');
+      }
+    } catch (e) {
+      tokenStatus = 'fail';
+      tokenMsg = '✗ Connection error';
+      localStorage.removeItem('wb_token');
+    }
+    setTimeout(() => { tokenStatus = null; }, 5000);
   }
 
   async function fetchAll() {
@@ -145,10 +184,17 @@
           <div class="s-hdr"><h2>⚙️ Settings</h2></div>
           <div class="s-group">
             <label>API Token</label>
-            <input type="password" value={getToken()}
-              oninput={(e) => localStorage.setItem('wb_token', e.target.value)}
-              placeholder="Paste your token to enable authenticated features" />
-            <p class="s-hint">Required for: quick-add, approve/reject, intent</p>
+            <div class="token-row">
+              <input type="password" id="token-input" value={getToken()}
+                placeholder="Paste token to enable write features" />
+              <button class="btn-save-token" onclick={saveToken}>Save</button>
+            </div>
+            {#if tokenStatus}
+              <div class="token-status" class:ok={tokenStatus === 'ok'} class:fail={tokenStatus === 'fail'}>
+                {tokenMsg}
+              </div>
+            {/if}
+            <p class="s-hint">Required for: approve/reject projects, rename, quick-add, intent</p>
           </div>
           <div class="s-group">
             <label>Season</label>
@@ -447,6 +493,24 @@
   }
   .s-group input:focus { border-color: #7c7cff; }
   .s-hint { font-size: 11px; opacity: 0.35; }
+
+  /* Token row */
+  .token-row { display: flex; gap: 8px; align-items: stretch; }
+  .token-row input { flex: 1; }
+  .btn-save-token {
+    background: #7c7cff; color: #fff; border: none; border-radius: 8px;
+    padding: 8px 18px; font-size: 13px; font-weight: 700; cursor: pointer;
+    white-space: nowrap; transition: background 0.15s;
+  }
+  .btn-save-token:active { background: #5c5cdd; }
+  .token-status {
+    font-size: 12px; padding: 6px 10px; border-radius: 6px; margin-top: 2px;
+    animation: fadeIn 0.2s ease;
+  }
+  .token-status.ok { color: #2ecc71; background: rgba(46,204,113,0.08); }
+  .token-status.fail { color: #ff4444; background: rgba(255,68,68,0.08); }
+  @keyframes fadeIn { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: translateY(0); } }
+
   .s-info { font-size: 13px; opacity: 0.6; line-height: 1.6; }
   .s-links { display: flex; gap: 8px; flex-wrap: wrap; }
   .s-links a {
