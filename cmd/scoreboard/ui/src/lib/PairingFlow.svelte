@@ -340,10 +340,15 @@
 </div>
 
 <style>
-  .flow { padding: 0 16px 80px; max-width: 500px; margin: 0 auto; }
+  .flow { padding: 0 16px 24px; max-width: 500px; margin: 0 auto; }
 
-  .flow-header { display: flex; align-items: center; gap: 8px; padding: 12px 0; }
-  .back-btn { background: none; border: none; color: #7c7cff; font-size: 14px; cursor: pointer; padding: 4px 0; }
+  .flow-header { display: flex; align-items: center; gap: 8px; padding: 16px 0 12px; }
+  .back-btn {
+    background: rgba(124,124,255,0.08); border: 1px solid rgba(124,124,255,0.15);
+    color: #7c7cff; font-size: 14px; cursor: pointer;
+    padding: 6px 12px; border-radius: 8px;
+    -webkit-tap-highlight-color: transparent;
+  }
   .flow-title { flex: 1; font-size: 16px; font-weight: 600; color: #fff; text-align: center; }
   .flow-step { font-size: 12px; color: #888; font-variant-numeric: tabular-nums; }
 

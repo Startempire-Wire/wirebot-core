@@ -1646,33 +1646,31 @@
     font-size: 12px; color: #444; margin-top: 8px;
   }
 
-  /* ── Pairing Modal (slide-up sheet) ── */
+  /* ── Pairing Modal (full-screen takeover on mobile) ── */
   .pairing-overlay {
     position: fixed; inset: 0; z-index: 1100;
-    display: flex; flex-direction: column; justify-content: flex-end;
   }
   .pairing-backdrop {
     position: absolute; inset: 0;
     background: rgba(0,0,0,0.6); backdrop-filter: blur(4px);
   }
   .pairing-sheet {
-    position: relative;
+    position: absolute; inset: 0;
     background: #0d0d1a;
-    border-top: 1px solid rgba(124,124,255,0.2);
-    border-radius: 20px 20px 0 0;
     display: flex; flex-direction: column;
-    max-height: 90dvh; min-height: 50dvh;
-    animation: pairingSlideUp 0.3s cubic-bezier(0.16, 1, 0.3, 1);
     overflow-y: auto;
-    padding-bottom: env(safe-area-inset-bottom, 0);
+    -webkit-overflow-scrolling: touch;
+    padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 16px);
+    animation: pairingFadeIn 0.25s ease-out;
   }
-  @keyframes pairingSlideUp {
-    from { transform: translateY(100%); opacity: 0.8; }
-    to { transform: translateY(0); opacity: 1; }
+  @keyframes pairingFadeIn {
+    from { opacity: 0; transform: translateY(24px); }
+    to { opacity: 1; transform: translateY(0); }
   }
   .pi-header {
     display: flex; align-items: center; justify-content: space-between;
     padding: 20px 20px 8px; flex-shrink: 0;
+    position: sticky; top: 0; background: #0d0d1a; z-index: 2;
   }
   .pi-title { font-size: 20px; font-weight: 700; color: #fff; }
   .pi-close {
