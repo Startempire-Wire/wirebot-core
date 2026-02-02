@@ -41,6 +41,7 @@
   // ── Integrations (Connected Accounts) ──
   let integrations = $state([]);
   let showConnectForm = $state(null); // provider ID being configured, or null
+  let connectBusiness = $state(''); // business_id for multi-account tagging
   let connectCred = $state('');
   let connectExtra = $state(''); // channel_id, feed URL, etc.
   let connectStatus = $state(null); // null | 'saving' | 'ok' | 'fail'
@@ -330,6 +331,7 @@
       display_name: displayName,
       credential: connectCred,
       config: '{}',
+      business_id: connectBusiness || '',
     };
 
     // Add extra fields to config
@@ -907,6 +909,9 @@
                           <div class="int-acct-row">
                             <span class="int-status-dot" class:active={acct.status === 'active'} class:error={acct.status === 'error'}></span>
                             <span class="int-acct-name">{acct.display_name || provider.name}</span>
+                            {#if acct.business_id}
+                              <span class="int-biz-tag">{acct.business_id}</span>
+                            {/if}
                             {#if acct.last_used_at}
                               <span class="int-last-poll">Synced {new Date(acct.last_used_at).toLocaleDateString()}</span>
                             {/if}
@@ -930,6 +935,15 @@
                             <code class="int-wh-code">{API}/v1/webhooks/{provider.id}</code>
                           </div>
                         {/if}
+
+                        <!-- Business selector (multi-account: which business is this for?) -->
+                        <select class="int-biz-select" bind:value={connectBusiness}>
+                          <option value="">All businesses</option>
+                          <option value="STA">Startempire Wire</option>
+                          <option value="WIR">Wirebot</option>
+                          <option value="PHI">Philoveracity</option>
+                          <option value="SEW">SEW Network</option>
+                        </select>
 
                         <input type={provider.auth === 'rss_url' ? 'url' : 'password'}
                           bind:value={connectCred}
@@ -1585,6 +1599,20 @@
     cursor: pointer; padding: 2px 4px; flex-shrink: 0;
   }
   .int-acct-remove:hover { color: #ff4444; }
+  .int-biz-tag {
+    font-size: 9px; font-weight: 700; letter-spacing: 0.05em;
+    padding: 1px 6px; border-radius: 4px;
+    background: rgba(124,124,255,0.1); color: #7c7cff;
+    flex-shrink: 0;
+  }
+  .int-biz-select {
+    width: 100%; padding: 8px 10px; border-radius: 8px;
+    background: #0d0d16; border: 1px solid #222;
+    color: #aaa; font-size: 13px; margin-bottom: 4px;
+    appearance: none; -webkit-appearance: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath d='M3 5l3 3 3-3' fill='none' stroke='%23666' stroke-width='1.5'/%3E%3C/svg%3E");
+    background-repeat: no-repeat; background-position: right 10px center;
+  }
 
   .int-action { flex-shrink: 0; }
   .int-btn {

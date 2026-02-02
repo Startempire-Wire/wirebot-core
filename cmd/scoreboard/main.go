@@ -95,6 +95,7 @@ type Integration struct {
 	PollInterval     int    `json:"poll_interval_seconds"`
 	LastUsedAt       string `json:"last_used_at,omitempty"`
 	LastError        string `json:"last_error,omitempty"`
+	BusinessID       string `json:"business_id,omitempty"`
 	CreatedAt        string `json:"created_at"`
 }
 
@@ -707,6 +708,7 @@ func (s *Server) initDB() {
 			last_poll_at TEXT DEFAULT '',
 			next_poll_at TEXT DEFAULT '',
 			config TEXT DEFAULT '{}',
+			business_id TEXT DEFAULT '',
 			created_at TEXT NOT NULL,
 			updated_at TEXT NOT NULL
 		)`,
@@ -4343,7 +4345,7 @@ func (s *Server) handleIntegrations(w http.ResponseWriter, r *http.Request) {
 		// List all integrations (metadata only, no secrets)
 		rows, err := s.db.Query(`SELECT id, user_id, provider, auth_type, display_name, scopes,
 			status, sensitivity, wirebot_visible, wirebot_detail_level, share_level,
-			poll_interval_seconds, last_used_at, last_error, created_at FROM integrations ORDER BY created_at`)
+			poll_interval_seconds, last_used_at, last_error, business_id, created_at FROM integrations ORDER BY created_at`)
 		if err != nil {
 			http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err), 500)
 			return
@@ -4354,7 +4356,7 @@ func (s *Server) handleIntegrations(w http.ResponseWriter, r *http.Request) {
 			var i Integration
 			rows.Scan(&i.ID, &i.UserID, &i.Provider, &i.AuthType, &i.DisplayName, &i.Scopes,
 				&i.Status, &i.Sensitivity, &i.WirebotVisible, &i.WirebotDetail, &i.ShareLevel,
-				&i.PollInterval, &i.LastUsedAt, &i.LastError, &i.CreatedAt)
+				&i.PollInterval, &i.LastUsedAt, &i.LastError, &i.BusinessID, &i.CreatedAt)
 			list = append(list, i)
 		}
 		if list == nil {
@@ -4372,6 +4374,7 @@ func (s *Server) handleIntegrations(w http.ResponseWriter, r *http.Request) {
 			Sensitivity string `json:"sensitivity"`
 			PollInterval int   `json:"poll_interval_seconds"`
 			Config      string `json:"config"` // provider-specific config JSON
+			BusinessID  string `json:"business_id"` // optional: which business this account belongs to
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			http.Error(w, `{"error":"invalid json"}`, 400)
@@ -4407,10 +4410,10 @@ func (s *Server) handleIntegrations(w http.ResponseWriter, r *http.Request) {
 
 		s.mu.Lock()
 		_, err = s.db.Exec(`INSERT INTO integrations (id, user_id, provider, auth_type, encrypted_data, nonce,
-			display_name, sensitivity, poll_interval_seconds, config, created_at, updated_at, next_poll_at)
-			VALUES (?, 'default', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			display_name, sensitivity, poll_interval_seconds, config, business_id, created_at, updated_at, next_poll_at)
+			VALUES (?, 'default', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			id, body.Provider, body.AuthType, encrypted, nonce,
-			body.DisplayName, sensitivity, pollInterval, config, now, now, nextPoll)
+			body.DisplayName, sensitivity, pollInterval, config, body.BusinessID, now, now, nextPoll)
 		s.mu.Unlock()
 		if err != nil {
 			http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err), 500)

@@ -107,19 +107,41 @@
     </span>
   </div>
 
-  <!-- Score -->
+  <!-- Score Ring -->
   <div class="sc {signalClass(data.signal)}">
     <div class="sc-lbl"><Tooltip concept="score">EXECUTION SCORE</Tooltip></div>
-    <div class="sc-num">{data.score}</div>
-    <div class="sc-sub"><Tooltip concept="signal">{signalLabel(data.signal)}</Tooltip></div>
+    <div class="sc-ring-wrap">
+      <svg class="sc-ring" viewBox="0 0 200 200">
+        <defs>
+          <linearGradient id="scoreGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" style="stop-color:{data.signal === 'green' ? '#00ff64' : data.signal === 'yellow' ? '#ffc800' : '#ff3232'}" />
+            <stop offset="100%" style="stop-color:{data.signal === 'green' ? '#4a9eff' : data.signal === 'yellow' ? '#ff9500' : '#ff6666'}" />
+          </linearGradient>
+          <filter id="glow">
+            <feGaussianBlur stdDeviation="3" result="blur"/>
+            <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+          </filter>
+        </defs>
+        <circle cx="100" cy="100" r="88" fill="none" stroke="#1a1a2e" stroke-width="6"/>
+        <circle cx="100" cy="100" r="88" fill="none" stroke="url(#scoreGrad)" stroke-width="6"
+          stroke-linecap="round" filter="url(#glow)"
+          stroke-dasharray="{553}" stroke-dashoffset="{553 - (553 * (data.score || 0) / 100)}"
+          transform="rotate(-90 100 100)"
+          class="sc-ring-fill"/>
+      </svg>
+      <div class="sc-ring-center">
+        <div class="sc-num">{data.score}</div>
+        <div class="sc-sub"><Tooltip concept="signal">{signalLabel(data.signal)}</Tooltip></div>
+      </div>
+    </div>
   </div>
 
-  <!-- Stats -->
+  <!-- Stats (glass cards) -->
   <div class="stats">
-    <div class="st"><span class="st-v">🔥 {data.streak?.current || 0}</span><span class="st-l"><Tooltip concept="streak" position="below">STREAK</Tooltip></span></div>
-    <div class="st"><span class="st-v">🏆 {data.streak?.best || 0}</span><span class="st-l">BEST</span></div>
-    <div class="st"><span class="st-v">{data.record || '0-0'}</span><span class="st-l"><Tooltip concept="record" position="below">W-L</Tooltip></span></div>
-    <div class="st"><span class="st-v">🚀 {data.ship_today || 0}</span><span class="st-l"><Tooltip concept="ships" position="below">SHIPS</Tooltip></span></div>
+    <div class="st glass"><span class="st-v">🔥 {data.streak?.current || 0}</span><span class="st-l"><Tooltip concept="streak" position="below">STREAK</Tooltip></span></div>
+    <div class="st glass"><span class="st-v">🏆 {data.streak?.best || 0}</span><span class="st-l">BEST</span></div>
+    <div class="st glass"><span class="st-v">{data.record || '0-0'}</span><span class="st-l"><Tooltip concept="record" position="below">W-L</Tooltip></span></div>
+    <div class="st glass"><span class="st-v">🚀 {data.ship_today || 0}</span><span class="st-l"><Tooltip concept="ships" position="below">SHIPS</Tooltip></span></div>
   </div>
 
   <!-- Possession -->
@@ -133,12 +155,12 @@
       ['REVENUE', data.lanes?.revenue || 0, data.lanes?.revenue_max || 20, '#2ecc71'],
       ['SYSTEMS', data.lanes?.systems || 0, data.lanes?.systems_max || 15, '#e67e22'],
     ] as [name, val, max, color]}
-      <div class="ln">
+      <div class="ln" class:ln-maxed={val >= max}>
         <span class="ln-n">{name}</span>
         <div class="ln-track">
-          <div class="ln-fill" style="width:{lanePct(val, max)}%; background:{color}"></div>
+          <div class="ln-fill" style="width:{lanePct(val, max)}%; background:{color};{val >= max ? `box-shadow: 0 0 12px ${color}40, 0 0 4px ${color}60;` : ''}"></div>
         </div>
-        <span class="ln-v">{val}<span class="ln-max">/{max}</span></span>
+        <span class="ln-v">{val}{#if val >= max}<span class="ln-max-badge">MAX</span>{:else}<span class="ln-max">/{max}</span>{/if}</span>
       </div>
     {/each}
   </div>
@@ -216,7 +238,12 @@
     padding-top: max(12px, env(safe-area-inset-top));
     gap: 10px;
     min-height: calc(100dvh - 56px);
-    background: linear-gradient(180deg, #0a0a1a 0%, #0d0d20 50%, #0a0a1a 100%);
+    background: linear-gradient(180deg, #0a0a12 0%, #0d0d22 40%, #0a0a18 100%);
+    animation: fadeInUp 0.4s ease-out;
+  }
+  @keyframes fadeInUp {
+    from { opacity: 0; transform: translateY(12px); }
+    to { opacity: 1; transform: translateY(0); }
   }
 
   /* Stall Alert */
@@ -299,47 +326,88 @@
     flex-shrink: 0;
   }
 
-  /* Score */
-  .sc { text-align: center; padding: 12px 0; border-radius: 12px; }
-  .sc-lbl { font-size: 10px; letter-spacing: .3em; opacity: .5; }
-  .sc-num { font-size: 80px; font-weight: 900; line-height: 1; font-variant-numeric: tabular-nums; }
-  .sc-sub { font-size: 13px; letter-spacing: .25em; margin-top: 4px; }
+  /* Score Ring */
+  .sc { text-align: center; padding: 8px 0; border-radius: 16px; position: relative; }
+  .sc-lbl { font-size: 10px; letter-spacing: .3em; opacity: .5; margin-bottom: 4px; }
+  .sc-ring-wrap { position: relative; width: 200px; height: 200px; margin: 0 auto; }
+  .sc-ring { width: 100%; height: 100%; }
+  .sc-ring-fill { transition: stroke-dashoffset 1.5s cubic-bezier(0.4, 0, 0.2, 1); }
+  .sc-ring-center {
+    position: absolute; inset: 0;
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+  }
+  .sc-num { font-size: 64px; font-weight: 900; line-height: 1; font-variant-numeric: tabular-nums; }
+  .sc-sub { font-size: 12px; letter-spacing: .25em; margin-top: 2px; }
 
-  .sig-g { background: rgba(0,255,100,.06); }
-  .sig-g .sc-num { color: #00ff64; text-shadow: 0 0 30px rgba(0,255,100,.2); }
+  .sig-g { background: radial-gradient(ellipse at 50% 30%, rgba(0,255,100,.08) 0%, transparent 70%); }
+  .sig-g .sc-num { color: #00ff64; text-shadow: 0 0 40px rgba(0,255,100,.3), 0 0 80px rgba(0,255,100,.1); }
   .sig-g .sc-sub { color: #00cc50; }
-  .sig-y { background: rgba(255,200,0,.06); }
-  .sig-y .sc-num { color: #ffc800; text-shadow: 0 0 30px rgba(255,200,0,.2); }
+  .sig-y { background: radial-gradient(ellipse at 50% 30%, rgba(255,200,0,.08) 0%, transparent 70%); }
+  .sig-y .sc-num { color: #ffc800; text-shadow: 0 0 40px rgba(255,200,0,.3), 0 0 80px rgba(255,200,0,.1); }
   .sig-y .sc-sub { color: #cc9900; }
-  .sig-r { background: rgba(255,50,50,.06); }
-  .sig-r .sc-num { color: #ff3232; text-shadow: 0 0 30px rgba(255,50,50,.2); animation: pulse 2s infinite; }
+  .sig-r { background: radial-gradient(ellipse at 50% 30%, rgba(255,50,50,.08) 0%, transparent 70%); }
+  .sig-r .sc-num { color: #ff3232; text-shadow: 0 0 40px rgba(255,50,50,.3), 0 0 80px rgba(255,50,50,.1); animation: pulse 2s infinite; }
   .sig-r .sc-sub { color: #cc2020; }
   @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.6} }
 
-  /* Stats */
+  /* Stats — glassmorphism cards */
   .stats {
     display: grid;
     grid-template-columns: repeat(4, 1fr);
-    gap: 4px;
-    border-top: 1px solid #1e1e30;
-    border-bottom: 1px solid #1e1e30;
-    padding: 8px 0;
+    gap: 6px;
+    padding: 6px 0;
   }
-  .st { text-align: center; }
+  .st {
+    text-align: center;
+    padding: 8px 4px;
+    border-radius: 12px;
+    transition: transform 0.2s, box-shadow 0.3s;
+  }
+  .st.glass {
+    background: rgba(255,255,255,0.03);
+    border: 1px solid rgba(255,255,255,0.06);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+  }
+  .st:active { transform: scale(0.95); }
   .st-v { display: block; font-size: 15px; font-weight: 700; white-space: nowrap; }
-  .st-l { display: block; font-size: 8px; letter-spacing: .1em; opacity: .35; margin-top: 1px; }
+  .st-l { display: block; font-size: 8px; letter-spacing: .1em; opacity: .35; margin-top: 2px; }
 
   .pos { text-align: center; font-size: 12px; color: #888; }
   .pos strong { color: #7c7cff; font-size: 16px; }
 
   /* Lanes */
   .lanes { display: flex; flex-direction: column; gap: 8px; }
-  .ln { display: flex; align-items: center; gap: 8px; }
-  .ln-n { font-size: 10px; width: 56px; opacity: .45; flex-shrink: 0; }
-  .ln-track { flex: 1; height: 10px; background: #1a1a2e; border-radius: 5px; overflow: hidden; }
-  .ln-fill { height: 100%; border-radius: 5px; transition: width .8s ease; min-width: 2px; }
+  .ln {
+    display: flex; align-items: center; gap: 8px;
+    transition: transform 0.2s;
+  }
+  .ln:active { transform: translateX(4px); }
+  .ln-n { font-size: 10px; width: 56px; opacity: .45; flex-shrink: 0; letter-spacing: 0.05em; }
+  .ln-track {
+    flex: 1; height: 10px; border-radius: 5px; overflow: hidden;
+    background: rgba(255,255,255,0.04);
+    border: 1px solid rgba(255,255,255,0.03);
+  }
+  .ln-fill {
+    height: 100%; border-radius: 5px;
+    transition: width 1s cubic-bezier(0.4, 0, 0.2, 1);
+    min-width: 2px;
+  }
   .ln-v { font-size: 12px; font-variant-numeric: tabular-nums; opacity: .6; min-width: 40px; text-align: right; flex-shrink: 0; }
   .ln-max { opacity: .4; font-size: 10px; }
+  .ln-maxed .ln-n { opacity: .8; font-weight: 600; }
+  .ln-max-badge {
+    font-size: 8px; font-weight: 800; letter-spacing: 0.1em;
+    color: #00ff64; opacity: 0.8;
+    margin-left: 2px;
+    animation: maxGlow 2s infinite;
+  }
+  @keyframes maxGlow {
+    0%, 100% { text-shadow: 0 0 4px rgba(0,255,100,0.4); }
+    50% { text-shadow: 0 0 8px rgba(0,255,100,0.8); }
+  }
 
   /* Modifiers */
   .mods { display: flex; justify-content: center; gap: 12px; font-size: 11px; }
@@ -350,15 +418,26 @@
   .ls { text-align: center; font-size: 11px; color: #4a9eff; opacity: .65; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
   .pairing-cta {
-    display: flex; align-items: center; gap: 8px;
-    width: 100%; padding: 10px 14px; margin: 8px 0;
-    background: rgba(124,124,255,0.06); border: 1px solid rgba(124,124,255,0.15);
-    border-radius: 10px; cursor: pointer; -webkit-tap-highlight-color: transparent;
+    display: flex; align-items: center; gap: 10px;
+    width: 100%; padding: 12px 16px; margin: 8px 0;
+    background: linear-gradient(135deg, rgba(124,124,255,0.08), rgba(255,124,255,0.04));
+    border: 1px solid rgba(124,124,255,0.2);
+    border-radius: 14px; cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+    position: relative; overflow: hidden;
+    transition: all 0.3s;
   }
-  .pairing-cta:active { background: rgba(124,124,255,0.12); }
-  .pc-icon { font-size: 16px; }
-  .pc-text { flex: 1; font-size: 13px; color: #7c7cff; text-align: left; font-weight: 500; }
-  .pc-arrow { font-size: 14px; color: #7c7cff; opacity: 0.5; }
+  .pairing-cta::before {
+    content: ''; position: absolute; inset: 0;
+    background: linear-gradient(135deg, rgba(124,124,255,0.1), rgba(255,124,255,0.05));
+    opacity: 0; transition: opacity 0.3s;
+  }
+  .pairing-cta:active::before { opacity: 1; }
+  .pairing-cta:active { transform: scale(0.98); }
+  .pc-icon { font-size: 18px; }
+  .pc-text { flex: 1; font-size: 13px; color: #9b9bff; text-align: left; font-weight: 600; letter-spacing: 0.02em; }
+  .pc-arrow { font-size: 14px; color: #7c7cff; opacity: 0.5; transition: transform 0.2s; }
+  .pairing-cta:active .pc-arrow { transform: translateX(4px); }
 
   /* Clocks */
   .clk { display: flex; flex-direction: column; gap: 5px; margin-top: auto; padding-top: 8px; border-top: 1px solid #1e1e30; }
@@ -373,14 +452,16 @@
 
   @media (min-width: 600px) {
     .score-view { padding: 20px 32px; gap: 14px; }
-    .sc-num { font-size: 120px; }
+    .sc-ring-wrap { width: 260px; height: 260px; }
+    .sc-num { font-size: 80px; }
     .st-v { font-size: 18px; }
     .ln-track { height: 14px; }
   }
 
   @media (min-width: 1024px) {
     .score-view { padding: 3vh 5vw; gap: 2vh; font-family: 'SF Mono', monospace; }
-    .sc-num { font-size: 16vh; }
+    .sc-ring-wrap { width: 320px; height: 320px; }
+    .sc-num { font-size: 10vh; }
     .st-v { font-size: 3vh; }
   }
 </style>
