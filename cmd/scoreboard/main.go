@@ -418,6 +418,9 @@ func main() {
 
 	// Wirebot chat proxy — full conversations with memory retention
 	mux.HandleFunc("/v1/chat", s.auth(s.handleChat))
+	mux.HandleFunc("/v1/chat/sessions", s.auth(s.handleChatSessions))
+	mux.HandleFunc("/v1/chat/sessions/", s.auth(s.handleChatSession))
+	mux.HandleFunc("/v1/pairing/status", s.authMember(s.handlePairingStatus))
 
 	// Integrations management
 	mux.HandleFunc("/v1/integrations", s.auth(s.handleIntegrations))
@@ -690,6 +693,23 @@ func (s *Server) initDB() {
 		// Verification level migration on events
 		`ALTER TABLE events ADD COLUMN verification_level TEXT DEFAULT 'SELF_REPORTED'`,
 		// Project-level approval: approve/reject entire repos, remembered across sessions
+		`CREATE TABLE IF NOT EXISTS chat_sessions (
+			id TEXT PRIMARY KEY,
+			user_id TEXT NOT NULL DEFAULT 'operator',
+			title TEXT NOT NULL DEFAULT 'New Chat',
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL,
+			message_count INTEGER DEFAULT 0,
+			pinned BOOLEAN DEFAULT 0
+		)`,
+		`CREATE TABLE IF NOT EXISTS chat_messages (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			session_id TEXT NOT NULL,
+			role TEXT NOT NULL,
+			content TEXT NOT NULL,
+			created_at TEXT NOT NULL,
+			FOREIGN KEY (session_id) REFERENCES chat_sessions(id)
+		)`,
 		`CREATE TABLE IF NOT EXISTS projects (
 			name TEXT PRIMARY KEY,
 			path TEXT NOT NULL DEFAULT '',
@@ -3626,7 +3646,8 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 			Role    string `json:"role"`
 			Content string `json:"content"`
 		} `json:"messages"`
-		Stream bool `json:"stream,omitempty"`
+		SessionID string `json:"session_id,omitempty"`
+		Stream    bool   `json:"stream,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, `{"error":"Invalid request body"}`, 400)
@@ -3635,6 +3656,13 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	if len(req.Messages) == 0 {
 		http.Error(w, `{"error":"messages required"}`, 400)
 		return
+	}
+
+	// Persist session + save user message
+	sessionID := s.getOrCreateSession(userID, req.SessionID)
+	lastMsg := req.Messages[len(req.Messages)-1]
+	if lastMsg.Role == "user" {
+		s.saveMessage(sessionID, "user", lastMsg.Content)
 	}
 
 	// Build proxy request to OpenClaw
@@ -3647,7 +3675,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 
 	proxyBody := map[string]interface{}{
 		"messages":   req.Messages,
-		"user":       "scoreboard:" + userID, // stable session key
+		"user":       "scoreboard:" + userID + ":" + sessionID, // stable per-session key
 		"max_tokens": 2048,
 	}
 	if req.Stream {
@@ -3666,7 +3694,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	client := &http.Client{Timeout: 120 * time.Second}
 
 	if req.Stream {
-		// SSE streaming — pipe through directly
+		// SSE streaming — pipe through and capture full response for persistence
 		proxyResp, err := client.Do(proxyReq)
 		if err != nil {
 			http.Error(w, `{"error":"Gateway unavailable"}`, 502)
@@ -3674,6 +3702,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		}
 		defer proxyResp.Body.Close()
 
+		// Prepend session_id as first SSE event
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.Header().Set("Cache-Control", "no-cache")
 		w.Header().Set("Connection", "keep-alive")
@@ -3681,18 +3710,40 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(proxyResp.StatusCode)
 
 		flusher, ok := w.(http.Flusher)
+		// Send session_id as custom event
+		fmt.Fprintf(w, "event: session\ndata: %s\n\n", sessionID)
+		if ok { flusher.Flush() }
+
+		var fullResponse strings.Builder
 		buf := make([]byte, 4096)
 		for {
 			n, readErr := proxyResp.Body.Read(buf)
 			if n > 0 {
+				chunk := string(buf[:n])
 				w.Write(buf[:n])
-				if ok {
-					flusher.Flush()
+				if ok { flusher.Flush() }
+
+				// Extract content deltas for persistence
+				for _, line := range strings.Split(chunk, "\n") {
+					if !strings.HasPrefix(line, "data: ") { continue }
+					payload := strings.TrimPrefix(line, "data: ")
+					if payload == "[DONE]" { continue }
+					var sse struct {
+						Choices []struct {
+							Delta struct { Content string `json:"content"` } `json:"delta"`
+						} `json:"choices"`
+					}
+					if json.Unmarshal([]byte(payload), &sse) == nil && len(sse.Choices) > 0 {
+						fullResponse.WriteString(sse.Choices[0].Delta.Content)
+					}
 				}
 			}
-			if readErr != nil {
-				break
-			}
+			if readErr != nil { break }
+		}
+
+		// Save assistant response
+		if resp := fullResponse.String(); resp != "" {
+			s.saveMessage(sessionID, "assistant", resp)
 		}
 	} else {
 		// Non-streaming — simple proxy
@@ -3704,11 +3755,238 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		defer proxyResp.Body.Close()
 
 		respBody, _ := io.ReadAll(proxyResp.Body)
+
+		// Save assistant response
+		var result struct {
+			Choices []struct {
+				Message struct { Content string `json:"content"` } `json:"message"`
+			} `json:"choices"`
+		}
+		if json.Unmarshal(respBody, &result) == nil && len(result.Choices) > 0 {
+			s.saveMessage(sessionID, "assistant", result.Choices[0].Message.Content)
+		}
+
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.WriteHeader(proxyResp.StatusCode)
 		w.Write(respBody)
 	}
+}
+
+// ─── Chat Session Persistence ───────────────────────────────────────────
+
+func generateSessionID() string {
+	b := make([]byte, 12)
+	rand.Read(b)
+	return hex.EncodeToString(b)
+}
+
+// GET /v1/chat/sessions — list sessions, POST — create
+func (s *Server) handleChatSessions(w http.ResponseWriter, r *http.Request) {
+	cors(w)
+	if r.Method == "OPTIONS" { return }
+
+	ac := resolveAuth(r)
+	userID := "operator"
+	if ac.UserID > 0 {
+		userID = fmt.Sprintf("member-%d", ac.UserID)
+	}
+
+	if r.Method == "GET" {
+		rows, err := s.db.Query(`SELECT id, title, created_at, updated_at, message_count, pinned
+			FROM chat_sessions WHERE user_id = ? ORDER BY updated_at DESC LIMIT 50`, userID)
+		if err != nil {
+			http.Error(w, `{"error":"db error"}`, 500)
+			return
+		}
+		defer rows.Close()
+
+		type SessionSummary struct {
+			ID       string `json:"id"`
+			Title    string `json:"title"`
+			Created  string `json:"created_at"`
+			Updated  string `json:"updated_at"`
+			Messages int    `json:"message_count"`
+			Pinned   bool   `json:"pinned"`
+		}
+		var sessions []SessionSummary
+		for rows.Next() {
+			var ss SessionSummary
+			rows.Scan(&ss.ID, &ss.Title, &ss.Created, &ss.Updated, &ss.Messages, &ss.Pinned)
+			sessions = append(sessions, ss)
+		}
+		if sessions == nil {
+			sessions = []SessionSummary{}
+		}
+		json.NewEncoder(w).Encode(sessions)
+		return
+	}
+
+	if r.Method == "POST" {
+		id := generateSessionID()
+		now := time.Now().UTC().Format(time.RFC3339)
+		s.db.Exec(`INSERT INTO chat_sessions (id, user_id, title, created_at, updated_at) VALUES (?, ?, ?, ?, ?)`,
+			id, userID, "New Chat", now, now)
+		json.NewEncoder(w).Encode(map[string]string{"id": id})
+		return
+	}
+
+	http.Error(w, `{"error":"method not allowed"}`, 405)
+}
+
+// GET /v1/chat/sessions/{id} — load messages, DELETE — remove
+func (s *Server) handleChatSession(w http.ResponseWriter, r *http.Request) {
+	cors(w)
+	if r.Method == "OPTIONS" { return }
+
+	// Extract session ID from path
+	parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/v1/chat/sessions/"), "/")
+	sessionID := parts[0]
+	if sessionID == "" {
+		http.Error(w, `{"error":"session id required"}`, 400)
+		return
+	}
+
+	if r.Method == "GET" {
+		type Msg struct {
+			Role    string `json:"role"`
+			Content string `json:"content"`
+			Time    string `json:"created_at"`
+		}
+		rows, err := s.db.Query(`SELECT role, content, created_at FROM chat_messages
+			WHERE session_id = ? ORDER BY id ASC`, sessionID)
+		if err != nil {
+			http.Error(w, `{"error":"db error"}`, 500)
+			return
+		}
+		defer rows.Close()
+
+		var msgs []Msg
+		for rows.Next() {
+			var m Msg
+			rows.Scan(&m.Role, &m.Content, &m.Time)
+			msgs = append(msgs, m)
+		}
+		if msgs == nil {
+			msgs = []Msg{}
+		}
+
+		// Get session metadata
+		var title string
+		var pinned bool
+		s.db.QueryRow(`SELECT title, pinned FROM chat_sessions WHERE id = ?`, sessionID).Scan(&title, &pinned)
+
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"id":       sessionID,
+			"title":    title,
+			"pinned":   pinned,
+			"messages": msgs,
+		})
+		return
+	}
+
+	if r.Method == "DELETE" {
+		s.db.Exec("DELETE FROM chat_messages WHERE session_id = ?", sessionID)
+		s.db.Exec("DELETE FROM chat_sessions WHERE id = ?", sessionID)
+		json.NewEncoder(w).Encode(map[string]string{"status": "deleted"})
+		return
+	}
+
+	if r.Method == "PATCH" {
+		var body struct {
+			Title  *string `json:"title,omitempty"`
+			Pinned *bool   `json:"pinned,omitempty"`
+		}
+		json.NewDecoder(r.Body).Decode(&body)
+		if body.Title != nil {
+			s.db.Exec("UPDATE chat_sessions SET title = ? WHERE id = ?", *body.Title, sessionID)
+		}
+		if body.Pinned != nil {
+			s.db.Exec("UPDATE chat_sessions SET pinned = ? WHERE id = ?", *body.Pinned, sessionID)
+		}
+		json.NewEncoder(w).Encode(map[string]string{"status": "updated"})
+		return
+	}
+
+	http.Error(w, `{"error":"method not allowed"}`, 405)
+}
+
+// saveMessage persists a chat message and auto-titles the session.
+func (s *Server) saveMessage(sessionID, role, content string) {
+	now := time.Now().UTC().Format(time.RFC3339)
+	s.db.Exec(`INSERT INTO chat_messages (session_id, role, content, created_at) VALUES (?, ?, ?, ?)`,
+		sessionID, role, content, now)
+	s.db.Exec(`UPDATE chat_sessions SET updated_at = ?, message_count = message_count + 1 WHERE id = ?`, now, sessionID)
+
+	// Auto-title from first user message
+	if role == "user" {
+		var count int
+		s.db.QueryRow("SELECT message_count FROM chat_sessions WHERE id = ?", sessionID).Scan(&count)
+		if count <= 1 {
+			title := content
+			if len(title) > 60 {
+				title = title[:57] + "..."
+			}
+			s.db.Exec("UPDATE chat_sessions SET title = ? WHERE id = ?", title, sessionID)
+		}
+	}
+}
+
+// getOrCreateSession gets existing session or creates new one for a user.
+func (s *Server) getOrCreateSession(userID, sessionID string) string {
+	if sessionID != "" {
+		var exists int
+		s.db.QueryRow("SELECT COUNT(*) FROM chat_sessions WHERE id = ?", sessionID).Scan(&exists)
+		if exists > 0 {
+			return sessionID
+		}
+	}
+	// Create new
+	id := generateSessionID()
+	now := time.Now().UTC().Format(time.RFC3339)
+	s.db.Exec(`INSERT INTO chat_sessions (id, user_id, title, created_at, updated_at) VALUES (?, ?, ?, ?, ?)`,
+		id, userID, "New Chat", now, now)
+	return id
+}
+
+// ─── GET /v1/pairing/status — Check if pairing is complete ──────────────
+
+func (s *Server) handlePairingStatus(w http.ResponseWriter, r *http.Request) {
+	cors(w)
+	if r.Method == "OPTIONS" { return }
+	if r.Method != "GET" {
+		http.Error(w, `{"error":"GET only"}`, 405)
+		return
+	}
+
+	// Read pairing.json from workspace
+	pairingPath := "/home/wirebot/clawd/pairing.json"
+	data, err := os.ReadFile(pairingPath)
+	if err != nil {
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"completed": false,
+			"score":     0,
+			"message":   "Pairing not started",
+		})
+		return
+	}
+
+	var pairing struct {
+		Completed    bool   `json:"completed"`
+		PairingScore int    `json:"pairingScore"`
+		CurrentPhase string `json:"currentPhase"`
+		Answers      map[string]interface{} `json:"answers"`
+	}
+	json.Unmarshal(data, &pairing)
+
+	answeredCount := len(pairing.Answers)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"completed":  pairing.Completed,
+		"score":      pairing.PairingScore,
+		"phase":      pairing.CurrentPhase,
+		"answered":   answeredCount,
+		"total":      22,
+	})
 }
 
 // ─── POST /v1/lock — EOD Score Lock ─────────────────────────────────────
