@@ -80,9 +80,31 @@
     { key: 'cognitive', label: 'Cognitive Style', icon: '🧠', color: '#ff7cff',
       dims: [
         { code: 'holistic', name: 'Holistic' },
+        { code: 'sequential', name: 'Sequential' },
         { code: 'abstract', name: 'Abstract' },
+        { code: 'concrete', name: 'Concrete' },
       ],
       instrument: 'COG-8', desc: '8 scenario picks' },
+    { key: 'business', label: 'Business Reality', icon: '🏢', color: '#ff9f43',
+      dims: [
+        { code: 'focus', name: 'Focus Level' },
+        { code: 'revenue_maturity', name: 'Revenue Maturity' },
+        { code: 'team_size', name: 'Team Size' },
+        { code: 'bottleneck', name: 'Bottleneck Area' },
+        { code: 'venture_age', name: 'Venture Age' },
+        { code: 'debt_pressure', name: 'Debt Pressure' },
+      ],
+      instrument: 'BIZ-6', desc: '6 context questions' },
+    { key: 'temporal', label: 'Temporal Patterns', icon: '⏰', color: '#54a0ff',
+      dims: [
+        { code: 'peak_hour', name: 'Peak Hours' },
+        { code: 'planning_style', name: 'Planning Style' },
+        { code: 'stall_recovery', name: 'Stall Recovery' },
+        { code: 'work_intensity', name: 'Work Intensity' },
+        { code: 'context_switch_cost', name: 'Context Switch Cost' },
+        { code: 'planning_horizon', name: 'Planning Horizon' },
+      ],
+      instrument: 'TIME-6', desc: '6 rhythm questions' },
   ];
 
   function dimValue(construct, code) {

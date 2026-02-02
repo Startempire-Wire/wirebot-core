@@ -743,8 +743,8 @@ func NewFounderProfile() *FounderProfileV2 {
 	p.CommunicationDNA = NewDualTrackDimension([]string{"D", "I", "S", "C"})
 	p.EnergyTopology = NewDualTrackDimension([]string{"W", "N", "D_disc", "G", "E", "T"})
 	p.RiskDisposition = NewDualTrackDimension([]string{"tolerance", "speed", "ambiguity", "sunk_cost", "loss_aversion", "bias_to_action"})
-	p.BusinessReality = NewDualTrackDimension([]string{"stage", "revenue", "debt", "focus"})
-	p.TemporalPatterns = NewDualTrackDimension([]string{"chronotype", "consistency", "peak_hour"})
+	p.BusinessReality = NewDualTrackDimension([]string{"focus", "revenue_maturity", "team_size", "bottleneck", "venture_age", "debt_pressure"})
+	p.TemporalPatterns = NewDualTrackDimension([]string{"peak_hour", "planning_style", "stall_recovery", "work_intensity", "context_switch_cost", "planning_horizon"})
 	p.CognitiveStyle = NewDualTrackDimension([]string{"holistic", "sequential", "abstract", "concrete"})
 
 	p.ContextWindows = map[ContextWindowType]*ContextWindow{
@@ -1195,6 +1195,10 @@ func (pe *PairingEngine) processAssessment(sig Signal, ev *EvidenceEntry) {
 			pe.scoreRDS(qid, val, ev)
 		case inst == "COG-8" || strings.HasPrefix(qid, "COG-"):
 			pe.scoreCOG(qid, val, ev)
+		case inst == "BIZ-6" || strings.HasPrefix(qid, "BIZ-"):
+			pe.scoreBIZ(qid, val, ev)
+		case inst == "TIME-6" || strings.HasPrefix(qid, "TIME-"):
+			pe.scoreTIME(qid, val, ev)
 		default:
 			log.Printf("[pairing] Unknown instrument: inst=%s qid=%s", inst, qid)
 		}
@@ -1370,6 +1374,54 @@ func (pe *PairingEngine) scoreCOG(qid string, val interface{}, ev *EvidenceEntry
 		ev.ProfileImpact["cognitive_style."+s.Dim] = s.Value
 	}
 	ev.ConstructsAffected = append(ev.ConstructsAffected, "cognitive_style")
+}
+
+// BIZ-6: Business Reality — stored as metadata on the profile, influences calibration
+func (pe *PairingEngine) scoreBIZ(qid string, val interface{}, ev *EvidenceEntry) {
+	choice, ok := val.(string)
+	if !ok {
+		return
+	}
+	// Business reality answers feed into BusinessReality construct
+	// Map coded answers to dimension scores
+	bizScores := map[string]map[string]DimScore{
+		"BIZ-01": {"focus_single": {Dim: "focus", Value: 10}, "focus_dual": {Dim: "focus", Value: 6}, "focus_multi": {Dim: "focus", Value: 3}},
+		"BIZ-02": {"rev_pre": {Dim: "revenue_maturity", Value: 1}, "rev_early": {Dim: "revenue_maturity", Value: 4}, "rev_sustain": {Dim: "revenue_maturity", Value: 7}, "rev_growing": {Dim: "revenue_maturity", Value: 10}},
+		"BIZ-03": {"team_solo": {Dim: "team_size", Value: 1}, "team_contractors": {Dim: "team_size", Value: 4}, "team_small": {Dim: "team_size", Value: 7}, "team_growing": {Dim: "team_size", Value: 10}},
+		"BIZ-04": {"bottle_ship": {Dim: "bottleneck", Value: 3}, "bottle_dist": {Dim: "bottleneck", Value: 5}, "bottle_rev": {Dim: "bottleneck", Value: 7}, "bottle_ops": {Dim: "bottleneck", Value: 9}},
+		"BIZ-05": {"age_new": {Dim: "venture_age", Value: 2}, "age_early": {Dim: "venture_age", Value: 4}, "age_mid": {Dim: "venture_age", Value: 7}, "age_mature": {Dim: "venture_age", Value: 10}},
+		"BIZ-06": {"debt_none": {Dim: "debt_pressure", Value: 0}, "debt_some": {Dim: "debt_pressure", Value: 3}, "debt_heavy": {Dim: "debt_pressure", Value: 7}, "debt_critical": {Dim: "debt_pressure", Value: 10}},
+	}
+	if scores, ok := bizScores[qid]; ok {
+		if s, ok := scores[choice]; ok {
+			pe.profile.BusinessReality.UpdateEMA(s.Dim, s.Value)
+			ev.ProfileImpact["business_reality."+s.Dim] = s.Value
+		}
+	}
+	ev.ConstructsAffected = append(ev.ConstructsAffected, "business_reality")
+}
+
+// TIME-6: Temporal Patterns — work rhythms, planning style, stall behavior
+func (pe *PairingEngine) scoreTIME(qid string, val interface{}, ev *EvidenceEntry) {
+	choice, ok := val.(string)
+	if !ok {
+		return
+	}
+	timeScores := map[string]map[string]DimScore{
+		"TIME-01": {"peak_early": {Dim: "peak_hour", Value: 2}, "peak_mid_am": {Dim: "peak_hour", Value: 5}, "peak_afternoon": {Dim: "peak_hour", Value: 7}, "peak_evening": {Dim: "peak_hour", Value: 9}},
+		"TIME-02": {"plan_rigid": {Dim: "planning_style", Value: 10}, "plan_flex": {Dim: "planning_style", Value: 7}, "plan_reactive": {Dim: "planning_style", Value: 4}, "plan_flow": {Dim: "planning_style", Value: 1}},
+		"TIME-03": {"stall_push": {Dim: "stall_recovery", Value: 9}, "stall_switch": {Dim: "stall_recovery", Value: 7}, "stall_break": {Dim: "stall_recovery", Value: 5}, "stall_ask": {Dim: "stall_recovery", Value: 3}},
+		"TIME-04": {"hours_part": {Dim: "work_intensity", Value: 3}, "hours_standard": {Dim: "work_intensity", Value: 5}, "hours_heavy": {Dim: "work_intensity", Value: 8}, "hours_max": {Dim: "work_intensity", Value: 10}},
+		"TIME-05": {"switch_easy": {Dim: "context_switch_cost", Value: 1}, "switch_mild": {Dim: "context_switch_cost", Value: 4}, "switch_hard": {Dim: "context_switch_cost", Value: 7}, "switch_critical": {Dim: "context_switch_cost", Value: 10}},
+		"TIME-06": {"horizon_short": {Dim: "planning_horizon", Value: 2}, "horizon_mid": {Dim: "planning_horizon", Value: 5}, "horizon_long": {Dim: "planning_horizon", Value: 8}, "horizon_visionary": {Dim: "planning_horizon", Value: 10}},
+	}
+	if scores, ok := timeScores[qid]; ok {
+		if s, ok := scores[choice]; ok {
+			pe.profile.TemporalPatterns.UpdateEMA(s.Dim, s.Value)
+			ev.ProfileImpact["temporal_patterns."+s.Dim] = s.Value
+		}
+	}
+	ev.ConstructsAffected = append(ev.ConstructsAffected, "temporal_patterns")
 }
 
 // ─── Drift Detection ─────────────────────────────────────────────────────────
@@ -1686,6 +1738,8 @@ type EffectiveProfile struct {
 	Energy         map[string]float64  `json:"energy"`
 	Risk           map[string]float64  `json:"risk"`
 	Cognitive      map[string]float64  `json:"cognitive"`
+	Business       map[string]float64  `json:"business"`
+	Temporal       map[string]float64  `json:"temporal"`
 	Complement     ComplementVector    `json:"complement"`
 	Calibration    CalibrationParams   `json:"calibration"`
 	ActiveContexts []string            `json:"active_contexts"`
@@ -1705,6 +1759,8 @@ func (pe *PairingEngine) GetEffectiveProfile() EffectiveProfile {
 		Energy:       extractEffective(p.EnergyTopology),
 		Risk:         extractEffective(p.RiskDisposition),
 		Cognitive:    extractEffective(p.CognitiveStyle),
+		Business:     extractEffective(p.BusinessReality),
+		Temporal:     extractEffective(p.TemporalPatterns),
 		Complement:   p.Complement,
 		Calibration:  p.Calibration,
 		PairingScore: p.PairingScore.Composite,

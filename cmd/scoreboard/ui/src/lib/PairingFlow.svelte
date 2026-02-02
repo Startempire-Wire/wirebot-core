@@ -122,6 +122,119 @@
         { label: 'Think about system-level causes', code: 'holistic' },
         { label: 'Isolate and test each component', code: 'sequential' },
       ]},
+    { id: 'COG-05', prompt: 'Reading a business proposal, you focus on…',
+      options: [
+        { label: 'The narrative and strategic vision', code: 'abstract' },
+        { label: 'The numbers and implementation plan', code: 'concrete' },
+      ]},
+    { id: 'COG-06', prompt: 'Solving a new problem, you tend to…',
+      options: [
+        { label: 'Draw parallels to unrelated domains', code: 'abstract' },
+        { label: 'Find a proven template or case study', code: 'concrete' },
+      ]},
+    { id: 'COG-07', prompt: 'When priorities conflict, you resolve by…',
+      options: [
+        { label: 'Stepping back to see which serves the bigger mission', code: 'holistic' },
+        { label: 'Ranking them by urgency and knocking out the top one', code: 'sequential' },
+      ]},
+    { id: 'COG-08', prompt: 'You remember best by…',
+      options: [
+        { label: 'Understanding the concept behind it', code: 'abstract' },
+        { label: 'Doing it yourself hands-on', code: 'concrete' },
+      ]},
+  ];
+
+  // ─── Business Reality (Φ₅) ─────────────────────────────────────────
+
+  const BIZ_QUESTIONS = [
+    { id: 'BIZ-01', prompt: 'How many active businesses are you running right now?',
+      options: [
+        { label: 'One — fully focused', code: 'focus_single' },
+        { label: 'Two — one main, one side', code: 'focus_dual' },
+        { label: 'Three or more — serial operator', code: 'focus_multi' },
+      ]},
+    { id: 'BIZ-02', prompt: 'What best describes your current revenue situation?',
+      options: [
+        { label: 'Pre-revenue — building the product', code: 'rev_pre' },
+        { label: 'Early revenue — some customers, not profitable', code: 'rev_early' },
+        { label: 'Sustaining — covering costs, maybe some profit', code: 'rev_sustain' },
+        { label: 'Growing — profitable and reinvesting', code: 'rev_growing' },
+      ]},
+    { id: 'BIZ-03', prompt: 'Do you have a team or are you solo?',
+      options: [
+        { label: 'Solo — I do everything', code: 'team_solo' },
+        { label: 'Solo + contractors when needed', code: 'team_contractors' },
+        { label: 'Small team (2-5 people)', code: 'team_small' },
+        { label: 'Growing team (6+)', code: 'team_growing' },
+      ]},
+    { id: 'BIZ-04', prompt: 'What\'s your biggest bottleneck right now?',
+      options: [
+        { label: 'Building the product / shipping features', code: 'bottle_ship' },
+        { label: 'Getting customers / distribution', code: 'bottle_dist' },
+        { label: 'Cash flow / revenue', code: 'bottle_rev' },
+        { label: 'Operations / systems breaking', code: 'bottle_ops' },
+      ]},
+    { id: 'BIZ-05', prompt: 'How long have you been working on your current main venture?',
+      options: [
+        { label: 'Less than 6 months', code: 'age_new' },
+        { label: '6 months to 2 years', code: 'age_early' },
+        { label: '2-5 years', code: 'age_mid' },
+        { label: '5+ years', code: 'age_mature' },
+      ]},
+    { id: 'BIZ-06', prompt: 'How much personal debt is tied to your business?',
+      options: [
+        { label: 'None — bootstrapped clean', code: 'debt_none' },
+        { label: 'Some — manageable', code: 'debt_some' },
+        { label: 'Significant — it weighs on me', code: 'debt_heavy' },
+        { label: 'Critical — survival mode', code: 'debt_critical' },
+      ]},
+  ];
+
+  // ─── Temporal Patterns (Φ₆) ────────────────────────────────────────
+
+  const TIME_QUESTIONS = [
+    { id: 'TIME-01', prompt: 'When do you do your best deep work?', label: 'Peak Hours',
+      options: [
+        { label: 'Early morning (5-9am)', code: 'peak_early' },
+        { label: 'Mid-morning (9am-noon)', code: 'peak_mid_am' },
+        { label: 'Afternoon (noon-5pm)', code: 'peak_afternoon' },
+        { label: 'Evening / Night (5pm+)', code: 'peak_evening' },
+      ]},
+    { id: 'TIME-02', prompt: 'How do you typically plan your week?', label: 'Planning Style',
+      options: [
+        { label: 'Detailed calendar blocks for everything', code: 'plan_rigid' },
+        { label: 'Rough priorities, flexible execution', code: 'plan_flex' },
+        { label: 'I react to what feels most urgent each day', code: 'plan_reactive' },
+        { label: 'I don\'t — I just work on whatever pulls me', code: 'plan_flow' },
+      ]},
+    { id: 'TIME-03', prompt: 'When you hit a wall on something, you…', label: 'Stall Behavior',
+      options: [
+        { label: 'Push through — force it', code: 'stall_push' },
+        { label: 'Switch to something else, come back later', code: 'stall_switch' },
+        { label: 'Take a break and reset', code: 'stall_break' },
+        { label: 'Ask someone for help or a second opinion', code: 'stall_ask' },
+      ]},
+    { id: 'TIME-04', prompt: 'How many hours a week do you actually work on your business?', label: 'Work Hours',
+      options: [
+        { label: 'Under 20 — part-time alongside a job', code: 'hours_part' },
+        { label: '20-40 — full-time but bounded', code: 'hours_standard' },
+        { label: '40-60 — grinding hard', code: 'hours_heavy' },
+        { label: '60+ — all-in, borderline obsessive', code: 'hours_max' },
+      ]},
+    { id: 'TIME-05', prompt: 'When someone interrupts your focus, you…', label: 'Context Switch Cost',
+      options: [
+        { label: 'Barely notice — I switch fast', code: 'switch_easy' },
+        { label: 'Lose a few minutes but recover', code: 'switch_mild' },
+        { label: 'It takes me 20+ minutes to get back in flow', code: 'switch_hard' },
+        { label: 'I\'m wrecked for the rest of that session', code: 'switch_critical' },
+      ]},
+    { id: 'TIME-06', prompt: 'How far ahead do you typically plan?', label: 'Planning Horizon',
+      options: [
+        { label: 'Today / this week', code: 'horizon_short' },
+        { label: 'This month / this quarter', code: 'horizon_mid' },
+        { label: 'This year', code: 'horizon_long' },
+        { label: '3-5 years out', code: 'horizon_visionary' },
+      ]},
   ];
 
   // ─── Dynamic questions based on instrument ────────────────────────
@@ -133,6 +246,8 @@
       case 'RDS-6': return RDS_QUESTIONS;
       case 'ETM-6': return [{ id: 'ETM-6', type: 'drag' }];
       case 'COG-8': return COG_QUESTIONS;
+      case 'BIZ-6': return BIZ_QUESTIONS;
+      case 'TIME-6': return TIME_QUESTIONS;
       default: return [];
     }
   }
@@ -227,7 +342,9 @@
        instrument === 'CSI-8' ? '💬 Communication' :
        instrument === 'ETM-6' ? '🔋 Energy Topology' :
        instrument === 'RDS-6' ? '🎲 Risk Disposition' :
-       instrument === 'COG-8' ? '🧠 Cognitive Style' : ''}
+       instrument === 'COG-8' ? '🧠 Cognitive Style' :
+       instrument === 'BIZ-6' ? '🏢 Business Reality' :
+       instrument === 'TIME-6' ? '⏰ Temporal Patterns' : ''}
     </div>
     <div class="flow-step">{step + 1}/{questions.length}</div>
   </div>
@@ -283,6 +400,17 @@
 
       {:else if instrument === 'COG-8'}
         <!-- Binary Scenario -->
+        <div class="q-prompt">{currentQ.prompt}</div>
+        <div class="scenario-options">
+          {#each currentQ.options as opt}
+            <button class="scenario-btn" onclick={() => selectScenario(opt.code)}>
+              <span class="s-label">{opt.label}</span>
+            </button>
+          {/each}
+        </div>
+
+      {:else if instrument === 'BIZ-6' || instrument === 'TIME-6'}
+        <!-- Scenario Pick (same UI) -->
         <div class="q-prompt">{currentQ.prompt}</div>
         <div class="scenario-options">
           {#each currentQ.options as opt}

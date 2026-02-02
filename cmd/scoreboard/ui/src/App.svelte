@@ -594,7 +594,8 @@
       // Build equalizer bars from all dimensions
       const colors = {
         action_style: '#7c7cff', disc: '#ff7c7c', energy: '#7cff7c',
-        risk: '#ffd700', cognitive: '#ff7cff'
+        risk: '#ffd700', cognitive: '#ff7cff',
+        business: '#ff9f43', temporal: '#54a0ff'
       };
       const codeLabels = {
         FF: 'Fact', FT: 'Follow', QS: 'Quick', IM: 'Impl',
@@ -602,7 +603,9 @@
         W: 'Wonder', N: 'Invent', D_disc: 'Discern', G: 'Galv', E: 'Enable', T: 'Tenac',
         tolerance: 'Tol', speed: 'Speed', loss_aversion: 'Loss', ambiguity: 'Ambig',
         bias_to_action: 'Action', sunk_cost: 'Sunk',
-        holistic: 'Holist', abstract: 'Abstr', sequential: 'Seq', concrete: 'Concr'
+        holistic: 'Holist', abstract: 'Abstr', sequential: 'Seq', concrete: 'Concr',
+        focus: 'Focus', revenue_maturity: 'Rev', team_size: 'Team', bottleneck: 'Block', venture_age: 'Age', debt_pressure: 'Debt',
+        peak_hour: 'Peak', planning_style: 'Plan', stall_recovery: 'Stall', work_intensity: 'Hours', context_switch_cost: 'Switch', planning_horizon: 'Horiz'
       };
       const bars = [];
       for (const [construct, color] of Object.entries(colors)) {
@@ -1083,12 +1086,28 @@
                 <span class="pi-icon">🧠</span>
                 <div class="pi-info">
                   <div class="pi-name">Cognitive Style</div>
-                  <div class="pi-sub">4 scenario picks · 1 min</div>
+                  <div class="pi-sub">8 scenario picks · 2 min</div>
+                </div>
+                <span class="pi-go">→</span>
+              </button>
+              <button class="pi-card" onclick={() => pairingInstrument = 'BIZ-6'}>
+                <span class="pi-icon">🏢</span>
+                <div class="pi-info">
+                  <div class="pi-name">Business Reality</div>
+                  <div class="pi-sub">6 context questions · 1 min</div>
+                </div>
+                <span class="pi-go">→</span>
+              </button>
+              <button class="pi-card" onclick={() => pairingInstrument = 'TIME-6'}>
+                <span class="pi-icon">⏰</span>
+                <div class="pi-info">
+                  <div class="pi-name">Temporal Patterns</div>
+                  <div class="pi-sub">6 schedule/rhythm questions · 1 min</div>
                 </div>
                 <span class="pi-go">→</span>
               </button>
             </div>
-            <div class="pi-footer">Takes ~7 minutes total. You can do them one at a time.</div>
+            <div class="pi-footer">Takes ~10 minutes total. You can do them one at a time.</div>
           {/if}
         </div>
       </div>
