@@ -11,7 +11,8 @@
   let actionInFlight = $state('');
 
   const TOKEN = new URLSearchParams(window.location.search).get('token') || 
-                new URLSearchParams(window.location.search).get('key') || '';
+                new URLSearchParams(window.location.search).get('key') ||
+                localStorage.getItem('wb_token') || '';
 
   function authParam() { return TOKEN ? `token=${TOKEN}` : ''; }
   function headers() {
@@ -203,7 +204,7 @@
 
   function switchTab(t) {
     tab = t;
-    if (t === 'pending' && projects.length === 0) loadPending();
+    if (t === 'projects' && projects.length === 0) loadPending();
   }
 
   // ─── Helpers ────────────────────────────────────────────────────────
@@ -294,127 +295,134 @@
 
   <div class="tab-bar">
     <button class="tab" class:active={tab === 'all'} onclick={() => switchTab('all')}>All</button>
-    <button class="tab" class:active={tab === 'pending'} onclick={() => switchTab('pending')}>
-      Pending{#if pendingCount > 0}<span class="badge">{pendingCount}</span>{/if}
+    <button class="tab" class:active={tab === 'projects'} onclick={() => switchTab('projects')}>
+      Projects{#if pendingCount > 0}<span class="badge">{pendingCount}</span>{/if}
     </button>
     <button class="tab" class:active={tab === 'approved'} onclick={() => switchTab('approved')}>Scored</button>
   </div>
 
-  <!-- ═══════════ PENDING TAB ═══════════ -->
-  {#if tab === 'pending'}
+  <!-- ═══════════ PROJECTS TAB ═══════════ -->
+  {#if tab === 'projects'}
     {#if loadingProjects}
       <div class="loading">Loading projects...</div>
-    {:else if projects.filter(p => p.pending > 0).length === 0}
+    {:else if projects.length === 0}
       <div class="empty">
-        <div class="empty-icon">✅</div>
-        <p>No pending events</p>
-        <p class="hint">New commits discovered every 5 min</p>
+        <div class="empty-icon">📂</div>
+        <p>No projects discovered</p>
+        <p class="hint">Discovery runs every 5 min via cron</p>
       </div>
     {:else}
-      <!-- Approved projects (collapsed summary) -->
-      {#if projects.filter(p => p.status === 'approved').length > 0}
-        <div class="section-label">Auto-approved</div>
-        {#each projects.filter(p => p.status === 'approved') as proj}
-          <div class="proj-row approved-row">
-            <span class="proj-icon">✅</span>
-            {#if editing === proj.name}
-              <input class="rename-input"
-                bind:value={editValue}
-                onkeydown={(e) => handleRenameKey(e, proj.name)}
-                onblur={() => submitRename(proj.name)}
-                onclick={(e) => e.stopPropagation()}
-                autofocus
-              />
-            {:else}
-              <span class="proj-label">{proj.name}</span>
-              <button class="btn-rename" onclick={(e) => { e.stopPropagation(); startRename(proj.name); }} title="Rename">✎</button>
+      <!-- Pending projects first -->
+      {#if projects.filter(p => p.pending > 0).length > 0}
+        <div class="section-label">Awaiting review</div>
+        {#each projects.filter(p => p.pending > 0) as proj}
+          {@const evts = projectEvents[proj.name] || []}
+          <div class="proj-group">
+            <div class="proj-row" onclick={() => toggle(proj.name)}>
+              <span class="proj-chevron">{expanded[proj.name] ? '▼' : '▶'}</span>
+              <span class="proj-icon">{statusIcon(proj.status)}</span>
+              <div class="proj-info">
+                {#if editing === proj.name}
+                  <input class="rename-input" bind:value={editValue}
+                    onkeydown={(e) => handleRenameKey(e, proj.name)}
+                    onblur={() => submitRename(proj.name)}
+                    onclick={(e) => e.stopPropagation()} autofocus />
+                {:else}
+                  <span class="proj-label">{proj.name}</span>
+                  <button class="btn-rename" onclick={(e) => { e.stopPropagation(); startRename(proj.name); }}>✎</button>
+                {/if}
+                {#if proj.business}<span class="proj-biz">{proj.business}</span>{/if}
+              </div>
+              <span class="proj-pending-count">{proj.pending}</span>
+            </div>
+            <div class="proj-action-bar">
+              {#if actionInFlight === `proj-${proj.name}`}
+                <span class="acting">Processing...</span>
+              {:else}
+                <button class="btn-approve-proj" onclick={(e) => { e.stopPropagation(); approveProject(proj.name); }}>
+                  ✓ Approve all {proj.pending}
+                </button>
+                <button class="btn-reject-proj" onclick={(e) => { e.stopPropagation(); rejectProject(proj.name); }}>✗ Reject</button>
+              {/if}
+            </div>
+            {#if expanded[proj.name]}
+              <div class="commit-list">
+                {#each evts as evt}
+                  {@const msg = commitMsg(evt.title, proj.name)}
+                  {@const ctype = commitType(evt.title)}
+                  <div class="commit-row">
+                    <div class="commit-body">
+                      <div class="commit-msg">
+                        {#if ctype}<span class="commit-type" style="color:{typeColor(ctype)}">{ctype}</span>{/if}
+                        <span class="commit-text">{msg.replace(/^(feat|fix|docs|refactor|perf|chore|test|style)[:(! ]+/i, '')}</span>
+                      </div>
+                      <div class="commit-meta">
+                        <span class="cm-lane" style="color:{laneColor(evt.lane)}">{evt.lane}</span>
+                        <span class="cm-sep">·</span>
+                        <span class="cm-time">{timeAgo(evt.timestamp)}</span>
+                        {#if evt.url}<span class="cm-sep">·</span><a class="cm-link" href={evt.url} target="_blank" rel="noopener">view</a>{/if}
+                        {#if evt.score_delta > 0}<span class="cm-sep">·</span><span class="cm-pts">+{evt.score_delta}</span>{/if}
+                      </div>
+                    </div>
+                    <div class="commit-actions">
+                      {#if actionInFlight === evt.id}
+                        <span class="acting-sm">…</span>
+                      {:else}
+                        <button class="btn-sm ok" onclick={() => approveEvent(evt.id, proj.name)}>✓</button>
+                        <button class="btn-sm no" onclick={() => rejectEvent(evt.id, proj.name)}>✗</button>
+                      {/if}
+                    </div>
+                  </div>
+                {/each}
+                {#if evts.length === 0}
+                  <div class="commit-empty">No pending events loaded</div>
+                {/if}
+              </div>
             {/if}
-            <span class="proj-count-ok">{proj.approved} scored</span>
           </div>
         {/each}
-        <div class="section-divider"></div>
       {/if}
 
-      <!-- Pending projects (expandable) -->
-      <div class="section-label">Awaiting review</div>
-      {#each projects.filter(p => p.pending > 0) as proj}
-        <div class="proj-group">
-          <!-- Project header row -->
+      <!-- All tracked projects -->
+      <div class="section-label">All projects</div>
+      {#each projects as proj}
+        <div class="proj-group proj-summary">
           <div class="proj-row" onclick={() => toggle(proj.name)}>
             <span class="proj-chevron">{expanded[proj.name] ? '▼' : '▶'}</span>
             <span class="proj-icon">{statusIcon(proj.status)}</span>
             <div class="proj-info">
               {#if editing === proj.name}
-                <input class="rename-input"
-                  bind:value={editValue}
+                <input class="rename-input" bind:value={editValue}
                   onkeydown={(e) => handleRenameKey(e, proj.name)}
                   onblur={() => submitRename(proj.name)}
-                  onclick={(e) => e.stopPropagation()}
-                  autofocus
-                />
+                  onclick={(e) => e.stopPropagation()} autofocus />
               {:else}
                 <span class="proj-label">{proj.name}</span>
-                <button class="btn-rename" onclick={(e) => { e.stopPropagation(); startRename(proj.name); }} title="Rename">✎</button>
+                <button class="btn-rename" onclick={(e) => { e.stopPropagation(); startRename(proj.name); }}>✎</button>
               {/if}
               {#if proj.business}<span class="proj-biz">{proj.business}</span>{/if}
             </div>
-            <span class="proj-pending-count">{proj.pending}</span>
+            <div class="proj-score-bar">
+              <span class="ps-approved">{proj.approved}</span>
+              {#if proj.pending > 0}<span class="ps-pending">+{proj.pending}</span>{/if}
+              {#if proj.rejected > 0}<span class="ps-rejected">-{proj.rejected}</span>{/if}
+            </div>
           </div>
 
-          <!-- Project action bar -->
-          <div class="proj-action-bar">
-            {#if actionInFlight === `proj-${proj.name}`}
-              <span class="acting">Processing...</span>
-            {:else}
-              <button class="btn-approve-proj" onclick={(e) => { e.stopPropagation(); approveProject(proj.name); }}>
-                ✓ Approve all {proj.pending}
-              </button>
-              <button class="btn-reject-proj" onclick={(e) => { e.stopPropagation(); rejectProject(proj.name); }}>
-                ✗ Reject
-              </button>
-            {/if}
-          </div>
-
-          <!-- Expanded: nested commit list -->
-          {#if expanded[proj.name]}
-            <div class="commit-list">
-              {#each (projectEvents[proj.name] || []) as evt}
-                {@const msg = commitMsg(evt.title, proj.name)}
-                {@const ctype = commitType(evt.title)}
-                <div class="commit-row">
-                  <div class="commit-body">
-                    <div class="commit-msg">
-                      {#if ctype}
-                        <span class="commit-type" style="color:{typeColor(ctype)}">{ctype}</span>
-                      {/if}
-                      <span class="commit-text">{msg.replace(/^(feat|fix|docs|refactor|perf|chore|test|style)[:(! ]+/i, '')}</span>
-                    </div>
-                    <div class="commit-meta">
-                      <span class="cm-lane" style="color:{laneColor(evt.lane)}">{evt.lane}</span>
-                      <span class="cm-sep">·</span>
-                      <span class="cm-time">{timeAgo(evt.timestamp)}</span>
-                      {#if evt.url}
-                        <span class="cm-sep">·</span>
-                        <a class="cm-link" href={evt.url} target="_blank" rel="noopener">view</a>
-                      {/if}
-                      {#if evt.score_delta > 0}
-                        <span class="cm-sep">·</span>
-                        <span class="cm-pts">+{evt.score_delta}</span>
-                      {/if}
-                    </div>
-                  </div>
-                  <div class="commit-actions">
-                    {#if actionInFlight === evt.id}
-                      <span class="acting-sm">…</span>
-                    {:else}
-                      <button class="btn-sm ok" onclick={() => approveEvent(evt.id, proj.name)} title="Approve">✓</button>
-                      <button class="btn-sm no" onclick={() => rejectEvent(evt.id, proj.name)} title="Reject">✗</button>
-                    {/if}
-                  </div>
-                </div>
-              {/each}
-              {#if !(projectEvents[proj.name]?.length)}
-                <div class="commit-empty">Events loading or already processed</div>
+          <!-- Expanded: source breakdown + quick stats -->
+          {#if expanded[proj.name] && proj.pending === 0}
+            <div class="proj-detail">
+              <div class="pd-row"><span class="pd-label">Events</span><span class="pd-val">{proj.total_events}</span></div>
+              <div class="pd-row"><span class="pd-label">Approved</span><span class="pd-val pd-ok">{proj.approved}</span></div>
+              {#if proj.rejected > 0}
+                <div class="pd-row"><span class="pd-label">Rejected</span><span class="pd-val pd-no">{proj.rejected}</span></div>
+              {/if}
+              <div class="pd-row"><span class="pd-label">Lane</span><span class="pd-val" style="color:{laneColor(proj.primary_lane)}">{proj.primary_lane}</span></div>
+              {#if proj.sources?.length > 0}
+                <div class="pd-row"><span class="pd-label">Sources</span><span class="pd-val">{proj.sources.join(', ')}</span></div>
+              {/if}
+              {#if proj.auto_approve}
+                <div class="pd-row"><span class="pd-label">Mode</span><span class="pd-val pd-ok">Auto-approve ✓</span></div>
               {/if}
             </div>
           {/if}
@@ -593,6 +601,24 @@
   .cm-link { color: #4a9eff; text-decoration: none; }
   .cm-pts { color: #2ecc71; font-weight: 600; }
   .commit-empty { padding: 12px 40px; color: #333; font-size: 12px; text-align: center; }
+
+  /* ── Project score bar (All projects section) ── */
+  .proj-summary { border-color: #151522; }
+  .proj-score-bar { display: flex; gap: 4px; align-items: center; flex-shrink: 0; }
+  .ps-approved { font-size: 13px; font-weight: 700; color: #2ecc71; }
+  .ps-pending { font-size: 11px; color: #ffaa00; }
+  .ps-rejected { font-size: 11px; color: #ff4444; }
+
+  /* ── Project detail panel ── */
+  .proj-detail {
+    border-top: 1px solid #1a1a28; padding: 8px 14px 10px 40px;
+    background: rgba(0,0,0,0.1);
+  }
+  .pd-row { display: flex; justify-content: space-between; padding: 3px 0; font-size: 12px; }
+  .pd-label { color: #444; }
+  .pd-val { color: #888; }
+  .pd-ok { color: #2ecc71; }
+  .pd-no { color: #ff4444; }
 
   .commit-actions { display: flex; gap: 4px; flex-shrink: 0; padding-top: 1px; }
   .btn-sm {
