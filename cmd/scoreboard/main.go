@@ -1887,8 +1887,58 @@ func (s *Server) handleProjectAction(w http.ResponseWriter, r *http.Request) {
 	projectName := parts[0]
 	action := parts[1]
 
+	// ── Rename ──
+	if action == "rename" {
+		var body struct {
+			NewName string `json:"new_name"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.NewName == "" {
+			http.Error(w, `{"error":"new_name required"}`, 400)
+			return
+		}
+		now := time.Now().UTC().Format(time.RFC3339)
+
+		s.mu.Lock()
+		// Update projects table
+		s.db.Exec(`UPDATE projects SET name=? WHERE name=?`, body.NewName, projectName)
+		s.db.Exec(`INSERT OR IGNORE INTO projects (name, created_at) VALUES (?, ?)`, body.NewName, now)
+
+		// Find all events that inferProject maps to old name, patch their metadata
+		rows, _ := s.db.Query(`SELECT id, metadata, artifact_title, artifact_url, source FROM events`)
+		var updates []string
+		if rows != nil {
+			for rows.Next() {
+				var id, metadata, title, url, source string
+				rows.Scan(&id, &metadata, &title, &url, &source)
+				if inferProject(metadata, title, url, source) == projectName {
+					updates = append(updates, id)
+				}
+			}
+			rows.Close()
+		}
+		for _, id := range updates {
+			var existing string
+			s.db.QueryRow("SELECT metadata FROM events WHERE id=?", id).Scan(&existing)
+			var meta map[string]interface{}
+			if json.Unmarshal([]byte(existing), &meta) != nil || meta == nil {
+				meta = map[string]interface{}{}
+			}
+			meta["repo"] = body.NewName
+			meta["renamed_from"] = projectName
+			newMeta, _ := json.Marshal(meta)
+			s.db.Exec("UPDATE events SET metadata=? WHERE id=?", string(newMeta), id)
+		}
+		s.mu.Unlock()
+
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"ok": true, "project": projectName, "new_name": body.NewName, "events_updated": len(updates),
+		})
+		log.Printf("Project renamed: %s → %s (%d events)", projectName, body.NewName, len(updates))
+		return
+	}
+
 	if action != "approve" && action != "reject" {
-		http.Error(w, `{"error":"action must be approve or reject"}`, 400)
+		http.Error(w, `{"error":"action must be approve, reject, or rename"}`, 400)
 		return
 	}
 

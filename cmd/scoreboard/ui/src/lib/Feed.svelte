@@ -5,6 +5,8 @@
   let projects = $state([]);         // project summaries
   let projectEvents = $state({});    // { projectName: [events] }
   let expanded = $state({});         // { projectName: true/false }
+  let editing = $state(null);        // project name being renamed
+  let editValue = $state('');        // current rename input value
   let loadingProjects = $state(false);
   let actionInFlight = $state('');
 
@@ -147,6 +149,53 @@
     actionInFlight = '';
   }
 
+  // ─── Rename ──────────────────────────────────────────────────────────
+  function startRename(name) {
+    editing = name;
+    editValue = name;
+  }
+
+  function cancelRename() {
+    editing = null;
+    editValue = '';
+  }
+
+  async function submitRename(oldName) {
+    const newName = editValue.trim();
+    if (!newName || newName === oldName) { cancelRename(); return; }
+
+    actionInFlight = `rename-${oldName}`;
+    try {
+      const ap = authParam();
+      const res = await fetch(`/v1/projects/${encodeURIComponent(oldName)}/rename${ap ? '?' + ap : ''}`, {
+        method: 'POST', headers: headers(),
+        body: JSON.stringify({ new_name: newName })
+      });
+      const data = await res.json();
+      if (data.ok) {
+        // Update local state
+        projects = projects.map(p => p.name === oldName ? {...p, name: newName} : p);
+        if (projectEvents[oldName]) {
+          projectEvents[newName] = projectEvents[oldName];
+          delete projectEvents[oldName];
+          projectEvents = {...projectEvents};
+        }
+        if (expanded[oldName]) {
+          expanded[newName] = true;
+          delete expanded[oldName];
+          expanded = {...expanded};
+        }
+      }
+    } catch(e) { console.error(e); }
+    actionInFlight = '';
+    cancelRename();
+  }
+
+  function handleRenameKey(e, oldName) {
+    if (e.key === 'Enter') submitRename(oldName);
+    if (e.key === 'Escape') cancelRename();
+  }
+
   // ─── Toggle ─────────────────────────────────────────────────────────
   function toggle(name) {
     expanded = {...expanded, [name]: !expanded[name]};
@@ -268,7 +317,18 @@
         {#each projects.filter(p => p.status === 'approved') as proj}
           <div class="proj-row approved-row">
             <span class="proj-icon">✅</span>
-            <span class="proj-label">{proj.name}</span>
+            {#if editing === proj.name}
+              <input class="rename-input"
+                bind:value={editValue}
+                onkeydown={(e) => handleRenameKey(e, proj.name)}
+                onblur={() => submitRename(proj.name)}
+                onclick={(e) => e.stopPropagation()}
+                autofocus
+              />
+            {:else}
+              <span class="proj-label">{proj.name}</span>
+              <button class="btn-rename" onclick={(e) => { e.stopPropagation(); startRename(proj.name); }} title="Rename">✎</button>
+            {/if}
             <span class="proj-count-ok">{proj.approved} scored</span>
           </div>
         {/each}
@@ -284,7 +344,18 @@
             <span class="proj-chevron">{expanded[proj.name] ? '▼' : '▶'}</span>
             <span class="proj-icon">{statusIcon(proj.status)}</span>
             <div class="proj-info">
-              <span class="proj-label">{proj.name}</span>
+              {#if editing === proj.name}
+                <input class="rename-input"
+                  bind:value={editValue}
+                  onkeydown={(e) => handleRenameKey(e, proj.name)}
+                  onblur={() => submitRename(proj.name)}
+                  onclick={(e) => e.stopPropagation()}
+                  autofocus
+                />
+              {:else}
+                <span class="proj-label">{proj.name}</span>
+                <button class="btn-rename" onclick={(e) => { e.stopPropagation(); startRename(proj.name); }} title="Rename">✎</button>
+              {/if}
               {#if proj.business}<span class="proj-biz">{proj.business}</span>{/if}
             </div>
             <span class="proj-pending-count">{proj.pending}</span>
@@ -447,6 +518,22 @@
   .proj-info { flex: 1; min-width: 0; display: flex; align-items: baseline; gap: 6px; }
   .proj-label { font-size: 14px; font-weight: 600; color: #ccc; }
   .proj-biz { font-size: 10px; color: #555; text-transform: uppercase; letter-spacing: 0.5px; }
+  .rename-input {
+    background: #0a0a14; border: 1px solid #7c7cff; border-radius: 5px;
+    color: #ddd; font-size: 13px; font-weight: 600; padding: 3px 8px;
+    width: 140px; outline: none;
+  }
+  .rename-input:focus { border-color: #9b9bff; box-shadow: 0 0 0 2px rgba(124,124,255,0.15); }
+  .btn-rename {
+    background: none; border: none; color: #444; font-size: 12px;
+    cursor: pointer; padding: 2px 4px; opacity: 0;
+    transition: opacity 0.15s; -webkit-tap-highlight-color: transparent;
+  }
+  .proj-info:hover .btn-rename, .proj-row:hover .btn-rename,
+  .approved-row:hover .btn-rename { opacity: 1; }
+  /* Always show on touch (no hover) */
+  @media (hover: none) { .btn-rename { opacity: 0.5; } }
+
   .proj-pending-count {
     background: rgba(255,170,0,0.12); color: #ffaa00; font-size: 12px;
     font-weight: 700; padding: 2px 8px; border-radius: 10px; flex-shrink: 0;
