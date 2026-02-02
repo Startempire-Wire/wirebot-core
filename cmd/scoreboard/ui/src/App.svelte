@@ -1,5 +1,6 @@
 <script>
   import { onMount } from 'svelte';
+  import Dashboard from './lib/Dashboard.svelte';
   import Score from './lib/Score.svelte';
   import Feed from './lib/Feed.svelte';
   import Season from './lib/Season.svelte';
@@ -10,7 +11,7 @@
   import Profile from './lib/Profile.svelte';
   import PairingFlow from './lib/PairingFlow.svelte';
 
-  let view = $state('score');
+  let view = $state('dashboard');
   let data = $state(null);
   let feed = $state([]);
   let history = $state([]);
@@ -722,7 +723,9 @@
 {:else if data}
   <div class="app">
     <div class="content">
-      {#if view === 'score'}
+      {#if view === 'dashboard'}
+        <Dashboard {data} user={loggedInUser} token={getToken()} onnav={(e) => view = e.detail} onopenFab={() => showFab = true} />
+      {:else if view === 'score'}
         <Score {data} {lastUpdate} onHelp={() => showHints = true} user={loggedInUser} onPairing={() => showPairing = true} />
       {:else if view === 'feed'}
         <Feed items={feed} pendingCount={data?.pending_count || 0} onHelp={() => showHints = true} />
@@ -1016,7 +1019,7 @@
     </div>
 
     <!-- FAB cluster: Chat (primary) + Quick Ship (secondary) -->
-    {#if view === 'score' || view === 'feed'}
+    {#if view === 'dashboard' || view === 'score' || view === 'feed'}
       <div class="fab-cluster">
         {#if !showFab}
           <button class="fab-mini" onclick={() => showFab = true} title="Quick Ship">＋</button>

@@ -472,6 +472,9 @@ func main() {
 	mux.HandleFunc("/v1/oauth/google/authorize", s.auth(s.handleOAuthStart))
 	mux.HandleFunc("/v1/oauth/callback", s.handleOAuthCallback) // Provider redirects back here
 
+	// Checklist data for Dashboard view
+	mux.HandleFunc("/v1/checklist", s.auth(s.handleChecklist))
+
 	// SSO callback — receives JWT from Connect Plugin redirect
 	mux.HandleFunc("/auth/callback", s.handleSSOCallback)
 
@@ -4263,6 +4266,133 @@ func (s *Server) handlePairingStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 // ─── POST /v1/lock — EOD Score Lock ─────────────────────────────────────
+
+// handleChecklist serves task data for the Dashboard view.
+// Reads from the checklist.json file maintained by the gateway plugin.
+func (s *Server) handleChecklist(w http.ResponseWriter, r *http.Request) {
+	cors(w)
+	if r.Method == "OPTIONS" {
+		return
+	}
+
+	action := r.URL.Query().Get("action")
+	stageFilter := r.URL.Query().Get("stage")
+
+	data, err := os.ReadFile(checklistPath)
+	if err != nil {
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"tasks": []interface{}{}, "total": 0, "completed": 0, "percent": 0, "stage": "launch",
+		})
+		return
+	}
+
+	var cl map[string]interface{}
+	if json.Unmarshal(data, &cl) != nil {
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"tasks": []interface{}{}, "total": 0, "completed": 0, "percent": 0, "stage": "launch",
+		})
+		return
+	}
+
+	tasks, _ := cl["tasks"].([]interface{})
+	currentStage, _ := cl["stage"].(string)
+	if currentStage == "" {
+		currentStage = "launch"
+	}
+
+	// Filter and count
+	var filtered []interface{}
+	total := 0
+	completed := 0
+	var nextTask interface{}
+
+	for _, t := range tasks {
+		tm, ok := t.(map[string]interface{})
+		if !ok {
+			continue
+		}
+
+		status, _ := tm["status"].(string)
+		taskStage, _ := tm["stage"].(string)
+
+		// Apply stage filter
+		if stageFilter != "" && taskStage != stageFilter {
+			continue
+		}
+
+		total++
+		if status == "completed" || status == "done" {
+			completed++
+		} else if nextTask == nil && status != "skipped" {
+			nextTask = tm
+		}
+
+		filtered = append(filtered, tm)
+	}
+
+	pct := 0
+	if total > 0 {
+		pct = completed * 100 / total
+	}
+
+	switch action {
+	case "summary":
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"total":     total,
+			"completed": completed,
+			"percent":   pct,
+			"stage":     currentStage,
+			"next_task": nextTask,
+		})
+	case "daily":
+		// Return uncompleted tasks for today (up to 5)
+		var daily []interface{}
+		for _, t := range filtered {
+			tm, _ := t.(map[string]interface{})
+			status, _ := tm["status"].(string)
+			if status != "completed" && status != "done" && status != "skipped" {
+				daily = append(daily, tm)
+				if len(daily) >= 5 {
+					break
+				}
+			}
+		}
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"tasks": daily,
+			"total": len(daily),
+		})
+	case "complete":
+		// Mark task as done
+		taskID := r.URL.Query().Get("id")
+		if taskID == "" || r.Method != "POST" {
+			http.Error(w, `{"error":"POST with id required"}`, 400)
+			return
+		}
+		for _, t := range tasks {
+			tm, _ := t.(map[string]interface{})
+			if id, _ := tm["id"].(string); id == taskID {
+				tm["status"] = "completed"
+			}
+		}
+		cl["tasks"] = tasks
+		updated, _ := json.MarshalIndent(cl, "", "  ")
+		os.WriteFile(checklistPath, updated, 0644)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"ok":   true,
+			"id":   taskID,
+			"note": "Task marked complete",
+		})
+	default: // "list" or empty
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"tasks":     filtered,
+			"total":     total,
+			"completed": completed,
+			"percent":   pct,
+			"stage":     currentStage,
+			"next_task": nextTask,
+		})
+	}
+}
 
 func (s *Server) handleLock(w http.ResponseWriter, r *http.Request) {
 	cors(w)
