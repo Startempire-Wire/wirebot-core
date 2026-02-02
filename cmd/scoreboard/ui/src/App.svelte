@@ -80,17 +80,34 @@
     loggedInUser = null;
     tokenStatus = null;
     tokenMsg = '';
+    data = null;
+    feed = [];
+    history = [];
+    wrapped = null;
+    view = 'score';
   }
 
   function restoreSession() {
+    const token = getToken();
+    if (!token) return;
+
     const exp = parseInt(localStorage.getItem('wb_token_exp') || '0');
-    if (exp > Date.now()) {
-      try {
-        loggedInUser = JSON.parse(localStorage.getItem('wb_user'));
-      } catch {}
-    } else if (exp > 0) {
-      // Expired — clear
-      logout();
+
+    // JWT/SSO user — check expiry
+    const userJson = localStorage.getItem('wb_user');
+    if (userJson) {
+      if (exp > 0 && exp < Date.now()) {
+        logout(); return; // Expired
+      }
+      try { loggedInUser = JSON.parse(userJson); } catch { logout(); }
+      return;
+    }
+
+    // Operator token — no wb_user stored, create minimal profile
+    if (token && !userJson) {
+      loggedInUser = { display_name: 'Operator', tier: 'operator', tier_level: 99, is_admin: true };
+      // Set expiry if missing (24h)
+      if (!exp) localStorage.setItem('wb_token_exp', String(Date.now() + 86400000));
     }
   }
 
@@ -129,6 +146,11 @@
       if (res.ok) {
         tokenStatus = 'ok';
         tokenMsg = '✓ Connected — write features enabled';
+        localStorage.setItem('wb_token_exp', String(Date.now() + 86400000));
+        if (!loggedInUser) {
+          loggedInUser = { display_name: 'Operator', tier: 'operator', tier_level: 99, is_admin: true };
+        }
+        fetchAll();
       } else {
         tokenStatus = 'fail';
         tokenMsg = '✗ Invalid token';

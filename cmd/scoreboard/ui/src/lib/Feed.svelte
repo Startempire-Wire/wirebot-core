@@ -10,14 +10,17 @@
   let loadingProjects = $state(false);
   let actionInFlight = $state('');
 
-  const TOKEN = new URLSearchParams(window.location.search).get('token') || 
-                new URLSearchParams(window.location.search).get('key') ||
-                localStorage.getItem('wb_token') || '';
+  function getToken() {
+    return new URLSearchParams(window.location.search).get('token') || 
+           new URLSearchParams(window.location.search).get('key') ||
+           localStorage.getItem('wb_token') || '';
+  }
 
-  function authParam() { return TOKEN ? `token=${TOKEN}` : ''; }
+  function authParam() { const t = getToken(); return t ? `token=${t}` : ''; }
   function headers() {
     const h = { 'Content-Type': 'application/json' };
-    if (TOKEN) h['Authorization'] = `Bearer ${TOKEN}`;
+    const t = getToken();
+    if (t) h['Authorization'] = `Bearer ${t}`;
     return h;
   }
 

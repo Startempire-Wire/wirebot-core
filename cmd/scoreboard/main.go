@@ -914,9 +914,10 @@ func hmacEqual(a, b string) bool {
 // auth requires operator-level access (admin token or extrawire tier).
 func (s *Server) auth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		cors(w)
+		if r.Method == "OPTIONS" { return } // CORS preflight passthrough
 		ac := resolveAuth(r)
 		if !ac.Authenticated || ac.TierLevel < 3 {
-			w.Header().Set("Content-Type", "application/json")
 			http.Error(w, `{"error":"unauthorized","hint":"Requires operator token or ExtraWire+ Ring Leader JWT"}`, 401)
 			return
 		}
@@ -924,12 +925,13 @@ func (s *Server) auth(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
-// authMember requires any authenticated user (tier_level >= 1).
+// authMember requires any authenticated user (any tier).
 func (s *Server) authMember(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		cors(w)
+		if r.Method == "OPTIONS" { return } // CORS preflight passthrough
 		ac := resolveAuth(r)
 		if !ac.Authenticated {
-			w.Header().Set("Content-Type", "application/json")
 			http.Error(w, `{"error":"unauthorized","hint":"Login via startempirewire.com or provide Ring Leader JWT"}`, 401)
 			return
 		}
