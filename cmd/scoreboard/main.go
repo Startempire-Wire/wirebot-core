@@ -1060,28 +1060,9 @@ func (s *Server) postEvent(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Auto-approve ONLY trusted automated sources.
-	// Everything else is gated (pending) until operator approves.
-	// This prevents gaming — you can't self-report your way to a high score.
-	trustedSources := map[string]bool{
-		"github-webhook":  true,
-		"stripe-webhook":  true,
-		"rss-poller":      true,
-		"youtube-poller":  true,
-		"git-discovery":   true,
-		"sendy-poller":    true,
-		"cloudflare-poller": true,
-		"woo-poller":      true,
-		"uptime-poller":   true,
-		"posthog-poller":  true,
-		"discord-poller":       true,
-		"automated":            true,
-		"memberpress-webhook":  true,
-	}
+	// ALL events start as pending. Operator approves what counts.
+	// No auto-approve — full operator control over the score.
 	status := "pending"
-	if trustedSources[evt.Source] {
-		status = "approved"
-	}
 
 	// git-discovery: check if the project is approved (auto-approve)
 	if evt.Source == "git-discovery" && evt.Status == "approved" {
@@ -4457,7 +4438,7 @@ func (s *Server) checkSystemsHealth() {
 	now := time.Now().UTC().Format(time.RFC3339)
 
 	s.db.Exec(`INSERT OR IGNORE INTO events (id, event_type, lane, source, timestamp, artifact_title, score_delta, status, created_at)
-		VALUES (?, 'SERVICE_HEALTH', 'systems', 'automated', ?, ?, ?, 'approved', ?)`,
+		VALUES (?, 'SERVICE_HEALTH', 'systems', 'automated', ?, ?, ?, 'pending', ?)`,
 		id, now, title, delta, now)
 
 	log.Printf("Systems health: %d/%d up, +%d pts", up, total, delta)
