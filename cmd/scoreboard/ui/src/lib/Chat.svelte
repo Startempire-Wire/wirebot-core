@@ -6,7 +6,7 @@
   let chatBody = $state(null);
 
   function getToken() {
-    return localStorage.getItem('rl_jwt') || localStorage.getItem('operator_token') || '';
+    return localStorage.getItem('wb_token') || localStorage.getItem('rl_jwt') || localStorage.getItem('operator_token') || '';
   }
 
   function scrollBottom() {

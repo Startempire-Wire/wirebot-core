@@ -29,7 +29,7 @@
     if (!text) return;
     intentSaving = true;
     try {
-      const token = localStorage.getItem('rl_jwt') || localStorage.getItem('operator_token') || '';
+      const token = localStorage.getItem('wb_token') || localStorage.getItem('rl_jwt') || localStorage.getItem('operator_token') || '';
       const resp = await fetch('/v1/intent', {
         method: 'POST',
         headers: {
