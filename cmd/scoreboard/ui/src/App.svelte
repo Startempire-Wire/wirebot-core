@@ -313,8 +313,16 @@
             </div>
           {:else}
             <div class="s-group">
-              <label>Sign in with Startempire Wire</label>
-              <p class="s-hint" style="margin-bottom:6px">Use your startempirewire.com credentials</p>
+              <label>Sign in</label>
+              <a class="btn-sso" href="https://startempirewire.com/wp-json/sewn-connect/v1/auth/sso?redirect_uri=https://wins.wirebot.chat">
+                → Sign in with Startempire Wire
+              </a>
+              <p class="s-hint">Uses your startempirewire.com login — no extra password needed</p>
+            </div>
+
+            <!-- Manual login fallback -->
+            <details class="s-group">
+              <summary class="s-detail-label">Manual login (app password)</summary>
               <input type="text" bind:value={loginUser} placeholder="Username"
                 onkeydown={(e) => e.key === 'Enter' && document.getElementById('login-pass')?.focus()} />
               <input type="password" id="login-pass" bind:value={loginPass} placeholder="App password"
@@ -325,8 +333,7 @@
               <button class="btn-login" onclick={loginViaRingLeader} disabled={loginLoading}>
                 {loginLoading ? 'Connecting...' : '→ Sign in'}
               </button>
-              <p class="s-hint">Auth flows through Ring Leader → startempirewire.com</p>
-            </div>
+            </details>
 
             <!-- Operator fallback -->
             <details class="s-group">
@@ -641,6 +648,14 @@
   .s-hint { font-size: 11px; opacity: 0.35; }
 
   /* Login / Session */
+  .btn-sso {
+    display: block; text-align: center; text-decoration: none;
+    background: #7c7cff; color: #fff; border-radius: 8px;
+    padding: 14px; font-size: 15px; font-weight: 700;
+    transition: background 0.15s;
+  }
+  .btn-sso:active { background: #5c5cdd; }
+
   .btn-login {
     background: #7c7cff; color: #fff; border: none; border-radius: 8px;
     padding: 12px; font-size: 14px; font-weight: 700; cursor: pointer;

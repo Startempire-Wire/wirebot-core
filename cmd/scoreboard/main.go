@@ -421,6 +421,9 @@ func main() {
 	mux.HandleFunc("/v1/webhooks/stripe", s.handleStripeWebhook) // Stripe signs webhooks, no bearer auth
 	mux.HandleFunc("/v1/financial/snapshot", s.auth(s.handleFinancialSnapshot))
 
+	// SSO callback — receives JWT from Connect Plugin redirect
+	mux.HandleFunc("/auth/callback", s.handleSSOCallback)
+
 	// Static files (Svelte PWA)
 	staticFS, _ := fs.Sub(staticFiles, "static")
 	fileServer := http.FileServer(http.FS(staticFS))
@@ -2422,6 +2425,63 @@ func (s *Server) handleFinancialSnapshot(w http.ResponseWriter, r *http.Request)
 	snapshot["cancellations_30d"] = cancellations
 
 	json.NewEncoder(w).Encode(snapshot)
+}
+
+// ─── SSO Callback ───────────────────────────────────────────────────────────
+// Receives JWT via URL fragment from Connect Plugin SSO redirect.
+// Serves a tiny HTML page that reads the fragment and stores in localStorage.
+
+func (s *Server) handleSSOCallback(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Write([]byte(`<!DOCTYPE html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Signing in...</title>
+<style>
+body{background:#0a0a12;color:#ddd;font-family:system-ui;display:flex;justify-content:center;align-items:center;height:100dvh;margin:0}
+.card{text-align:center;padding:32px}
+.spinner{width:32px;height:32px;border:3px solid #222;border-top-color:#7c7cff;border-radius:50%;animation:spin .8s linear infinite;margin:0 auto 16px}
+@keyframes spin{to{transform:rotate(360deg)}}
+h2{font-size:18px;margin:0 0 8px}
+p{font-size:13px;color:#666;margin:0}
+.ok{color:#2ecc71} .fail{color:#ff4444}
+</style></head><body>
+<div class="card" id="card">
+<div class="spinner" id="spinner"></div>
+<h2 id="msg">Signing in...</h2>
+<p id="detail">Connecting to Startempire Wire</p>
+</div>
+<script>
+(function(){
+  var hash = window.location.hash.substring(1);
+  var params = new URLSearchParams(hash);
+  var token = params.get('token');
+  var userStr = params.get('user');
+
+  if (!token) {
+    document.getElementById('spinner').style.display='none';
+    document.getElementById('msg').className='fail';
+    document.getElementById('msg').textContent='No token received';
+    document.getElementById('detail').textContent='Try signing in again from startempirewire.com';
+    return;
+  }
+
+  // Store JWT + user data
+  localStorage.setItem('wb_token', token);
+  if (userStr) {
+    try { localStorage.setItem('wb_user', decodeURIComponent(userStr)); } catch(e) {}
+  }
+  // Set expiry (24h)
+  localStorage.setItem('wb_token_exp', String(Date.now() + 86400000));
+
+  // Clean URL and redirect
+  document.getElementById('msg').className='ok';
+  document.getElementById('msg').textContent='✓ Signed in';
+  document.getElementById('detail').textContent='Redirecting to scoreboard...';
+  document.getElementById('spinner').style.display='none';
+
+  setTimeout(function(){ window.location.href = '/'; }, 800);
+})();
+</script></body></html>`))
 }
 
 // ─── Score Engine ───────────────────────────────────────────────────────────
