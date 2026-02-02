@@ -197,6 +197,29 @@ type FeedItem struct {
 
 // ─── Server ─────────────────────────────────────────────────────────────────
 
+// Operator timezone — all "today" calculations use this, not UTC.
+// Events are still stored with UTC timestamps, but daily scores,
+// streaks, and seasons group by the operator's local date.
+var operatorTZ *time.Location
+
+func init() {
+	var err error
+	operatorTZ, err = time.LoadLocation("America/Los_Angeles")
+	if err != nil {
+		operatorTZ = time.UTC
+	}
+}
+
+// operatorToday returns today's date in the operator's timezone.
+func operatorToday() string {
+	return time.Now().In(operatorTZ).Format("2006-01-02")
+}
+
+// operatorNow returns the current time in the operator's timezone.
+func operatorNow() time.Time {
+	return time.Now().In(operatorTZ)
+}
+
 type Server struct {
 	db       *sql.DB
 	mu       sync.RWMutex
@@ -514,6 +537,14 @@ func main() {
 		mux.ServeHTTP(w, r)
 	})
 
+	// Recalculate today's score from existing events on startup
+	// This ensures the score is accurate even after a restart
+	today := operatorToday()
+	s.updateDailyScore(today)
+	s.updateStreak(today, "")
+	s.recalcSeason()
+	log.Printf("Startup recalc complete for %s", today)
+
 	log.Printf("Scoreboard listening on %s (multi-tenant enabled)", listenAddr)
 	log.Fatal(http.ListenAndServe(listenAddr, topHandler))
 }
@@ -656,7 +687,7 @@ func (s *Server) loadSeason() {
 }
 
 func (s *Server) recalcSeason() {
-	now := time.Now()
+	now := operatorNow()
 	startT, _ := time.Parse("2006-01-02", s.season.StartDate)
 	endT, _ := time.Parse("2006-01-02", s.season.EndDate)
 	elapsed := int(now.Sub(startT).Hours() / 24)
@@ -838,13 +869,13 @@ func (s *Server) postEvent(w http.ResponseWriter, r *http.Request) {
 
 	// Only update scores if approved
 	if status == "approved" {
-		today := time.Now().Format("2006-01-02")
+		today := operatorToday()
 		s.updateDailyScore(today)
 		s.updateStreak(today, evt.ArtifactTitle)
 		s.recalcSeason()
 	}
 
-	daily := s.getDailyScore(time.Now().Format("2006-01-02"))
+	daily := s.getDailyScore(operatorToday())
 	streak := s.getStreak("ship")
 
 	resp := map[string]interface{}{
@@ -965,7 +996,7 @@ func (s *Server) handleEventsBatch(w http.ResponseWriter, r *http.Request) {
 		totalDelta += scoreDelta
 	}
 
-	today := time.Now().Format("2006-01-02")
+	today := operatorToday()
 	s.updateDailyScore(today)
 	s.recalcSeason()
 	daily := s.getDailyScore(today)
@@ -988,7 +1019,7 @@ func (s *Server) handleScore(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if date == "" {
-		date = time.Now().Format("2006-01-02")
+		date = operatorToday()
 	}
 
 	daily := s.getDailyScore(date)
@@ -1002,7 +1033,7 @@ func (s *Server) handleScore(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleScoreRange(w http.ResponseWriter, rangeQ string) {
 	var startDate, endDate string
-	now := time.Now()
+	now := operatorNow()
 
 	switch rangeQ {
 	case "week":
@@ -1069,7 +1100,7 @@ func (s *Server) handleScoreboard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	today := time.Now().Format("2006-01-02")
+	today := operatorToday()
 	daily := s.getDailyScore(today)
 	streak := s.getStreak("ship")
 	s.recalcSeason()
@@ -1078,7 +1109,7 @@ func (s *Server) handleScoreboard(w http.ResponseWriter, r *http.Request) {
 	intent := daily.Intent
 	stallHours := s.getStallHours()
 
-	now := time.Now()
+	now := operatorNow()
 	dayProgress := float64(now.Hour()*60+now.Minute()) / 1440.0
 	weekday := int(now.Weekday())
 	if weekday == 0 {
@@ -1219,7 +1250,7 @@ func (s *Server) getFeedItems(limit int, date, lane string) []FeedItem {
 
 func (s *Server) handleIntent(w http.ResponseWriter, r *http.Request) {
 	cors(w)
-	today := time.Now().Format("2006-01-02")
+	today := operatorToday()
 
 	switch r.Method {
 	case "POST":
@@ -1329,7 +1360,7 @@ func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var startDate, endDate string
-	now := time.Now()
+	now := operatorNow()
 	switch rangeQ {
 	case "week":
 		startDate = now.AddDate(0, 0, -7).Format("2006-01-02")
@@ -1452,7 +1483,7 @@ func (s *Server) handleWrapped(w http.ResponseWriter, r *http.Request) {
 	var firstHalf, secondHalf float64
 	midpoint := s.season.DaysElapsed / 2
 	if midpoint > 0 {
-		midDate := time.Now().AddDate(0, 0, -midpoint).Format("2006-01-02")
+		midDate := operatorNow().AddDate(0, 0, -midpoint).Format("2006-01-02")
 		s.db.QueryRow("SELECT COALESCE(AVG(execution_score),0) FROM daily_scores WHERE date < ?", midDate).Scan(&firstHalf)
 		s.db.QueryRow("SELECT COALESCE(AVG(execution_score),0) FROM daily_scores WHERE date >= ?", midDate).Scan(&secondHalf)
 		if secondHalf > firstHalf+5 {
@@ -1541,7 +1572,7 @@ func (s *Server) handleGitHubWebhook(w http.ResponseWriter, r *http.Request) {
 		scoreDelta, time.Now().UTC().Format(time.RFC3339), "approved")
 	s.mu.Unlock()
 
-	today := time.Now().Format("2006-01-02")
+	today := operatorToday()
 	s.updateDailyScore(today)
 	s.updateStreak(today, title)
 	s.recalcSeason()
@@ -1601,7 +1632,7 @@ func (s *Server) handleStripeWebhook(w http.ResponseWriter, r *http.Request) {
 		time.Now().UTC().Format(time.RFC3339), "approved")
 	s.mu.Unlock()
 
-	today := time.Now().Format("2006-01-02")
+	today := operatorToday()
 	s.updateDailyScore(today)
 	s.recalcSeason()
 
@@ -1645,13 +1676,24 @@ func calcScoreDelta(lane, eventType string, confidence float64) int {
 }
 
 func (s *Server) updateDailyScore(date string) {
+	// Convert operator-local date to UTC range for event matching.
+	// Events store UTC timestamps, but daily scores group by operator's local date.
+	// Example: PST "2026-02-01" → UTC "2026-02-01T08:00:00Z" to "2026-02-02T08:00:00Z"
+	localDate, err := time.ParseInLocation("2006-01-02", date, operatorTZ)
+	if err != nil {
+		localDate, _ = time.Parse("2006-01-02", date)
+	}
+	utcStart := localDate.UTC().Format(time.RFC3339)
+	utcEnd := localDate.Add(24 * time.Hour).UTC().Format(time.RFC3339)
+
 	// Only count approved events toward score
+	dateFilter := "status='approved' AND timestamp >= ? AND timestamp < ?"
 	var shipping, distribution, revenue, systems, ships int
-	s.db.QueryRow("SELECT COALESCE(SUM(score_delta),0) FROM events WHERE lane='shipping' AND status='approved' AND timestamp LIKE ?", date+"%").Scan(&shipping)
-	s.db.QueryRow("SELECT COALESCE(SUM(score_delta),0) FROM events WHERE lane='distribution' AND status='approved' AND timestamp LIKE ?", date+"%").Scan(&distribution)
-	s.db.QueryRow("SELECT COALESCE(SUM(score_delta),0) FROM events WHERE lane='revenue' AND status='approved' AND timestamp LIKE ?", date+"%").Scan(&revenue)
-	s.db.QueryRow("SELECT COALESCE(SUM(score_delta),0) FROM events WHERE lane='systems' AND status='approved' AND timestamp LIKE ?", date+"%").Scan(&systems)
-	s.db.QueryRow("SELECT COUNT(*) FROM events WHERE lane='shipping' AND status='approved' AND timestamp LIKE ?", date+"%").Scan(&ships)
+	s.db.QueryRow("SELECT COALESCE(SUM(score_delta),0) FROM events WHERE lane='shipping' AND "+dateFilter, utcStart, utcEnd).Scan(&shipping)
+	s.db.QueryRow("SELECT COALESCE(SUM(score_delta),0) FROM events WHERE lane='distribution' AND "+dateFilter, utcStart, utcEnd).Scan(&distribution)
+	s.db.QueryRow("SELECT COALESCE(SUM(score_delta),0) FROM events WHERE lane='revenue' AND "+dateFilter, utcStart, utcEnd).Scan(&revenue)
+	s.db.QueryRow("SELECT COALESCE(SUM(score_delta),0) FROM events WHERE lane='systems' AND "+dateFilter, utcStart, utcEnd).Scan(&systems)
+	s.db.QueryRow("SELECT COUNT(*) FROM events WHERE lane='shipping' AND "+dateFilter, utcStart, utcEnd).Scan(&ships)
 
 	if shipping > 40 {
 		shipping = 40
@@ -1668,7 +1710,7 @@ func (s *Server) updateDailyScore(date string) {
 
 	// Count context switches — penalty for 3rd+ switch in a day
 	var switches int
-	s.db.QueryRow("SELECT COUNT(*) FROM events WHERE event_type='CONTEXT_SWITCH' AND status='approved' AND timestamp LIKE ?", date+"%").Scan(&switches)
+	s.db.QueryRow("SELECT COUNT(*) FROM events WHERE event_type='CONTEXT_SWITCH' AND status='approved' AND timestamp >= ? AND timestamp < ?", utcStart, utcEnd).Scan(&switches)
 	contextPenalty := 0
 	if switches > 2 {
 		contextPenalty = (switches - 2) * 5
@@ -1677,7 +1719,7 @@ func (s *Server) updateDailyScore(date string) {
 	// Check unfulfilled intent (COMMITMENT_BREACH)
 	commitmentPenalty := 0
 	// Only check for yesterday and older (not today — still in progress)
-	yesterday := time.Now().AddDate(0, 0, -1).Format("2006-01-02")
+	yesterday := operatorNow().AddDate(0, 0, -1).Format("2006-01-02")
 	if date <= yesterday {
 		var intent string
 		var fulfilled int
@@ -1756,7 +1798,7 @@ func (s *Server) updateStreak(date string, artifact string) {
 	var current, best int
 	s.db.QueryRow("SELECT current_len, best_len, last_date FROM streaks WHERE streak_type='ship'").Scan(&current, &best, &lastDate)
 
-	yesterday := time.Now().AddDate(0, 0, -1).Format("2006-01-02")
+	yesterday := operatorNow().AddDate(0, 0, -1).Format("2006-01-02")
 	if lastDate == date {
 		// Already counted today
 	} else if lastDate == yesterday {
@@ -1920,7 +1962,7 @@ func (s *Server) handleCard(w http.ResponseWriter, r *http.Request) {
 		cardType = "season"
 	}
 
-	today := time.Now().Format("2006-01-02")
+	today := operatorToday()
 	daily := s.getDailyScore(today)
 	streak := s.getStreak("ship")
 	s.recalcSeason()
@@ -1949,7 +1991,7 @@ func (s *Server) handleCard(w http.ResponseWriter, r *http.Request) {
 		stat3Val = s.season.Record
 	case "weekly":
 		var weekScore, weekShips, weekWins int
-		weekStart := time.Now().AddDate(0, 0, -7).Format("2006-01-02")
+		weekStart := operatorNow().AddDate(0, 0, -7).Format("2006-01-02")
 		s.db.QueryRow("SELECT COALESCE(AVG(execution_score),0), COALESCE(SUM(ships_count),0), COUNT(CASE WHEN won THEN 1 END) FROM daily_scores WHERE date >= ?", weekStart).Scan(&weekScore, &weekShips, &weekWins)
 		title = fmt.Sprintf("%d", weekScore)
 		subtitle = "WEEKLY AVG"
@@ -2018,7 +2060,7 @@ func (s *Server) handleLock(w http.ResponseWriter, r *http.Request) {
 	json.NewDecoder(r.Body).Decode(&body)
 	date := body.Date
 	if date == "" {
-		date = time.Now().Format("2006-01-02")
+		date = operatorToday()
 	}
 
 	// Force recalculate final score
