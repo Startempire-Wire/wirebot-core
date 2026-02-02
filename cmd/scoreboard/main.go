@@ -1559,18 +1559,47 @@ func (s *Server) handleGitHubWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Insert as event with STRONG verification
+	// Dedup: check if discovery already found a pending event for same artifact
+	// If so, UPGRADE it to approved+STRONG instead of creating a duplicate
 	scoreDelta := calcScoreDelta("shipping", evtType, 0.95)
 	id := fmt.Sprintf("evt-gh-%d", time.Now().UnixNano())
-	s.mu.Lock()
-	s.db.Exec(`INSERT INTO events (id, event_type, lane, source, timestamp,
-		artifact_url, artifact_title, confidence, verifiers, verification_level,
-		score_delta, created_at, status)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-		id, evtType, "shipping", "github-webhook", time.Now().UTC().Format(time.RFC3339),
-		url, title, 0.95, `["github_webhook"]`, "STRONG",
-		scoreDelta, time.Now().UTC().Format(time.RFC3339), "approved")
-	s.mu.Unlock()
+	upgraded := false
+
+	if url != "" {
+		var existingID string
+		s.db.QueryRow("SELECT id FROM events WHERE artifact_url=? AND status='pending' LIMIT 1", url).Scan(&existingID)
+		if existingID != "" {
+			s.mu.Lock()
+			s.db.Exec(`UPDATE events SET status='approved', source='github-webhook',
+				verification_level='STRONG', verifiers='["github_webhook"]',
+				confidence=0.95, score_delta=? WHERE id=?`, scoreDelta, existingID)
+			s.mu.Unlock()
+			id = existingID
+			upgraded = true
+		}
+	}
+
+	if !upgraded {
+		// Dedup: check for same title + type within last 5 minutes (prevents triple-fire)
+		var recentID string
+		fiveMinAgo := time.Now().Add(-5 * time.Minute).UTC().Format(time.RFC3339)
+		s.db.QueryRow("SELECT id FROM events WHERE event_type=? AND artifact_title=? AND source='github-webhook' AND created_at > ? LIMIT 1",
+			evtType, title, fiveMinAgo).Scan(&recentID)
+		if recentID != "" {
+			json.NewEncoder(w).Encode(map[string]interface{}{"ok": true, "skipped": true, "reason": "duplicate webhook (same event within 5min)", "existing_id": recentID})
+			return
+		}
+
+		s.mu.Lock()
+		s.db.Exec(`INSERT INTO events (id, event_type, lane, source, timestamp,
+			artifact_url, artifact_title, confidence, verifiers, verification_level,
+			score_delta, created_at, status)
+			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			id, evtType, "shipping", "github-webhook", time.Now().UTC().Format(time.RFC3339),
+			url, title, 0.95, `["github_webhook"]`, "STRONG",
+			scoreDelta, time.Now().UTC().Format(time.RFC3339), "approved")
+		s.mu.Unlock()
+	}
 
 	today := operatorToday()
 	s.updateDailyScore(today)
