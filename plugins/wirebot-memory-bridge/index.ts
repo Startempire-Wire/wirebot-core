@@ -975,7 +975,11 @@ const wirebotMemoryBridge = {
             Type.Literal("season"),
             Type.Literal("intent"),
             Type.Literal("submit"),
-          ], { description: "dashboard=score+feed, feed=recent events, season=record, intent=set/get intent, submit=new event" }),
+            Type.Literal("financial"),
+            Type.Literal("integrations"),
+            Type.Literal("projects"),
+            Type.Literal("stalls"),
+          ], { description: "dashboard=score+lanes+feed, feed=recent events, season=record, intent=set/get, submit=new event, financial=revenue snapshot, integrations=connected accounts, projects=approved repos, stalls=detect inactivity" }),
           // For "submit" action
           event_type: Type.Optional(Type.String({ description: "e.g. TASK_COMPLETED, CODE_SHIPPED, REVENUE_EVENT" })),
           lane: Type.Optional(Type.String({ description: "shipping|distribution|revenue|systems" })),
@@ -1034,6 +1038,43 @@ const wirebotMemoryBridge = {
                 const data = await resp.json() as { intent?: string };
                 return { content: [{ type: "text" as const, text: `Current intent: ${data.intent || "(none set)"}` }] };
               }
+              case "financial": {
+                const resp = await fetch(`${scoreboardUrl}/v1/financial/snapshot`, { headers });
+                const data = await resp.json();
+                return { content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }] };
+              }
+              case "integrations": {
+                const resp = await fetch(`${scoreboardUrl}/v1/integrations`, { headers });
+                const data = await resp.json();
+                // Summarize for AI context
+                const ints = (data as { integrations?: Array<{ provider: string; display_name: string; status: string; last_used_at: string }> }).integrations || [];
+                const summary = ints.map((i: { provider: string; display_name: string; status: string; last_used_at: string }) =>
+                  `${i.provider}: ${i.display_name} (${i.status}, last: ${i.last_used_at || "never"})`
+                ).join("\n");
+                return { content: [{ type: "text" as const, text: `Connected integrations (${ints.length}):\n${summary}` }] };
+              }
+              case "projects": {
+                const resp = await fetch(`${scoreboardUrl}/v1/projects`, { headers });
+                const data = await resp.json();
+                return { content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }] };
+              }
+              case "stalls": {
+                // Check for stall signals: hours since last ship, lane gaps, streak risk
+                const resp = await fetch(`${scoreboardUrl}/v1/scoreboard?mode=dashboard`, { headers });
+                const data = await resp.json() as {
+                  scoreboard?: { score: number; stall_hours: number; streak: { current: number }; lanes: { shipping: number; distribution: number; revenue: number; systems: number } };
+                };
+                const sb = data.scoreboard || data as any;
+                const stalls: string[] = [];
+                if (sb.stall_hours > 12) stalls.push(`⚠️ ${sb.stall_hours}h since last ship`);
+                if (sb.lanes?.shipping === 0) stalls.push("🔴 Shipping lane empty today");
+                if (sb.lanes?.revenue === 0) stalls.push("🟡 Revenue lane empty today");
+                if (sb.lanes?.distribution === 0) stalls.push("🟡 Distribution lane empty today");
+                if (sb.lanes?.systems === 0) stalls.push("🟡 Systems lane empty today");
+                if (sb.streak?.current === 0) stalls.push("🔴 Streak broken!");
+                if (stalls.length === 0) stalls.push("✅ No stalls detected — all lanes active");
+                return { content: [{ type: "text" as const, text: `Stall check:\n${stalls.join("\n")}\nScore: ${sb.score || 0}/100, Streak: ${sb.streak?.current || 0}d` }] };
+              }
               case "submit": {
                 if (!p.event_type || !p.lane) {
                   return { content: [{ type: "text" as const, text: "❌ submit requires event_type and lane" }] };
@@ -1067,6 +1108,96 @@ const wirebotMemoryBridge = {
       },
       { name: "wirebot_score" },
     );
+
+    // ========================================================================
+    // Hook: agent_start — write live scoreboard state to workspace file
+    // The workspace bootstrap system will inject this into the system prompt.
+    // ========================================================================
+
+    api.on("agent_start", async () => {
+      try {
+        const resp = await fetch(`${scoreboardUrl}/v1/scoreboard?mode=dashboard`, {
+          headers: {
+            "Authorization": `Bearer ${scoreboardToken}`,
+            "Content-Type": "application/json",
+          },
+        });
+        if (!resp.ok) return;
+        const data = await resp.json() as Record<string, unknown>;
+
+        const sb = (data.scoreboard || data) as Record<string, unknown>;
+        const lanes = (sb.lanes || {}) as Record<string, number>;
+        const streak = (sb.streak || {}) as Record<string, number>;
+        const feed = ((data.feed || []) as Array<{ artifact_title: string; timestamp: string }>);
+
+        // Financial snapshot (separate call)
+        let financial = "";
+        try {
+          const fResp = await fetch(`${scoreboardUrl}/v1/financial/snapshot`, {
+            headers: { "Authorization": `Bearer ${scoreboardToken}` },
+          });
+          if (fResp.ok) {
+            const fData = await fResp.json() as Record<string, unknown>;
+            const rev30 = fData.revenue_30d || 0;
+            const mrr = fData.mrr_estimate || 0;
+            financial = `Revenue 30d: $${rev30} | MRR est: $${mrr}`;
+          }
+        } catch { /* non-critical */ }
+
+        // Integration status
+        let integrations = "";
+        try {
+          const iResp = await fetch(`${scoreboardUrl}/v1/integrations`, {
+            headers: { "Authorization": `Bearer ${scoreboardToken}` },
+          });
+          if (iResp.ok) {
+            const iData = await iResp.json() as { integrations?: Array<{ provider: string; display_name: string; status: string }> };
+            const active = (iData.integrations || []).filter(i => i.status === "active");
+            integrations = `Connected: ${active.map(i => i.display_name).join(", ")} (${active.length} total)`;
+          }
+        } catch { /* non-critical */ }
+
+        const briefing = [
+          `# Scoreboard State (live)`,
+          ``,
+          `Updated: ${new Date().toISOString()}`,
+          ``,
+          `## Execution Score`,
+          `- Score: ${sb.score || 0}/100 | Signal: ${sb.signal || "unknown"}`,
+          `- Season: ${sb.season_day || "?"}`,
+          `- Streak: ${streak.current || 0} days (best: ${streak.best || 0})`,
+          sb.stall_hours ? `- ⚠️ STALL: ${sb.stall_hours}h since last ship` : `- No stall detected`,
+          sb.intent ? `- Intent: ${sb.intent}` : `- Intent: (not set — nudge operator)`,
+          ``,
+          `## Lane Breakdown`,
+          `- Shipping:     ${lanes.shipping || 0}/40`,
+          `- Revenue:      ${lanes.revenue || 0}/20`,
+          `- Distribution: ${lanes.distribution || 0}/25`,
+          `- Systems:      ${lanes.systems || 0}/15`,
+          ``,
+          financial ? `## Financial\n${financial}\n` : "",
+          integrations ? `## Integrations\n${integrations}\n` : "",
+          feed.length > 0 ? `## Recent Activity\n${feed.slice(0, 5).map(e => `- ${e.artifact_title}`).join("\n")}` : "",
+          ``,
+          `## What You Should Do With This Data`,
+          `- If score < 30 and signal is RED: focus on shipping (highest-weight lane)`,
+          `- If stall > 8h: proactively ask what's blocking, suggest smallest shippable unit`,
+          `- If intent not set: remind operator to set daily intent`,
+          `- If streak > 7: celebrate consistency, protect the streak`,
+          `- If revenue lane is 0: check if Stripe/Plaid/WooCommerce events are flowing`,
+          `- Reference specific lane scores and recent events in your responses`,
+          `- When operator asks "how am I doing?" → read this data, don't guess`,
+        ].filter(Boolean).join("\n");
+
+        // Write to workspace file — workspace bootstrap auto-includes this
+        const fs = await import("fs");
+        const path = "/home/wirebot/clawd/SCOREBOARD_STATE.md";
+        fs.writeFileSync(path, briefing, "utf-8");
+        api.logger.info(`Scoreboard state written to workspace (score=${sb.score}, streak=${streak.current})`);
+      } catch (err) {
+        api.logger.warn(`Scoreboard state write failed: ${String(err)}`);
+      }
+    });
 
     // ========================================================================
     // Hook: agent_end — async fact extraction to Mem0
