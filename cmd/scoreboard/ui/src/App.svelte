@@ -314,7 +314,7 @@
           {:else}
             <div class="s-group">
               <label>Sign in</label>
-              <a class="btn-sso" href="https://startempirewire.com/wp-json/sewn-connect/v1/auth/sso?redirect_uri=https://wins.wirebot.chat">
+              <a class="btn-sso" href="https://startempirewire.com/?sewn_sso=1&redirect_uri=https://wins.wirebot.chat">
                 → Sign in with Startempire Wire
               </a>
               <p class="s-hint">Uses your startempirewire.com login — no extra password needed</p>
