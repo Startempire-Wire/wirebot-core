@@ -27,7 +27,126 @@
   let loginError = $state('');
   let loggedInUser = $state(null); // { display_name, tier, tier_level, user_id }
 
+  // ── Integrations (Connected Accounts) ──
+  let integrations = $state([]);
+  let showConnectForm = $state(null); // provider ID being configured, or null
+  let connectCred = $state('');
+  let connectExtra = $state(''); // channel_id, feed URL, etc.
+  let connectStatus = $state(null); // null | 'saving' | 'ok' | 'fail'
+  let connectMsg = $state('');
+
+  // Integration registry — extensible catalog of connectable services
+  const PROVIDERS = [
+    // ── Revenue ──
+    { id: 'stripe', name: 'Stripe', icon: '💳', lane: 'revenue', auth: 'webhook',
+      desc: 'Payment & subscription tracking', hint: 'Webhook auto-configured — already connected via server.',
+      autoConnected: true },
+    // ── Distribution ──
+    { id: 'youtube', name: 'YouTube', icon: '📺', lane: 'distribution', auth: 'api_key',
+      desc: 'Video publishing detection', hint: 'YouTube Data API key',
+      fields: [{ key: 'channel_id', label: 'Channel ID', placeholder: 'UC...' }] },
+    { id: 'blog_rss', name: 'Blog RSS', icon: '📝', lane: 'distribution', auth: 'rss_url',
+      desc: 'Blog post detection via RSS/Atom', hint: 'Full RSS feed URL',
+      credLabel: 'Feed URL', credPlaceholder: 'https://yourblog.com/feed' },
+    { id: 'podcast_rss', name: 'Podcast RSS', icon: '🎙️', lane: 'distribution', auth: 'rss_url',
+      desc: 'Podcast episode detection', hint: 'RSS feed URL from your podcast host',
+      credLabel: 'Feed URL', credPlaceholder: 'https://anchor.fm/s/.../podcast/rss' },
+    // ── Shipping ──
+    { id: 'github', name: 'GitHub', icon: '🐙', lane: 'shipping', auth: 'webhook',
+      desc: 'Commit, PR, and release tracking', hint: 'Webhook auto-configured — already connected via server.',
+      autoConnected: true },
+    // ── Systems ──
+    { id: 'uptime', name: 'Uptime Monitor', icon: '🟢', lane: 'systems', auth: 'webhook',
+      desc: 'Uptime & downtime events', hint: 'Configure your uptime service to POST to webhook URL' },
+    // ── Wellness (Operator Sustainability) ──
+    { id: 'fitness', name: 'Fitness', icon: '💪', lane: 'systems', auth: 'api_key',
+      desc: 'Workout & activity tracking', hint: 'Coming soon — Apple Health, Garmin, Fitbit',
+      comingSoon: true },
+    { id: 'sleep', name: 'Sleep', icon: '😴', lane: 'systems', auth: 'api_key',
+      desc: 'Sleep quality tracking', hint: 'Coming soon — Oura, Whoop, Apple Health',
+      comingSoon: true },
+    { id: 'nutrition', name: 'Nutrition', icon: '🥗', lane: 'systems', auth: 'api_key',
+      desc: 'Meal & nutrition tracking', hint: 'Coming soon — MyFitnessPal, Cronometer',
+      comingSoon: true },
+  ];
+
   const API = window.location.origin;
+
+  async function loadIntegrations() {
+    try {
+      const res = await fetch(`${API}/v1/integrations`, { headers: authHeaders() });
+      if (res.ok) {
+        const data = await res.json();
+        integrations = data.integrations || [];
+      }
+    } catch {}
+  }
+
+  function getConnectedProvider(providerId) {
+    return integrations.find(i => i.provider === providerId && i.status === 'active');
+  }
+
+  async function connectProvider(provider) {
+    if (provider.comingSoon) return;
+    if (provider.autoConnected) return; // Already wired server-side
+
+    connectStatus = 'saving';
+    connectMsg = 'Connecting...';
+
+    const body = {
+      provider: provider.id,
+      auth_type: provider.auth,
+      display_name: provider.name,
+      credential: connectCred,
+      config: '{}',
+    };
+
+    // Add extra fields to config
+    if (connectExtra && provider.fields?.length) {
+      const cfg = {};
+      cfg[provider.fields[0].key] = connectExtra;
+      body.config = JSON.stringify(cfg);
+    }
+
+    // For RSS, credential IS the URL
+    if (provider.auth === 'rss_url') {
+      body.credential = connectCred;
+    }
+
+    try {
+      const res = await fetch(`${API}/v1/integrations`, {
+        method: 'POST',
+        headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      if (res.ok) {
+        connectStatus = 'ok';
+        connectMsg = `✓ ${provider.name} connected`;
+        connectCred = '';
+        connectExtra = '';
+        showConnectForm = null;
+        await loadIntegrations();
+      } else {
+        const err = await res.json();
+        connectStatus = 'fail';
+        connectMsg = err.error || 'Connection failed';
+      }
+    } catch (e) {
+      connectStatus = 'fail';
+      connectMsg = 'Network error';
+    }
+    setTimeout(() => { connectStatus = null; }, 4000);
+  }
+
+  async function disconnectProvider(integrationId) {
+    try {
+      await fetch(`${API}/v1/integrations/${integrationId}`, {
+        method: 'DELETE',
+        headers: authHeaders(),
+      });
+      await loadIntegrations();
+    } catch {}
+  }
 
   // Try to get token from localStorage for authenticated calls
   function getToken() {
@@ -64,6 +183,7 @@
         setTimeout(() => { tokenStatus = null; }, 4000);
         view = 'score';
         fetchAll();
+        loadIntegrations();
       } else {
         loginError = data.error || 'Login failed';
       }
@@ -239,6 +359,7 @@
     restoreSession();
     if (loggedInUser) {
       fetchAll();
+      loadIntegrations();
     }
     const interval = setInterval(() => { if (loggedInUser) fetchAll(); }, 30000);
     if ('serviceWorker' in navigator) {
@@ -406,6 +527,87 @@
               {/if}
             </details>
           {/if}
+          <!-- ── Connected Accounts ── -->
+          <div class="s-group">
+            <label>Connected Accounts</label>
+            <p class="s-hint-text">Data flows into your scoreboard from connected services</p>
+
+            {#each PROVIDERS as provider}
+              {@const connected = getConnectedProvider(provider.id)}
+              {@const isAuto = provider.autoConnected}
+              <div class="int-card" class:int-connected={connected || isAuto} class:int-coming={provider.comingSoon}>
+                <div class="int-row">
+                  <span class="int-icon">{provider.icon}</span>
+                  <div class="int-info">
+                    <div class="int-name">
+                      {provider.name}
+                      <span class="int-lane lane-{provider.lane}">{provider.lane}</span>
+                    </div>
+                    <div class="int-desc">{provider.desc}</div>
+                  </div>
+                  <div class="int-action">
+                    {#if provider.comingSoon}
+                      <span class="int-soon">Soon</span>
+                    {:else if connected}
+                      <button class="int-btn int-disconnect" onclick={() => disconnectProvider(connected.id)}>✕</button>
+                    {:else if isAuto}
+                      <span class="int-auto">✓ Auto</span>
+                    {:else if showConnectForm === provider.id}
+                      <button class="int-btn int-cancel" onclick={() => { showConnectForm = null; connectCred = ''; connectExtra = ''; }}>✕</button>
+                    {:else}
+                      <button class="int-btn int-connect" onclick={() => { showConnectForm = provider.id; connectCred = ''; connectExtra = ''; }}>Connect</button>
+                    {/if}
+                  </div>
+                </div>
+
+                {#if connected}
+                  <div class="int-status-row">
+                    <span class="int-status-dot active"></span>
+                    <span class="int-status-text">Active</span>
+                    {#if connected.last_used_at}
+                      <span class="int-last-poll">Last data: {new Date(connected.last_used_at).toLocaleDateString()}</span>
+                    {/if}
+                    {#if connected.last_error}
+                      <span class="int-error">⚠ {connected.last_error}</span>
+                    {/if}
+                  </div>
+                {/if}
+
+                {#if showConnectForm === provider.id}
+                  <div class="int-form">
+                    <input type={provider.auth === 'rss_url' ? 'url' : 'password'}
+                      bind:value={connectCred}
+                      placeholder={provider.credPlaceholder || provider.hint || 'API key or credential'}
+                      onkeydown={(e) => {
+                        if (e.key === 'Enter' && (!provider.fields?.length || connectExtra)) connectProvider(provider);
+                        else if (e.key === 'Enter') document.getElementById('int-extra')?.focus();
+                      }} />
+
+                    {#if provider.fields?.length}
+                      {#each provider.fields as field}
+                        <input type="text" id="int-extra"
+                          bind:value={connectExtra}
+                          placeholder={field.placeholder || field.label}
+                          onkeydown={(e) => e.key === 'Enter' && connectProvider(provider)} />
+                      {/each}
+                    {/if}
+
+                    <button class="int-save" onclick={() => connectProvider(provider)}
+                      disabled={!connectCred || connectStatus === 'saving'}>
+                      {connectStatus === 'saving' ? 'Connecting...' : `Connect ${provider.name}`}
+                    </button>
+
+                    {#if connectStatus && showConnectForm === provider.id}
+                      <div class="token-status" class:ok={connectStatus === 'ok'} class:fail={connectStatus === 'fail'} class:saving={connectStatus === 'saving'}>
+                        {connectMsg}
+                      </div>
+                    {/if}
+                  </div>
+                {/if}
+              </div>
+            {/each}
+          </div>
+
           <div class="s-group">
             <label>Season</label>
             <div class="s-info">
@@ -780,6 +982,70 @@
   .token-status.fail { color: #ff4444; background: rgba(255,68,68,0.08); }
   .token-status.saving { color: #ffaa00; background: rgba(255,170,0,0.08); }
   @keyframes fadeIn { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: translateY(0); } }
+
+  .s-hint-text { font-size: 11px; color: #555; margin-bottom: 4px; }
+
+  /* Integration cards */
+  .int-card {
+    background: #111118; border: 1px solid #1e1e30; border-radius: 10px;
+    padding: 12px; transition: border-color 0.2s;
+  }
+  .int-card.int-connected { border-color: #1a3a1a; }
+  .int-card.int-coming { opacity: 0.45; }
+  .int-row { display: flex; align-items: center; gap: 10px; }
+  .int-icon { font-size: 24px; flex-shrink: 0; width: 32px; text-align: center; }
+  .int-info { flex: 1; min-width: 0; }
+  .int-name { font-size: 13px; font-weight: 700; color: #ddd; display: flex; align-items: center; gap: 6px; }
+  .int-desc { font-size: 11px; color: #555; margin-top: 2px; }
+  .int-lane {
+    font-size: 9px; font-weight: 700; padding: 1px 6px; border-radius: 3px;
+    text-transform: uppercase; letter-spacing: 0.05em;
+  }
+  .lane-revenue { background: #1a2a1a; color: #2ecc71; }
+  .lane-distribution { background: #1a1a2e; color: #7c7cff; }
+  .lane-shipping { background: #2e2a1a; color: #ffaa00; }
+  .lane-systems { background: #1a1a1a; color: #888; }
+
+  .int-action { flex-shrink: 0; }
+  .int-btn {
+    padding: 4px 12px; border-radius: 6px; font-size: 12px; font-weight: 600;
+    cursor: pointer; border: none; transition: all 0.15s;
+  }
+  .int-connect { background: #7c7cff; color: white; }
+  .int-connect:active { background: #5c5cdd; }
+  .int-disconnect { background: transparent; color: #666; border: 1px solid #333; padding: 4px 8px; }
+  .int-disconnect:hover { color: #ff4444; border-color: #ff4444; }
+  .int-cancel { background: #333; color: #888; padding: 4px 8px; }
+  .int-auto { font-size: 11px; color: #2ecc71; font-weight: 600; }
+  .int-soon { font-size: 11px; color: #555; font-style: italic; }
+
+  .int-status-row {
+    display: flex; align-items: center; gap: 6px; margin-top: 8px;
+    padding-top: 8px; border-top: 1px solid #1a1a2a;
+  }
+  .int-status-dot {
+    width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0;
+  }
+  .int-status-dot.active { background: #2ecc71; }
+  .int-status-text { font-size: 11px; color: #2ecc71; font-weight: 600; }
+  .int-last-poll { font-size: 10px; color: #444; margin-left: auto; }
+  .int-error { font-size: 10px; color: #ff9500; }
+
+  .int-form {
+    display: flex; flex-direction: column; gap: 8px; margin-top: 10px;
+    padding-top: 10px; border-top: 1px solid #1a1a2a;
+  }
+  .int-form input {
+    background: #0a0a15; border: 1px solid #2a2a40; border-radius: 6px;
+    padding: 8px 10px; color: #ddd; font-size: 12px; outline: none;
+  }
+  .int-form input:focus { border-color: #7c7cff; }
+  .int-save {
+    background: #7c7cff; color: white; border: none; border-radius: 6px;
+    padding: 8px; font-size: 12px; font-weight: 600; cursor: pointer;
+  }
+  .int-save:disabled { opacity: 0.4; cursor: default; }
+  .int-save:active:not(:disabled) { background: #5c5cdd; }
 
   .s-info { font-size: 13px; opacity: 0.6; line-height: 1.6; }
   .s-links { display: flex; gap: 8px; flex-wrap: wrap; }
