@@ -34,23 +34,34 @@
     return token ? { 'Authorization': `Bearer ${token}` } : {};
   }
 
-  async function saveToken() {
+  let tokenTimer = null;
+
+  function debounceToken() {
+    clearTimeout(tokenTimer);
     const input = document.getElementById('token-input');
     const val = (input?.value || '').trim();
+
     if (!val) {
       localStorage.removeItem('wb_token');
       tokenStatus = 'ok';
       tokenMsg = 'Token cleared';
-      setTimeout(() => { tokenStatus = null; }, 3000);
+      setTimeout(() => { tokenStatus = null; }, 2500);
       return;
     }
 
-    // Save immediately
-    localStorage.setItem('wb_token', val);
+    // Instant feedback while typing
+    tokenStatus = 'saving';
+    tokenMsg = 'Saving...';
 
-    // Verify by calling a gated endpoint
-    tokenStatus = null;
+    // Debounce: verify after 600ms of no input (or immediate on paste)
+    tokenTimer = setTimeout(() => verifyToken(val), 600);
+  }
+
+  async function verifyToken(val) {
+    localStorage.setItem('wb_token', val);
+    tokenStatus = 'saving';
     tokenMsg = 'Verifying...';
+
     try {
       const res = await fetch(`${API}/v1/events?limit=1`, {
         headers: { 'Authorization': `Bearer ${val}` }
@@ -60,7 +71,7 @@
         tokenMsg = '✓ Connected — write features enabled';
       } else {
         tokenStatus = 'fail';
-        tokenMsg = `✗ Invalid token (${res.status})`;
+        tokenMsg = '✗ Invalid token';
         localStorage.removeItem('wb_token');
       }
     } catch (e) {
@@ -68,7 +79,7 @@
       tokenMsg = '✗ Connection error';
       localStorage.removeItem('wb_token');
     }
-    setTimeout(() => { tokenStatus = null; }, 5000);
+    setTimeout(() => { tokenStatus = null; }, 4000);
   }
 
   async function fetchAll() {
@@ -184,13 +195,12 @@
           <div class="s-hdr"><h2>⚙️ Settings</h2></div>
           <div class="s-group">
             <label>API Token</label>
-            <div class="token-row">
-              <input type="password" id="token-input" value={getToken()}
-                placeholder="Paste token to enable write features" />
-              <button class="btn-save-token" onclick={saveToken}>Save</button>
-            </div>
+            <input type="password" id="token-input" value={getToken()}
+              oninput={debounceToken}
+              onpaste={debounceToken}
+              placeholder="Paste token to enable write features" />
             {#if tokenStatus}
-              <div class="token-status" class:ok={tokenStatus === 'ok'} class:fail={tokenStatus === 'fail'}>
+              <div class="token-status" class:ok={tokenStatus === 'ok'} class:fail={tokenStatus === 'fail'} class:saving={tokenStatus === 'saving'}>
                 {tokenMsg}
               </div>
             {/if}
@@ -494,21 +504,13 @@
   .s-group input:focus { border-color: #7c7cff; }
   .s-hint { font-size: 11px; opacity: 0.35; }
 
-  /* Token row */
-  .token-row { display: flex; gap: 8px; align-items: stretch; }
-  .token-row input { flex: 1; }
-  .btn-save-token {
-    background: #7c7cff; color: #fff; border: none; border-radius: 8px;
-    padding: 8px 18px; font-size: 13px; font-weight: 700; cursor: pointer;
-    white-space: nowrap; transition: background 0.15s;
-  }
-  .btn-save-token:active { background: #5c5cdd; }
   .token-status {
     font-size: 12px; padding: 6px 10px; border-radius: 6px; margin-top: 2px;
     animation: fadeIn 0.2s ease;
   }
   .token-status.ok { color: #2ecc71; background: rgba(46,204,113,0.08); }
   .token-status.fail { color: #ff4444; background: rgba(255,68,68,0.08); }
+  .token-status.saving { color: #ffaa00; background: rgba(255,170,0,0.08); }
   @keyframes fadeIn { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: translateY(0); } }
 
   .s-info { font-size: 13px; opacity: 0.6; line-height: 1.6; }
