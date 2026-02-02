@@ -2,7 +2,9 @@ package main
 
 import (
 	"math"
+	"regexp"
 	"strings"
+	"time"
 	"unicode"
 )
 
@@ -428,4 +430,436 @@ func clamp01(v float64) float64 {
 		return 1
 	}
 	return v
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// VAULT DEEP ANALYSIS — Extended NLP for Obsidian vault / personal writing
+//
+// Extracts deep personal signals across 10 dimensions:
+//   1. Values & Faith — spiritual beliefs, moral framework, guiding principles
+//   2. Emotional Patterns — recurring emotional states, coping mechanisms
+//   3. Energy Cycles — productivity patterns, time-of-day preferences
+//   4. Financial Reality — debt language, money relationship, earning patterns
+//   5. Relationship Patterns — social dynamics, loneliness, community
+//   6. Health & Body — physical habits, substances, fitness, sleep
+//   7. Creative Output — writing patterns, idea generation, project sprawl
+//   8. Distraction & Stall — procrastination triggers, avoidance behaviors
+//   9. Purpose & Identity — self-concept, calling, mission, legacy
+//  10. Productivity Style — planning vs doing, tools obsession, system hopping
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// VaultInsight represents aggregated deep analysis of personal writing.
+type VaultInsight struct {
+	// Core dimensions (0.0-1.0)
+	FaithStrength       float64 `json:"faith_strength"`       // Spiritual conviction and practice
+	EmotionalVolatility float64 `json:"emotional_volatility"` // Range between emotional highs/lows
+	FinancialStress     float64 `json:"financial_stress"`     // Frequency and intensity of money worry
+	SocialIsolation     float64 `json:"social_isolation"`     // Loneliness, lack of community signals
+	HealthAwareness     float64 `json:"health_awareness"`     // Attention to physical wellbeing
+	CreativeEnergy      float64 `json:"creative_energy"`      // Idea generation rate, project creation
+	DistractionRisk     float64 `json:"distraction_risk"`     // Susceptibility to tangents, tool hopping
+	PurposeClarity      float64 `json:"purpose_clarity"`      // Clear sense of mission and calling
+	ProductivityStyle   float64 `json:"productivity_style"`   // 0=planner, 1=doer
+	ProjectSprawl       float64 `json:"project_sprawl"`       // Too many projects, finishing rate
+
+	// Derived behavioral signals
+	LateNightWorker   bool     `json:"late_night_worker"`
+	MorningPerson     bool     `json:"morning_person"`
+	JournalingHabit   float64  `json:"journaling_habit"`   // Consistency 0-1
+	SelfAwareness     float64  `json:"self_awareness"`     // Introspective depth 0-1
+	GrowthMindset     float64  `json:"growth_mindset"`     // Focus on improvement 0-1
+	PerfectionismRisk float64  `json:"perfectionism_risk"` // Over-planning, under-shipping
+
+	// Evidence
+	TopValues       []string `json:"top_values"`       // Extracted values (faith, family, impact, etc.)
+	RecurringThemes []string `json:"recurring_themes"` // Most frequent themes across docs
+	EmotionalWords  []string `json:"emotional_words"`  // Top emotional language used
+	StallTriggers   []string `json:"stall_triggers"`   // What causes stalls
+	TimePatterns    []string `json:"time_patterns"`    // When they write/work
+	DocumentCount   int      `json:"document_count"`   // Total docs processed
+	WordCount       int      `json:"word_count"`       // Total words analyzed
+	DateRange       string   `json:"date_range"`       // Earliest to latest date found
+}
+
+// vaultWordLists contains domain-specific word lists for vault analysis.
+var vaultWordLists = struct {
+	faith        map[string]bool
+	struggle     map[string]bool
+	purpose      map[string]bool
+	distraction  map[string]bool
+	health       map[string]bool
+	relationship map[string]bool
+	creative     map[string]bool
+	stall        map[string]bool
+	growth       map[string]bool
+	substance    map[string]bool
+	planning     map[string]bool
+	shipping     map[string]bool
+}{
+	faith: toSet([]string{
+		"god", "lord", "jesus", "christ", "prayer", "pray", "prayed", "praying",
+		"faith", "spirit", "holy", "scripture", "bible", "church", "worship",
+		"blessed", "blessing", "grace", "mercy", "salvation", "sin", "righteous",
+		"purity", "repent", "forgive", "kingdom", "heaven", "soul", "anointing",
+		"testimony", "minister", "ministry", "calling", "servant", "humble",
+		"psalm", "proverbs", "gospel", "disciple", "christian", "believe",
+	}),
+	struggle: toSet([]string{
+		"struggle", "struggling", "hard", "difficult", "pain", "painful",
+		"frustrated", "frustrating", "overwhelmed", "hopeless", "helpless",
+		"stuck", "trapped", "failing", "failed", "lost", "confused",
+		"anxious", "anxiety", "depressed", "depression", "lonely", "alone",
+		"afraid", "fear", "worry", "worried", "desperate", "despair",
+		"exhausted", "tired", "burnout", "burned out", "broke", "broken",
+		"shame", "guilt", "regret", "hatred", "hate", "anger", "angry",
+	}),
+	purpose: toSet([]string{
+		"purpose", "mission", "calling", "destiny", "impact", "legacy",
+		"vision", "dream", "goal", "goals", "aspire", "aspiration",
+		"meaningful", "meaning", "why", "passion", "passionate",
+		"created for", "born to", "designed to", "gifted", "talent",
+		"potential", "greatness", "excellence", "succeed", "success",
+	}),
+	distraction: toSet([]string{
+		"distracted", "distraction", "procrastinate", "procrastination",
+		"twitter", "x.com", "social media", "surfing", "scrolling",
+		"youtube", "rabbit hole", "tangent", "sidetrack", "wasted time",
+		"got distracted", "off track", "lost focus", "couldn't focus",
+		"shiny object", "new idea", "another idea", "tool", "setup",
+		"configuring", "customizing", "tweaking", "researching",
+		"forgot", "forgot to", "didn't log", "forgot to journal",
+	}),
+	health: toSet([]string{
+		"health", "healthy", "exercise", "workout", "gym", "run", "running",
+		"sleep", "sleeping", "insomnia", "diet", "eating", "nutrition",
+		"vitamins", "supplement", "testosterone", "body", "weight",
+		"fitness", "muscle", "cardio", "energy", "fatigue", "tired",
+		"doctor", "hospital", "sick", "illness", "pain", "injury",
+	}),
+	relationship: toSet([]string{
+		"friend", "friends", "friendship", "family", "wife", "husband",
+		"girlfriend", "boyfriend", "dating", "relationship", "married",
+		"marriage", "divorce", "children", "kids", "son", "daughter",
+		"community", "fellowship", "team", "partner", "accountability",
+		"mentor", "mentoring", "lonely", "loneliness", "alone", "isolated",
+	}),
+	creative: toSet([]string{
+		"idea", "ideas", "create", "creating", "creative", "creativity",
+		"build", "building", "design", "designing", "write", "writing",
+		"book", "podcast", "blog", "project", "projects", "product",
+		"launch", "launching", "startup", "business", "app", "website",
+		"plugin", "invention", "innovate", "innovation", "brainstorm",
+	}),
+	stall: toSet([]string{
+		"stall", "stalled", "stuck", "blocked", "paralyzed", "frozen",
+		"can't start", "haven't started", "dragging", "dragging feet",
+		"putting off", "delay", "delayed", "postpone", "postponed",
+		"procrastinate", "not shipping", "not finishing", "abandoned",
+		"gave up", "quit", "stopped", "paused", "on hold", "backlog",
+	}),
+	growth: toSet([]string{
+		"learn", "learning", "grow", "growing", "growth", "improve",
+		"improving", "better", "progress", "evolve", "develop",
+		"developing", "skill", "skills", "practice", "training",
+		"study", "studying", "read", "reading", "course", "class",
+		"mentor", "feedback", "reflect", "reflection", "journal",
+	}),
+	substance: toSet([]string{
+		"weed", "marijuana", "cannabis", "smoking", "smoke", "smoked",
+		"alcohol", "drinking", "drunk", "beer", "wine", "liquor",
+		"sober", "sobriety", "clean", "abstain", "addiction", "addict",
+		"habit", "vice", "temptation", "flesh", "indulgence",
+	}),
+	planning: toSet([]string{
+		"plan", "planning", "blueprint", "roadmap", "strategy", "organize",
+		"organizing", "todo", "to-do", "checklist", "list", "outline",
+		"schedule", "calendar", "timeline", "milestone", "phase",
+		"step 1", "step 2", "step 3", "next step", "workflow",
+	}),
+	shipping: toSet([]string{
+		"ship", "shipped", "shipping", "deploy", "deployed", "launch",
+		"launched", "live", "published", "publish", "released", "release",
+		"done", "finished", "completed", "delivered", "built", "made",
+		"pushed", "merged", "committed", "went live", "in production",
+	}),
+}
+
+// timePattern matches timestamps like "20:59", "06:51", "15:35" in journal entries
+var timePattern = regexp.MustCompile(`\b(\d{1,2}):(\d{2})\s*[-–—]`)
+
+// datePattern matches dates in filenames/content
+var datePattern = regexp.MustCompile(`\b(20\d{2})-(\d{2})-(\d{2})\b`)
+
+// AnalyzeVaultDocument extracts deep features from a single vault document.
+// Returns feature map + detected themes. The filename/path provides metadata context.
+func (nlp *NLPExtractor) AnalyzeVaultDocument(content string, filename string) (map[string]float64, []string) {
+	f := nlp.ExtractFeatures(content) // base NLP features
+	lower := strings.ToLower(content)
+	words := tokenize(lower)
+	wordCount := float64(len(words))
+	if wordCount < 5 {
+		return f, nil
+	}
+
+	var themes []string
+
+	// Faith dimension
+	faithCount := countWordMatchesStatic(words, vaultWordLists.faith)
+	f["vault_faith"] = math.Min(1.0, float64(faithCount)/(wordCount*0.03+1))
+	if faithCount > 3 {
+		themes = append(themes, "faith")
+	}
+
+	// Struggle / emotional pain
+	struggleCount := countWordMatchesStatic(words, vaultWordLists.struggle)
+	f["vault_struggle"] = math.Min(1.0, float64(struggleCount)/(wordCount*0.02+1))
+	if struggleCount > 2 {
+		themes = append(themes, "struggle")
+	}
+
+	// Purpose & identity
+	purposeCount := countWordMatchesStatic(words, vaultWordLists.purpose)
+	f["vault_purpose"] = math.Min(1.0, float64(purposeCount)/(wordCount*0.02+1))
+	if purposeCount > 2 {
+		themes = append(themes, "purpose")
+	}
+
+	// Distraction signals
+	distractCount := countWordMatchesStatic(words, vaultWordLists.distraction)
+	f["vault_distraction"] = math.Min(1.0, float64(distractCount)/(wordCount*0.015+1))
+	if distractCount > 1 {
+		themes = append(themes, "distraction")
+	}
+
+	// Health awareness
+	healthCount := countWordMatchesStatic(words, vaultWordLists.health)
+	f["vault_health"] = math.Min(1.0, float64(healthCount)/(wordCount*0.02+1))
+	if healthCount > 2 {
+		themes = append(themes, "health")
+	}
+
+	// Relationship/community
+	relCount := countWordMatchesStatic(words, vaultWordLists.relationship)
+	f["vault_relationship"] = math.Min(1.0, float64(relCount)/(wordCount*0.02+1))
+	if relCount > 2 {
+		themes = append(themes, "relationship")
+	}
+
+	// Creative energy
+	createCount := countWordMatchesStatic(words, vaultWordLists.creative)
+	f["vault_creative"] = math.Min(1.0, float64(createCount)/(wordCount*0.025+1))
+	if createCount > 2 {
+		themes = append(themes, "creative")
+	}
+
+	// Stall patterns
+	stallCount := countWordMatchesStatic(words, vaultWordLists.stall)
+	f["vault_stall"] = math.Min(1.0, float64(stallCount)/(wordCount*0.015+1))
+	if stallCount > 1 {
+		themes = append(themes, "stall")
+	}
+
+	// Growth mindset
+	growthCount := countWordMatchesStatic(words, vaultWordLists.growth)
+	f["vault_growth"] = math.Min(1.0, float64(growthCount)/(wordCount*0.02+1))
+	if growthCount > 2 {
+		themes = append(themes, "growth")
+	}
+
+	// Substance use signals
+	subCount := countWordMatchesStatic(words, vaultWordLists.substance)
+	f["vault_substance"] = math.Min(1.0, float64(subCount)/(wordCount*0.01+1))
+
+	// Planning vs shipping ratio
+	planCount := countWordMatchesStatic(words, vaultWordLists.planning)
+	shipCount := countWordMatchesStatic(words, vaultWordLists.shipping)
+	if planCount+shipCount > 0 {
+		f["vault_plan_vs_ship"] = float64(planCount) / float64(planCount+shipCount) // 1.0=all planning, 0.0=all shipping
+	} else {
+		f["vault_plan_vs_ship"] = 0.5
+	}
+
+	// Time-of-day patterns from journal timestamps
+	lateNight := 0
+	earlyMorning := 0
+	for _, match := range timePattern.FindAllStringSubmatch(content, -1) {
+		if len(match) >= 2 {
+			hour := 0
+			for _, c := range match[1] {
+				hour = hour*10 + int(c-'0')
+			}
+			if hour >= 22 || hour <= 3 {
+				lateNight++
+			}
+			if hour >= 5 && hour <= 8 {
+				earlyMorning++
+			}
+		}
+	}
+	f["vault_late_night"] = math.Min(1.0, float64(lateNight)/3.0)
+	f["vault_early_morning"] = math.Min(1.0, float64(earlyMorning)/3.0)
+
+	// Self-awareness (first person + reflection language)
+	reflectWords := []string{"realize", "realized", "aware", "awareness", "reflect", "reflecting",
+		"honest", "honestly", "admit", "admitting", "acknowledge", "truth", "truthfully",
+		"i need to", "i should", "i must", "i have been", "i know"}
+	reflectCount := 0
+	for _, rw := range reflectWords {
+		reflectCount += strings.Count(lower, rw)
+	}
+	f["vault_self_awareness"] = math.Min(1.0, float64(reflectCount)/(wordCount*0.01+1))
+
+	return f, themes
+}
+
+// AggregateVaultInsights combines features from many documents into a VaultInsight.
+func AggregateVaultInsights(allFeatures []map[string]float64, allThemes [][]string, totalWords int, docCount int, dateRange string) VaultInsight {
+	if len(allFeatures) == 0 {
+		return VaultInsight{}
+	}
+
+	// Average each feature across all documents
+	avg := make(map[string]float64)
+	for _, f := range allFeatures {
+		for k, v := range f {
+			avg[k] += v
+		}
+	}
+	n := float64(len(allFeatures))
+	for k := range avg {
+		avg[k] /= n
+	}
+
+	// Count theme frequencies
+	themeCounts := make(map[string]int)
+	for _, themes := range allThemes {
+		for _, t := range themes {
+			themeCounts[t]++
+		}
+	}
+
+	// Sort themes by frequency
+	type themeFreq struct {
+		theme string
+		count int
+	}
+	var sorted []themeFreq
+	for t, c := range themeCounts {
+		sorted = append(sorted, themeFreq{t, c})
+	}
+	for i := 0; i < len(sorted); i++ {
+		for j := i + 1; j < len(sorted); j++ {
+			if sorted[j].count > sorted[i].count {
+				sorted[i], sorted[j] = sorted[j], sorted[i]
+			}
+		}
+	}
+	var topThemes []string
+	for i, tf := range sorted {
+		if i >= 8 {
+			break
+		}
+		topThemes = append(topThemes, tf.theme)
+	}
+
+	// Detect stall triggers from content patterns
+	var stallTriggers []string
+	if avg["vault_distraction"] > 0.3 {
+		stallTriggers = append(stallTriggers, "social media / tool hopping")
+	}
+	if avg["vault_substance"] > 0.1 {
+		stallTriggers = append(stallTriggers, "substance use affecting focus")
+	}
+	if avg["vault_plan_vs_ship"] > 0.7 {
+		stallTriggers = append(stallTriggers, "over-planning without shipping")
+	}
+	if avg["vault_stall"] > 0.2 {
+		stallTriggers = append(stallTriggers, "explicit stall/procrastination patterns")
+	}
+	if avg["financial_pressure"] > 0.3 {
+		stallTriggers = append(stallTriggers, "financial pressure causing paralysis")
+	}
+
+	// Detect time patterns
+	var timePatterns []string
+	if avg["vault_late_night"] > 0.3 {
+		timePatterns = append(timePatterns, "frequently works late night (10pm-3am)")
+	}
+	if avg["vault_early_morning"] > 0.2 {
+		timePatterns = append(timePatterns, "sometimes works early morning (5-8am)")
+	}
+
+	// Extract top values
+	var topValues []string
+	if avg["vault_faith"] > 0.15 {
+		topValues = append(topValues, "faith/spirituality")
+	}
+	if avg["vault_purpose"] > 0.15 {
+		topValues = append(topValues, "purpose/impact")
+	}
+	if avg["vault_creative"] > 0.15 {
+		topValues = append(topValues, "creative expression")
+	}
+	if avg["vault_growth"] > 0.15 {
+		topValues = append(topValues, "personal growth")
+	}
+	if avg["vault_relationship"] > 0.15 {
+		topValues = append(topValues, "community/relationships")
+	}
+	if avg["vault_health"] > 0.1 {
+		topValues = append(topValues, "health/body")
+	}
+
+	vi := VaultInsight{
+		FaithStrength:       avg["vault_faith"],
+		EmotionalVolatility: avg["vault_struggle"] * 0.6 + avg["emotion_expression"] * 0.4,
+		FinancialStress:     avg["financial_pressure"],
+		SocialIsolation:     math.Max(0, 0.5-avg["vault_relationship"]),
+		HealthAwareness:     avg["vault_health"],
+		CreativeEnergy:      avg["vault_creative"],
+		DistractionRisk:     avg["vault_distraction"],
+		PurposeClarity:      avg["vault_purpose"],
+		ProductivityStyle:   1.0 - avg["vault_plan_vs_ship"], // invert: 0=planner, 1=doer
+		ProjectSprawl:       math.Min(1.0, avg["vault_creative"]*0.5+avg["vault_stall"]*0.5),
+
+		LateNightWorker:   avg["vault_late_night"] > 0.3,
+		MorningPerson:     avg["vault_early_morning"] > avg["vault_late_night"],
+		JournalingHabit:   math.Min(1.0, float64(docCount)/50.0), // normalized to 50 entries
+		SelfAwareness:     avg["vault_self_awareness"],
+		GrowthMindset:     avg["vault_growth"],
+		PerfectionismRisk: avg["vault_plan_vs_ship"],
+
+		TopValues:       topValues,
+		RecurringThemes: topThemes,
+		StallTriggers:   stallTriggers,
+		TimePatterns:    timePatterns,
+		DocumentCount:   docCount,
+		WordCount:       totalWords,
+		DateRange:       dateRange,
+	}
+
+	return vi
+}
+
+// ExtractDatesFromFilename parses dates from vault document filenames.
+func ExtractDatesFromFilename(filename string) *time.Time {
+	matches := datePattern.FindStringSubmatch(filename)
+	if len(matches) >= 4 {
+		t, err := time.Parse("2006-01-02", matches[0])
+		if err == nil {
+			return &t
+		}
+	}
+	return nil
+}
+
+// countWordMatchesStatic is a static version (no NLPExtractor receiver needed)
+func countWordMatchesStatic(words []string, set map[string]bool) int {
+	count := 0
+	for _, w := range words {
+		if set[w] {
+			count++
+		}
+	}
+	return count
 }

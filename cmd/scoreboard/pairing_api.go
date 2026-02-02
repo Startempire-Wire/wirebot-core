@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -35,6 +37,8 @@ func (s *Server) registerPairingRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/v1/pairing/overrides", s.authMember(s.handlePairingOverrides))
 	mux.HandleFunc("/v1/pairing/scan", s.authMember(s.handlePairingScan))
 	mux.HandleFunc("/v1/pairing/reset", s.authMember(s.handlePairingReset))
+	mux.HandleFunc("/v1/pairing/scan-vault", s.auth(s.handlePairingVaultScan))
+	mux.HandleFunc("/v1/pairing/vault-insight", s.authMember(s.handlePairingVaultInsight))
 }
 
 // ─── GET /v1/pairing/profile — Full FounderProfileV2 JSON ────────────────────
@@ -802,6 +806,150 @@ func buildContextFormulas(p *FounderProfileV2) map[string]interface{} {
 		}
 	}
 	return result
+}
+
+// ─── POST /v1/pairing/scan-vault — Deep Obsidian vault analysis ─────────────
+
+func (s *Server) handlePairingVaultScan(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		http.Error(w, "Method not allowed", 405)
+		return
+	}
+
+	vaultPath := "/data/wirebot/obsidian"
+	var body struct {
+		Path string `json:"path"`
+	}
+	json.NewDecoder(r.Body).Decode(&body)
+	if body.Path != "" {
+		vaultPath = body.Path
+	}
+
+	writeJSON(w, map[string]interface{}{
+		"message": "Vault scan started in background",
+		"path":    vaultPath,
+	})
+
+	go func() {
+		nlp := NewNLPExtractor()
+		var allFeatures []map[string]float64
+		var allThemes [][]string
+		totalWords := 0
+		docCount := 0
+		var earliestDate, latestDate time.Time
+		signalsIngested := 0
+
+		// Walk all .md files
+		err := filepath.Walk(vaultPath, func(path string, info os.FileInfo, err error) error {
+			if err != nil {
+				return nil // skip unreadable
+			}
+			if info.IsDir() {
+				return nil
+			}
+			if !strings.HasSuffix(strings.ToLower(info.Name()), ".md") {
+				return nil
+			}
+
+			data, err := os.ReadFile(path)
+			if err != nil {
+				return nil
+			}
+			content := string(data)
+			if len(content) < 20 {
+				return nil // skip trivial files
+			}
+
+			// Extract features
+			features, themes := nlp.AnalyzeVaultDocument(content, info.Name())
+			allFeatures = append(allFeatures, features)
+			allThemes = append(allThemes, themes)
+
+			words := strings.Fields(content)
+			totalWords += len(words)
+			docCount++
+
+			// Extract date from filename or content
+			if d := ExtractDatesFromFilename(info.Name()); d != nil {
+				if earliestDate.IsZero() || d.Before(earliestDate) {
+					earliestDate = *d
+				}
+				if latestDate.IsZero() || d.After(latestDate) {
+					latestDate = *d
+				}
+			}
+
+			// Feed each document as a message signal to the pairing engine
+			relPath := strings.TrimPrefix(path, vaultPath+"/")
+			disc := nlp.InferDISC(content)
+			s.pairing.Ingest(Signal{
+				Type:    SignalMessage,
+				Source:  "obsidian_vault",
+				Content: content,
+				Features: features,
+				Metadata: map[string]interface{}{
+					"filename": relPath,
+					"themes":   themes,
+					"disc":     disc,
+					"words":    len(words),
+				},
+			})
+			signalsIngested++
+			return nil
+		})
+
+		if err != nil {
+			log.Printf("[pairing] vault scan error: %v", err)
+			return
+		}
+
+		// Aggregate into VaultInsight
+		dateRange := ""
+		if !earliestDate.IsZero() {
+			dateRange = earliestDate.Format("2006-01-02") + " → " + latestDate.Format("2006-01-02")
+		}
+		insight := AggregateVaultInsights(allFeatures, allThemes, totalWords, docCount, dateRange)
+
+		// Store insight in profile metadata
+		s.pairing.mu.Lock()
+		if s.pairing.profile.Metadata == nil {
+			s.pairing.profile.Metadata = make(map[string]interface{})
+		}
+		s.pairing.profile.Metadata["vault_insight"] = insight
+		s.pairing.profile.Metadata["vault_scan_time"] = time.Now().UTC().Format(time.RFC3339)
+		s.pairing.dirty = true
+		s.pairing.mu.Unlock()
+		s.pairing.Save()
+
+		// Sync updated profile to memory systems
+		s.pairing.syncToMemory()
+
+		log.Printf("[pairing] vault scan complete: %d docs, %d words, %d signals, themes: %v",
+			docCount, totalWords, signalsIngested, insight.RecurringThemes)
+	}()
+}
+
+// ─── GET /v1/pairing/vault-insight — Return cached vault analysis ────────────
+
+func (s *Server) handlePairingVaultInsight(w http.ResponseWriter, r *http.Request) {
+	s.pairing.mu.RLock()
+	insight, ok := s.pairing.profile.Metadata["vault_insight"]
+	scanTime, _ := s.pairing.profile.Metadata["vault_scan_time"]
+	s.pairing.mu.RUnlock()
+
+	if !ok {
+		writeJSON(w, map[string]interface{}{
+			"scanned": false,
+			"message": "No vault scan yet. POST /v1/pairing/scan-vault to start.",
+		})
+		return
+	}
+
+	writeJSON(w, map[string]interface{}{
+		"scanned":   true,
+		"scan_time": scanTime,
+		"insight":   insight,
+	})
 }
 
 func writeJSON(w http.ResponseWriter, v interface{}) {

@@ -21,6 +21,7 @@ import (
 	"math"
 	"net/http"
 	"os"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -68,11 +69,14 @@ type Event struct {
 	ArtifactType      string  `json:"artifact_type,omitempty"`
 	ArtifactURL       string  `json:"artifact_url,omitempty"`
 	ArtifactTitle     string  `json:"artifact_title,omitempty"`
+	Detail            string  `json:"detail,omitempty"`
 	Confidence        float64 `json:"confidence"`
+	Verification      string  `json:"verification,omitempty"`     // PROVIDER_API, WEBHOOK, SELF_REPORTED, etc.
 	Verifiers         string  `json:"verifiers,omitempty"`
 	VerificationLevel string  `json:"verification_level,omitempty"` // STRONG, MEDIUM, WEAK, SELF_REPORTED, UNVERIFIED
 	ScoreDelta        int     `json:"score_delta"`
 	BusinessID        string  `json:"business_id,omitempty"`
+	ExternalID        string  `json:"external_id,omitempty"` // provider-specific ID for dedup
 	Metadata          string  `json:"metadata,omitempty"`
 	Status            string  `json:"status"` // approved, pending, rejected
 	CreatedAt         string  `json:"created_at"`
@@ -454,6 +458,10 @@ func main() {
 	mux.HandleFunc("/v1/webhooks/stripe", s.handleStripeWebhook) // Stripe signs its own webhooks
 	mux.HandleFunc("/v1/financial/snapshot", s.auth(s.handleFinancialSnapshot))
 
+	// Transaction reconciliation
+	mux.HandleFunc("/v1/reconcile", s.auth(s.handleReconcile))
+	mux.HandleFunc("/v1/reconcile/test-transactions", s.auth(s.handleTestTransactions))
+
 	// Plaid (bank account connections)
 	mux.HandleFunc("/v1/plaid/link-token", s.auth(s.handlePlaidLinkToken))
 	mux.HandleFunc("/v1/plaid/exchange", s.auth(s.handlePlaidExchange))
@@ -656,8 +664,12 @@ func (s *Server) initDB() {
 		`CREATE INDEX IF NOT EXISTS idx_events_date ON events(timestamp)`,
 		`CREATE INDEX IF NOT EXISTS idx_events_lane ON events(lane)`,
 		`CREATE INDEX IF NOT EXISTS idx_events_type ON events(event_type)`,
-		// Migration: add status column for gated events
+		// Migrations
 		`ALTER TABLE events ADD COLUMN status TEXT DEFAULT 'approved'`,
+		`ALTER TABLE events ADD COLUMN verification_level TEXT DEFAULT 'SELF_REPORTED'`,
+		`ALTER TABLE events ADD COLUMN external_id TEXT DEFAULT ''`,
+		`ALTER TABLE events ADD COLUMN detail TEXT DEFAULT ''`,
+		`CREATE INDEX IF NOT EXISTS idx_events_external ON events(external_id)`,
 		`CREATE TABLE IF NOT EXISTS daily_scores (
 			date TEXT PRIMARY KEY,
 			execution_score INTEGER DEFAULT 0,
@@ -773,6 +785,9 @@ func (s *Server) initDB() {
 			}
 		}
 	}
+
+	// Init reconciliation tables
+	s.initReconciliation()
 
 	// Seed default season
 	var count int
@@ -3330,7 +3345,7 @@ func calcScoreDelta(lane, eventType string, confidence float64) int {
 		"revenue": {
 			"PAYMENT_RECEIVED": 10, "SUBSCRIPTION_CREATED": 12, "DEAL_CLOSED": 8,
 			"PROPOSAL_SENT": 4, "INVOICE_PAID": 8, "PAYOUT_RECEIVED": 2,
-			"PAYMENT_FAILED": 0, "REFUND_ISSUED": -2,
+			"PAYMENT_FAILED": 0, "REFUND_ISSUED": -2, "EXPENSE_RECORDED": 0,
 		},
 		"systems": {
 			"AUTOMATION_DEPLOYED": 6, "SOP_DOCUMENTED": 4, "TOOL_INTEGRATED": 5,
@@ -4622,6 +4637,8 @@ func (s *Server) pollDueIntegrations() {
 			pollErr = s.pollDiscord(id, credential, lastPoll)
 		case "sendy":
 			pollErr = s.pollSendy(id, credential, config, lastPoll)
+		case "freshbooks":
+			pollErr = s.pollFreshBooks(id, credential, config, lastPoll)
 		default:
 			log.Printf("Poller: unknown provider %s for integration %s", provider, id)
 		}
@@ -5639,4 +5656,649 @@ func (s *Server) getStallHours() float64 {
 	}
 	hours := time.Since(t).Hours()
 	return math.Round(hours*10) / 10
+}
+
+// isSourceTrusted checks if a source has been approved at least once (approve-once trust)
+func (s *Server) isSourceTrusted(source string) bool {
+	var count int
+	s.db.QueryRow(`SELECT approved_count FROM trusted_sources WHERE source=?`, source).Scan(&count)
+	return count > 0
+}
+
+// insertEventIfNew inserts an event only if external_id doesn't already exist.
+// Used by pollers to avoid duplicate events on re-poll.
+func (s *Server) insertEventIfNew(evt Event) {
+	if evt.ExternalID != "" {
+		var exists int
+		s.db.QueryRow("SELECT COUNT(*) FROM events WHERE external_id=?", evt.ExternalID).Scan(&exists)
+		if exists > 0 {
+			return
+		}
+	}
+	id := fmt.Sprintf("evt-%d", time.Now().UnixNano())
+	ts := evt.Timestamp
+	if ts == "" {
+		ts = time.Now().UTC().Format(time.RFC3339)
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+
+	// Determine status based on trusted sources
+	status := "pending"
+	if s.isSourceTrusted(evt.Source) {
+		status = "approved"
+	}
+
+	verLevel := evt.Verification
+	if verLevel == "" {
+		verLevel = "PROVIDER_API"
+	}
+
+	s.db.Exec(`INSERT INTO events (id, event_type, lane, source, timestamp,
+		artifact_title, detail, score_delta, confidence, verification_level, external_id, status, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		id, evt.EventType, evt.Lane, evt.Source, ts,
+		evt.ArtifactTitle, evt.Detail, evt.ScoreDelta, evt.Confidence, verLevel,
+		evt.ExternalID, status, now)
+
+	// Signal pairing engine
+	if s.pairing != nil {
+		s.pairing.Ingest(Signal{
+			Type:    SignalEvent,
+			Source:  evt.Source,
+			Content: evt.ArtifactTitle,
+			Features: map[string]float64{"score_delta": float64(evt.ScoreDelta)},
+			Metadata: map[string]interface{}{
+				"event_type": evt.EventType,
+				"lane":       evt.Lane,
+			},
+		})
+	}
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// FRESHBOOKS INTEGRATION — Invoices, Expenses, Payments, P&L
+//
+// Auth: Bearer token from FreshBooks Settings > Developer
+// Config JSON: {"account_id": "XXXXX", "freshbooks_url": "https://api.freshbooks.com"}
+// Polls: /accounting/account/{id}/invoices/invoices (paid/outstanding)
+//        /accounting/account/{id}/expenses/expenses
+//        /accounting/account/{id}/payments/payments
+// ═══════════════════════════════════════════════════════════════════════════════
+
+func (s *Server) pollFreshBooks(integrationID, token, configJSON, lastPoll string) error {
+	var cfg struct {
+		AccountID string `json:"account_id"`
+	}
+	json.Unmarshal([]byte(configJSON), &cfg)
+	if cfg.AccountID == "" || token == "" {
+		return fmt.Errorf("account_id and bearer token required")
+	}
+
+	baseURL := "https://api.freshbooks.com"
+	client := &http.Client{Timeout: 30 * time.Second}
+	eventsCreated := 0
+
+	doGet := func(path string) (map[string]interface{}, error) {
+		req, _ := http.NewRequest("GET", baseURL+path, nil)
+		req.Header.Set("Authorization", "Bearer "+token)
+		req.Header.Set("Api-Version", "alpha")
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := client.Do(req)
+		if err != nil {
+			return nil, err
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != 200 {
+			return nil, fmt.Errorf("freshbooks API %d", resp.StatusCode)
+		}
+		var result map[string]interface{}
+		json.NewDecoder(resp.Body).Decode(&result)
+		return result, nil
+	}
+
+	// Parse last poll time
+	var since time.Time
+	if lastPoll != "" {
+		since, _ = time.Parse(time.RFC3339, lastPoll)
+	}
+	if since.IsZero() {
+		since = time.Now().AddDate(0, -3, 0) // default: last 3 months
+	}
+
+	// ── Invoices ──────────────────────────────────────────────────────────
+	invoiceData, err := doGet(fmt.Sprintf("/accounting/account/%s/invoices/invoices?include[]=lines&per_page=100&search[date_min]=%s",
+		cfg.AccountID, since.Format("2006-01-02")))
+	if err == nil {
+		if resp, ok := invoiceData["response"].(map[string]interface{}); ok {
+			if result, ok := resp["result"].(map[string]interface{}); ok {
+				if invoices, ok := result["invoices"].([]interface{}); ok {
+					for _, inv := range invoices {
+						i, ok := inv.(map[string]interface{})
+						if !ok {
+							continue
+						}
+						status, _ := i["payment_status"].(string) // "paid", "unpaid", "partial"
+						amount, _ := i["amount"].(map[string]interface{})
+						amtStr, _ := amount["amount"].(string)
+						invNum, _ := i["invoice_number"].(string)
+						clientName := ""
+						if org, ok := i["organization"].(string); ok && org != "" {
+							clientName = org
+						}
+						updated, _ := i["updated"].(string)
+
+						if status == "paid" {
+							amtFloat := 0.0
+							fmt.Sscanf(amtStr, "%f", &amtFloat)
+
+							s.insertEventIfNew(Event{
+								EventType:     "INVOICE_PAID",
+								Lane:          "revenue",
+								Source:        "freshbooks",
+								ArtifactTitle: fmt.Sprintf("Invoice #%s — %s ($%s)", invNum, clientName, amtStr),
+								Detail:        fmt.Sprintf("FreshBooks invoice paid: %s", clientName),
+								ScoreDelta:    calcScoreDelta("revenue", "INVOICE_PAID", 1.0),
+								Confidence:    1.0,
+								Verification:  "PROVIDER_API",
+								ExternalID:    fmt.Sprintf("fb-inv-%s", invNum),
+								Timestamp:     updated,
+							})
+							eventsCreated++
+						}
+					}
+				}
+			}
+		}
+	}
+
+	// ── Expenses ──────────────────────────────────────────────────────────
+	expenseData, err := doGet(fmt.Sprintf("/accounting/account/%s/expenses/expenses?per_page=100&search[date_min]=%s",
+		cfg.AccountID, since.Format("2006-01-02")))
+	if err == nil {
+		if resp, ok := expenseData["response"].(map[string]interface{}); ok {
+			if result, ok := resp["result"].(map[string]interface{}); ok {
+				if expenses, ok := result["expenses"].([]interface{}); ok {
+					for _, exp := range expenses {
+						e, ok := exp.(map[string]interface{})
+						if !ok {
+							continue
+						}
+						amt, _ := e["amount"].(map[string]interface{})
+						amtStr, _ := amt["amount"].(string)
+						vendor, _ := e["vendor"].(string)
+						category, _ := e["category_name"].(string)
+						date, _ := e["date"].(string)
+						expID, _ := e["id"].(float64)
+
+						amtFloat := 0.0
+						fmt.Sscanf(amtStr, "%f", &amtFloat)
+
+						s.insertEventIfNew(Event{
+							EventType:     "EXPENSE_RECORDED",
+							Lane:          "revenue",
+							Source:        "freshbooks",
+							ArtifactTitle: fmt.Sprintf("Expense: %s — %s ($%s)", vendor, category, amtStr),
+							Detail:        fmt.Sprintf("FreshBooks expense: %s", vendor),
+							ScoreDelta:    0, // expenses don't add score — tracked for P&L
+							Confidence:    1.0,
+							Verification:  "PROVIDER_API",
+							ExternalID:    fmt.Sprintf("fb-exp-%d", int(expID)),
+							Timestamp:     date + "T00:00:00Z",
+						})
+						eventsCreated++
+					}
+				}
+			}
+		}
+	}
+
+	// ── Payments ──────────────────────────────────────────────────────────
+	paymentData, err := doGet(fmt.Sprintf("/accounting/account/%s/payments/payments?per_page=100&search[date_min]=%s",
+		cfg.AccountID, since.Format("2006-01-02")))
+	if err == nil {
+		if resp, ok := paymentData["response"].(map[string]interface{}); ok {
+			if result, ok := resp["result"].(map[string]interface{}); ok {
+				if payments, ok := result["payments"].([]interface{}); ok {
+					for _, pay := range payments {
+						p, ok := pay.(map[string]interface{})
+						if !ok {
+							continue
+						}
+						amt, _ := p["amount"].(map[string]interface{})
+						amtStr, _ := amt["amount"].(string)
+						date, _ := p["date"].(string)
+						payID, _ := p["id"].(float64)
+						payType, _ := p["type"].(string) // "Credit", "Cash", etc.
+
+						s.insertEventIfNew(Event{
+							EventType:     "PAYMENT_RECEIVED",
+							Lane:          "revenue",
+							Source:        "freshbooks",
+							ArtifactTitle: fmt.Sprintf("Payment received: $%s (%s)", amtStr, payType),
+							Detail:        fmt.Sprintf("FreshBooks payment via %s", payType),
+							ScoreDelta:    0, // don't double-count — invoice_paid already scored
+							Confidence:    1.0,
+							Verification:  "PROVIDER_API",
+							ExternalID:    fmt.Sprintf("fb-pay-%d", int(payID)),
+							Timestamp:     date + "T00:00:00Z",
+						})
+						eventsCreated++
+					}
+				}
+			}
+		}
+	}
+
+	if eventsCreated > 0 {
+		log.Printf("[freshbooks] %d events from account %s", eventsCreated, cfg.AccountID)
+	}
+	return nil
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// TRANSACTION RECONCILIATION ENGINE
+//
+// Problem: A single real-world transaction flows through multiple platforms:
+//   FreshBooks invoice → Stripe charge → Bank deposit → WooCommerce order
+//
+// Without reconciliation, the same $500 appears 4 times in revenue.
+//
+// Solution: Fingerprint-based deduplication with fuzzy matching:
+//   1. Extract canonical fields: amount, date (±3 days), description keywords
+//   2. Generate fingerprint: hash(amount + date_bucket + normalized_description)
+//   3. Group events by fingerprint into "transaction clusters"
+//   4. Mark duplicates: keep highest-confidence event, mark others as "reconciled"
+//   5. Test/fake detection: Stripe test mode keys, $0.50 charges, WooCommerce draft orders
+//
+// Rules:
+//   - Amount must match within $0.50 (fees/rounding)
+//   - Date must be within 3 calendar days
+//   - Same amount + same date range + different sources = probable duplicate
+//   - Stripe test mode (test_ prefix, amounts like $1.00) = always fake
+//   - WooCommerce draft/pending orders without payment = not real revenue
+//   - Manual override: operator can force-reconcile or force-keep
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// ReconciliationResult represents a cluster of related transactions
+type ReconciliationResult struct {
+	ClusterID     string   `json:"cluster_id"`
+	Amount        float64  `json:"amount"`
+	DateRange     string   `json:"date_range"`
+	Sources       []string `json:"sources"`       // e.g., ["stripe", "freshbooks", "woocommerce"]
+	EventIDs      []string `json:"event_ids"`     // event IDs in cluster
+	PrimaryID     string   `json:"primary_id"`    // highest-confidence event kept
+	DuplicateIDs  []string `json:"duplicate_ids"`  // events marked as duplicates
+	TestEvents    []string `json:"test_events"`    // events identified as test/fake
+	Confidence    float64  `json:"confidence"`     // 0-1 how confident this is a real match
+	Status        string   `json:"status"`         // "auto", "manual_confirmed", "manual_rejected"
+}
+
+func init() {
+	// Ensure table exists — called from main init
+}
+
+func (s *Server) initReconciliation() {
+	s.db.Exec(`CREATE TABLE IF NOT EXISTS reconciled_events (
+		event_id TEXT PRIMARY KEY,
+		cluster_id TEXT NOT NULL,
+		status TEXT NOT NULL DEFAULT 'duplicate',
+		primary_event_id TEXT,
+		reconciled_at TEXT NOT NULL
+	)`)
+	s.db.Exec(`CREATE TABLE IF NOT EXISTS test_transactions (
+		event_id TEXT PRIMARY KEY,
+		reason TEXT NOT NULL,
+		detected_at TEXT NOT NULL
+	)`)
+}
+
+// ReconcileRevenue runs the full reconciliation pipeline on revenue events
+func (s *Server) ReconcileRevenue() []ReconciliationResult {
+	// 1. Fetch all revenue events
+	rows, err := s.db.Query(`SELECT id, event_type, source, artifact_title, score_delta, timestamp, external_id
+		FROM events WHERE lane='revenue' AND status='approved'
+		ORDER BY timestamp DESC LIMIT 1000`)
+	if err != nil {
+		log.Printf("[reconcile] query error: %v", err)
+		return nil
+	}
+	defer rows.Close()
+
+	type revEvent struct {
+		ID        string
+		EventType string
+		Source    string
+		Title     string
+		Amount    float64
+		Timestamp string
+		ExtID     string
+	}
+	var events []revEvent
+	for rows.Next() {
+		var e revEvent
+		rows.Scan(&e.ID, &e.EventType, &e.Source, &e.Title, &e.Amount, &e.Timestamp, &e.ExtID)
+		// Extract dollar amount from title if score_delta is 0
+		if e.Amount == 0 {
+			e.Amount = extractAmountFromTitle(e.Title)
+		}
+		events = append(events, e)
+	}
+
+	// 2. Detect test/fake transactions first
+	var testIDs []string
+	for _, e := range events {
+		if reason := detectTestTransaction(e.Source, e.Title, e.Amount, e.ExtID); reason != "" {
+			testIDs = append(testIDs, e.ID)
+			s.db.Exec(`INSERT OR REPLACE INTO test_transactions (event_id, reason, detected_at) VALUES (?, ?, ?)`,
+				e.ID, reason, time.Now().UTC().Format(time.RFC3339))
+		}
+	}
+
+	// 3. Build clusters by amount + date proximity
+	type cluster struct {
+		amount    float64
+		dateStart time.Time
+		dateEnd   time.Time
+		events    []revEvent
+	}
+	var clusters []cluster
+
+	isTest := make(map[string]bool)
+	for _, id := range testIDs {
+		isTest[id] = true
+	}
+
+	for _, e := range events {
+		if isTest[e.ID] {
+			continue // skip test transactions from clustering
+		}
+		if e.Amount < 0.01 {
+			continue // skip zero-amount
+		}
+
+		eTime, _ := time.Parse(time.RFC3339, e.Timestamp)
+		if eTime.IsZero() {
+			eTime, _ = time.Parse("2006-01-02T15:04:05Z", e.Timestamp)
+		}
+
+		matched := false
+		for i := range clusters {
+			// Amount within $0.50 and date within 3 days
+			if math.Abs(clusters[i].amount-e.Amount) <= 0.50 {
+				if !eTime.IsZero() {
+					dayDiff := math.Abs(eTime.Sub(clusters[i].dateStart).Hours() / 24)
+					if dayDiff <= 3.0 {
+						clusters[i].events = append(clusters[i].events, e)
+						if eTime.Before(clusters[i].dateStart) {
+							clusters[i].dateStart = eTime
+						}
+						if eTime.After(clusters[i].dateEnd) {
+							clusters[i].dateEnd = eTime
+						}
+						matched = true
+						break
+					}
+				}
+			}
+		}
+		if !matched {
+			clusters = append(clusters, cluster{
+				amount:    e.Amount,
+				dateStart: eTime,
+				dateEnd:   eTime,
+				events:    []revEvent{e},
+			})
+		}
+	}
+
+	// 4. Process clusters — multi-source clusters are probable duplicates
+	var results []ReconciliationResult
+	for idx, c := range clusters {
+		if len(c.events) < 2 {
+			continue // single event = no reconciliation needed
+		}
+
+		// Check if multiple sources
+		sources := make(map[string]bool)
+		for _, e := range c.events {
+			sources[e.Source] = true
+		}
+		if len(sources) < 2 {
+			continue // all from same source = not cross-platform duplicate
+		}
+
+		var sourceList []string
+		for src := range sources {
+			sourceList = append(sourceList, src)
+		}
+
+		// Pick primary: highest confidence source priority
+		// stripe > freshbooks > woocommerce > memberpress > manual
+		primaryIdx := 0
+		primaryScore := sourcePriority(c.events[0].Source)
+		for i, e := range c.events {
+			p := sourcePriority(e.Source)
+			if p > primaryScore {
+				primaryScore = p
+				primaryIdx = i
+			}
+		}
+
+		var eventIDs, dupIDs []string
+		for i, e := range c.events {
+			eventIDs = append(eventIDs, e.ID)
+			if i != primaryIdx {
+				dupIDs = append(dupIDs, e.ID)
+			}
+		}
+
+		// Confidence: more sources = higher confidence this is real
+		conf := math.Min(1.0, 0.5+float64(len(sources))*0.2)
+
+		clusterID := fmt.Sprintf("rc-%d-%d", idx, time.Now().Unix())
+		results = append(results, ReconciliationResult{
+			ClusterID:    clusterID,
+			Amount:       c.amount,
+			DateRange:    c.dateStart.Format("2006-01-02") + " → " + c.dateEnd.Format("2006-01-02"),
+			Sources:      sourceList,
+			EventIDs:     eventIDs,
+			PrimaryID:    c.events[primaryIdx].ID,
+			DuplicateIDs: dupIDs,
+			TestEvents:   nil,
+			Confidence:   conf,
+			Status:       "auto",
+		})
+
+		// Mark duplicates in DB
+		for _, dupID := range dupIDs {
+			s.db.Exec(`INSERT OR REPLACE INTO reconciled_events (event_id, cluster_id, status, primary_event_id, reconciled_at)
+				VALUES (?, ?, 'duplicate', ?, ?)`,
+				dupID, clusterID, c.events[primaryIdx].ID, time.Now().UTC().Format(time.RFC3339))
+			// Zero out the duplicate's score to prevent double-counting
+			s.db.Exec(`UPDATE events SET score_delta = 0 WHERE id = ?`, dupID)
+		}
+	}
+
+	if len(results) > 0 || len(testIDs) > 0 {
+		log.Printf("[reconcile] processed %d clusters, %d duplicates zeroed, %d test transactions flagged",
+			len(results),
+			func() int { c := 0; for _, r := range results { c += len(r.DuplicateIDs) }; return c }(),
+			len(testIDs))
+	}
+
+	return results
+}
+
+// detectTestTransaction identifies fake/test transactions
+func detectTestTransaction(source, title string, amount float64, extID string) string {
+	titleLower := strings.ToLower(title)
+	extIDLower := strings.ToLower(extID)
+
+	// Stripe test mode indicators
+	if source == "stripe" {
+		if strings.Contains(extIDLower, "test_") {
+			return "stripe test mode (test_ prefix in ID)"
+		}
+		if strings.Contains(titleLower, "test") && amount <= 1.0 {
+			return "stripe test charge (contains 'test' + small amount)"
+		}
+		// $0.50 Stripe test charges are extremely common
+		if amount == 0.50 {
+			return "stripe likely test charge ($0.50)"
+		}
+	}
+
+	// WooCommerce test/draft orders
+	if source == "woocommerce" {
+		if strings.Contains(titleLower, "draft") || strings.Contains(titleLower, "pending") {
+			return "woocommerce draft/pending order (not completed)"
+		}
+		if strings.Contains(titleLower, "test") {
+			return "woocommerce test order"
+		}
+		if amount == 0 {
+			return "woocommerce zero-amount order"
+		}
+	}
+
+	// FreshBooks test
+	if source == "freshbooks" {
+		if strings.Contains(titleLower, "test") && amount <= 1.0 {
+			return "freshbooks test invoice"
+		}
+	}
+
+	// Generic test indicators
+	if strings.Contains(titleLower, "test transaction") || strings.Contains(titleLower, "test payment") {
+		return "title contains 'test transaction/payment'"
+	}
+
+	return "" // not a test transaction
+}
+
+// extractAmountFromTitle pulls dollar amounts from event titles like "Invoice #123 ($500.00)"
+func extractAmountFromTitle(title string) float64 {
+	amtPattern := regexp.MustCompile(`\$([0-9,]+\.?\d*)`)
+	matches := amtPattern.FindStringSubmatch(title)
+	if len(matches) >= 2 {
+		cleaned := strings.ReplaceAll(matches[1], ",", "")
+		var amt float64
+		fmt.Sscanf(cleaned, "%f", &amt)
+		return amt
+	}
+	return 0
+}
+
+// sourcePriority returns a score for source trustworthiness (higher = more authoritative)
+func sourcePriority(source string) int {
+	switch source {
+	case "stripe":
+		return 100 // payment processor = source of truth
+	case "freshbooks":
+		return 90 // accounting system
+	case "plaid":
+		return 85 // bank account
+	case "woocommerce":
+		return 70 // storefront
+	case "memberpress":
+		return 70 // membership
+	case "manual":
+		return 50 // manual entry
+	default:
+		return 60
+	}
+}
+
+// ─── Reconciliation API endpoints ────────────────────────────────────────────
+
+func (s *Server) handleReconcile(w http.ResponseWriter, r *http.Request) {
+	cors(w)
+	switch r.Method {
+	case "GET":
+		// Return current reconciliation state
+		var recon []ReconciliationResult
+		rows, err := s.db.Query(`SELECT DISTINCT cluster_id FROM reconciled_events ORDER BY reconciled_at DESC LIMIT 50`)
+		if err == nil {
+			defer rows.Close()
+			for rows.Next() {
+				var clusterID string
+				rows.Scan(&clusterID)
+				var r ReconciliationResult
+				r.ClusterID = clusterID
+				// Get events in cluster
+				erows, _ := s.db.Query(`SELECT event_id, status, primary_event_id FROM reconciled_events WHERE cluster_id=?`, clusterID)
+				if erows != nil {
+					for erows.Next() {
+						var eid, st, pid string
+						erows.Scan(&eid, &st, &pid)
+						r.EventIDs = append(r.EventIDs, eid)
+						if st == "duplicate" {
+							r.DuplicateIDs = append(r.DuplicateIDs, eid)
+						}
+						r.PrimaryID = pid
+					}
+					erows.Close()
+				}
+				r.Status = "auto"
+				recon = append(recon, r)
+			}
+		}
+
+		// Get test transactions
+		var tests []map[string]string
+		trows, err := s.db.Query(`SELECT event_id, reason, detected_at FROM test_transactions ORDER BY detected_at DESC LIMIT 50`)
+		if err == nil {
+			defer trows.Close()
+			for trows.Next() {
+				var eid, reason, det string
+				trows.Scan(&eid, &reason, &det)
+				tests = append(tests, map[string]string{"event_id": eid, "reason": reason, "detected_at": det})
+			}
+		}
+
+		writeJSON(w, map[string]interface{}{
+			"reconciled_clusters": recon,
+			"test_transactions":   tests,
+		})
+
+	case "POST":
+		// Run reconciliation now
+		results := s.ReconcileRevenue()
+		writeJSON(w, map[string]interface{}{
+			"clusters_found": len(results),
+			"results":        results,
+		})
+
+	default:
+		http.Error(w, "GET or POST", 405)
+	}
+}
+
+func (s *Server) handleTestTransactions(w http.ResponseWriter, r *http.Request) {
+	cors(w)
+	rows, err := s.db.Query(`SELECT t.event_id, t.reason, t.detected_at, e.artifact_title, e.source, e.score_delta
+		FROM test_transactions t
+		LEFT JOIN events e ON e.id = t.event_id
+		ORDER BY t.detected_at DESC LIMIT 100`)
+	if err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err), 500)
+		return
+	}
+	defer rows.Close()
+
+	var tests []map[string]interface{}
+	for rows.Next() {
+		var eid, reason, det, title, source string
+		var delta float64
+		rows.Scan(&eid, &reason, &det, &title, &source, &delta)
+		tests = append(tests, map[string]interface{}{
+			"event_id":    eid,
+			"reason":      reason,
+			"detected_at": det,
+			"title":       title,
+			"source":      source,
+			"score_delta": delta,
+		})
+	}
+	writeJSON(w, map[string]interface{}{"test_transactions": tests})
 }

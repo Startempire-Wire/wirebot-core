@@ -806,6 +806,9 @@ type FounderProfileV2 struct {
 		ConnectedAccounts     []string `json:"connected_accounts"`
 		EngineVersion         string   `json:"engine_version"`
 	} `json:"meta"`
+
+	// Extensible metadata (vault insights, external analysis, etc.)
+	Metadata map[string]interface{} `json:"metadata,omitempty"`
 }
 
 func NewFounderProfile() *FounderProfileV2 {
