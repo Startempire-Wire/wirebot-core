@@ -380,19 +380,18 @@ func main() {
 	mux := http.NewServeMux()
 
 	// Public endpoints
-	mux.HandleFunc("/v1/scoreboard", s.handleScoreboard)
+	// Health (always public)
 	mux.HandleFunc("/health", s.handleHealth)
 
-	// Authenticated endpoints
+	// ALL data endpoints require authentication — no public data when logged out
+	mux.HandleFunc("/v1/scoreboard", s.authMember(s.handleScoreboard))
 	mux.HandleFunc("/v1/events", s.auth(s.handleEvents))
 	mux.HandleFunc("/v1/events/batch", s.auth(s.handleEventsBatch))
 	mux.HandleFunc("/v1/score", s.auth(s.handleScore))
-	// Read-only endpoints: public (PWA served same origin, behind CF tunnel)
-	mux.HandleFunc("/v1/feed", s.handleFeed)
-	mux.HandleFunc("/v1/season", s.handleSeason)
-	mux.HandleFunc("/v1/season/wrapped", s.handleWrapped)
-	mux.HandleFunc("/v1/history", s.handleHistory)
-	// Write endpoints: auth required
+	mux.HandleFunc("/v1/feed", s.authMember(s.handleFeed))
+	mux.HandleFunc("/v1/season", s.authMember(s.handleSeason))
+	mux.HandleFunc("/v1/season/wrapped", s.authMember(s.handleWrapped))
+	mux.HandleFunc("/v1/history", s.authMember(s.handleHistory))
 	mux.HandleFunc("/v1/intent", s.auth(s.handleIntent))
 	mux.HandleFunc("/v1/audit", s.auth(s.handleAudit))
 
@@ -401,13 +400,13 @@ func main() {
 	mux.HandleFunc("/v1/events/", s.auth(s.handleEventAction)) // /v1/events/<id>/approve|reject
 
 	// Project-level approval
-	mux.HandleFunc("/v1/projects", s.handleProjects)          // GET: list, POST: create/update
+	mux.HandleFunc("/v1/projects", s.authMember(s.handleProjects))
 	mux.HandleFunc("/v1/projects/", s.auth(s.handleProjectAction)) // POST .../approve|reject
 
-	// Social cards
-	mux.HandleFunc("/v1/card/daily", s.handleCard)
-	mux.HandleFunc("/v1/card/weekly", s.handleCard)
-	mux.HandleFunc("/v1/card/season", s.handleCard)
+	// Social cards (auth required)
+	mux.HandleFunc("/v1/card/daily", s.authMember(s.handleCard))
+	mux.HandleFunc("/v1/card/weekly", s.authMember(s.handleCard))
+	mux.HandleFunc("/v1/card/season", s.authMember(s.handleCard))
 
 	// EOD score lock
 	mux.HandleFunc("/v1/lock", s.auth(s.handleLock))
@@ -416,9 +415,9 @@ func main() {
 	mux.HandleFunc("/v1/integrations", s.auth(s.handleIntegrations))
 	mux.HandleFunc("/v1/integrations/", s.auth(s.handleIntegrationConfig))
 
-	// Webhook receivers (use separate tokens in query params)
+	// Webhook receivers (use their own verification, not bearer auth)
 	mux.HandleFunc("/v1/webhooks/github", s.auth(s.handleGitHubWebhook))
-	mux.HandleFunc("/v1/webhooks/stripe", s.handleStripeWebhook) // Stripe signs webhooks, no bearer auth
+	mux.HandleFunc("/v1/webhooks/stripe", s.handleStripeWebhook) // Stripe signs its own webhooks
 	mux.HandleFunc("/v1/financial/snapshot", s.auth(s.handleFinancialSnapshot))
 
 	// SSO callback — receives JWT from Connect Plugin redirect

@@ -62,6 +62,8 @@
         tokenStatus = 'ok';
         tokenMsg = `✓ Connected as ${data.user.display_name} (${data.user.tier})`;
         setTimeout(() => { tokenStatus = null; }, 4000);
+        view = 'score';
+        fetchAll();
       } else {
         loginError = data.error || 'Login failed';
       }
@@ -141,13 +143,18 @@
   }
 
   async function fetchAll() {
+    if (!getToken()) return; // Don't fetch without auth
+    const hdrs = authHeaders();
     try {
       const [sbRes, feedRes, histRes] = await Promise.all([
-        fetch(`${API}/v1/scoreboard?mode=dashboard`),
-        fetch(`${API}/v1/feed?limit=50`),
-        fetch(`${API}/v1/history?range=season`),
+        fetch(`${API}/v1/scoreboard?mode=dashboard`, { headers: hdrs }),
+        fetch(`${API}/v1/feed?limit=50`, { headers: hdrs }),
+        fetch(`${API}/v1/history?range=season`, { headers: hdrs }),
       ]);
 
+      if (sbRes.status === 401 || sbRes.status === 403) {
+        logout(); return;
+      }
       if (sbRes.ok) {
         const sb = await sbRes.json();
         data = sb.scoreboard || sb;
@@ -172,7 +179,7 @@
     const token = getToken();
     if (!token) return;
     try {
-      const res = await fetch(`${API}/v1/season/wrapped?token=${token}`);
+      const res = await fetch(`${API}/v1/season/wrapped`, { headers: authHeaders() });
       if (res.ok) wrapped = await res.json();
     } catch {}
   }
@@ -208,8 +215,10 @@
 
   onMount(() => {
     restoreSession();
-    fetchAll();
-    const interval = setInterval(fetchAll, 30000);
+    if (loggedInUser) {
+      fetchAll();
+    }
+    const interval = setInterval(() => { if (loggedInUser) fetchAll(); }, 30000);
     if ('serviceWorker' in navigator) {
       navigator.serviceWorker.register('/sw.js').catch(() => {});
     }
@@ -231,7 +240,33 @@
   }
 </script>
 
-{#if error && !data}
+{#if !loggedInUser}
+  <!-- ── Not logged in: full-screen login ── -->
+  <div class="login-screen">
+    <div class="login-card">
+      <div class="login-logo">⚡</div>
+      <h1 class="login-title">Wirebot Scoreboard</h1>
+      <p class="login-sub">Track execution. Ship work. Score progress.</p>
+      <a class="btn-sso login-sso" href="https://startempirewire.com/?sewn_sso=1&redirect_uri=https://wins.wirebot.chat">
+        🚀 Sign in with Startempire Wire
+      </a>
+      <details class="login-manual">
+        <summary>Sign in with app password</summary>
+        <input type="text" bind:value={loginUser} placeholder="Username"
+          onkeydown={(e) => e.key === 'Enter' && document.getElementById('login-pass-main')?.focus()} />
+        <input type="password" id="login-pass-main" bind:value={loginPass} placeholder="App password"
+          onkeydown={(e) => e.key === 'Enter' && loginViaRingLeader()} />
+        {#if loginError}
+          <div class="token-status fail">{loginError}</div>
+        {/if}
+        <button class="btn-login" onclick={loginViaRingLeader} disabled={loginLoading}>
+          {loginLoading ? 'Connecting...' : '→ Sign in'}
+        </button>
+      </details>
+      <p class="login-privacy">Your data is private. No public access without authentication.</p>
+    </div>
+  </div>
+{:else if error && !data}
   <div class="loading">
     <div class="ld-icon">⚡</div>
     <p>Connecting...</p>
@@ -733,5 +768,38 @@
     padding: 6px 12px;
     border: 1px solid #2a2a40;
     border-radius: 6px;
+  }
+
+  /* ── Login Screen ── */
+  .login-screen {
+    display: flex; justify-content: center; align-items: center;
+    min-height: 100dvh; width: 100%; padding: 24px;
+    background: #0a0a12;
+  }
+  .login-card {
+    width: min(400px, 100%);
+    text-align: center;
+  }
+  .login-logo { font-size: 48px; margin-bottom: 12px; }
+  .login-title { font-size: 22px; font-weight: 800; color: #eee; margin-bottom: 6px; }
+  .login-sub { font-size: 14px; color: #666; margin-bottom: 28px; }
+  .login-sso {
+    display: block; padding: 16px; font-size: 16px; font-weight: 700;
+    margin-bottom: 20px;
+  }
+  .login-manual {
+    text-align: left; background: #12121e; border-radius: 12px;
+    border: 1px solid #1e1e30; padding: 16px; margin-bottom: 20px;
+  }
+  .login-manual summary {
+    cursor: pointer; color: #888; font-size: 13px; margin-bottom: 12px;
+  }
+  .login-manual input {
+    width: 100%; padding: 12px; background: #1a1a2e; border: 1px solid #333;
+    border-radius: 8px; color: #fff; font-size: 15px; margin-bottom: 10px;
+  }
+  .login-manual input:focus { outline: none; border-color: #7c7cff; }
+  .login-privacy {
+    font-size: 12px; color: #444; margin-top: 8px;
   }
 </style>
