@@ -3910,6 +3910,20 @@ func (s *Server) pollDueIntegrations() {
 			var creds map[string]string
 			json.Unmarshal([]byte(credential), &creds)
 			pollErr = s.pollPlaid(id, creds["access_token"], config, lastPoll)
+		case "posthog":
+			pollErr = s.pollPostHog(id, credential, config, lastPoll)
+		case "uptimerobot":
+			pollErr = s.pollUptimeRobot(id, credential, lastPoll)
+		case "rescuetime":
+			pollErr = s.pollRescueTime(id, credential, lastPoll)
+		case "woocommerce":
+			pollErr = s.pollWooCommerce(id, credential, config, lastPoll)
+		case "cloudflare":
+			pollErr = s.pollCloudflare(id, credential, config, lastPoll)
+		case "hubspot":
+			pollErr = s.pollHubSpot(id, credential, lastPoll)
+		case "discord_webhook":
+			pollErr = s.pollDiscord(id, credential, lastPoll)
 		default:
 			log.Printf("Poller: unknown provider %s for integration %s", provider, id)
 		}
@@ -4114,6 +4128,600 @@ func (s *Server) pollYouTube(integrationID, apiKey, configJSON, lastPoll string)
 		newCount++
 		log.Printf("YouTube: New VIDEO_PUBLISHED — %s (%s)", item.Snippet.Title, videoURL)
 	}
+	return nil
+}
+
+// ─── PostHog Poller ──────────────────────────────────────────────────────
+
+func (s *Server) pollPostHog(integrationID, apiKey, configJSON, lastPoll string) error {
+	var cfg struct {
+		Host string `json:"host"`
+	}
+	json.Unmarshal([]byte(configJSON), &cfg)
+	host := cfg.Host
+	if host == "" {
+		host = "https://data.philoveracity.com"
+	}
+
+	// Get event count and active users for the last period
+	since := time.Now().Add(-24 * time.Hour).Format("2006-01-02")
+	if lastPoll != "" {
+		if t, err := time.Parse(time.RFC3339, lastPoll); err == nil {
+			since = t.Format("2006-01-02")
+		}
+	}
+
+	// Insights query: pageviews + unique users
+	client := &http.Client{Timeout: 15 * time.Second}
+	url := fmt.Sprintf("%s/api/projects/@current/insights/trend/?events=[{\"id\":\"$pageview\"}]&date_from=%s&date_to=now", host, since)
+	req, _ := http.NewRequest("GET", url, nil)
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("posthog api: %w", err)
+	}
+	defer resp.Body.Close()
+
+	var result map[string]interface{}
+	json.NewDecoder(resp.Body).Decode(&result)
+
+	// Extract total pageviews from results
+	totalPageviews := 0
+	if results, ok := result["result"].([]interface{}); ok && len(results) > 0 {
+		if first, ok := results[0].(map[string]interface{}); ok {
+			if counts, ok := first["data"].([]interface{}); ok {
+				for _, c := range counts {
+					if v, ok := c.(float64); ok {
+						totalPageviews += int(v)
+					}
+				}
+			}
+		}
+	}
+
+	// Store as a systems health snapshot (not individually scored per-pageview)
+	now := time.Now().UTC().Format(time.RFC3339)
+	today := operatorToday()
+	evtID := fmt.Sprintf("evt-posthog-%s-%s", integrationID[:15], today)
+
+	var exists int
+	s.db.QueryRow("SELECT COUNT(*) FROM events WHERE id=?", evtID).Scan(&exists)
+	if exists > 0 {
+		return nil // Already logged today
+	}
+
+	meta, _ := json.Marshal(map[string]interface{}{
+		"pageviews": totalPageviews,
+		"period":    since + " to " + time.Now().Format("2006-01-02"),
+		"host":      host,
+	})
+
+	scoreDelta := 0
+	title := fmt.Sprintf("📊 Analytics: %d pageviews", totalPageviews)
+	if totalPageviews > 0 {
+		scoreDelta = 2 // Systems lane: site is alive and getting traffic
+		if totalPageviews > 100 {
+			scoreDelta = 3
+		}
+	}
+
+	s.mu.Lock()
+	s.db.Exec(`INSERT INTO events (id, event_type, lane, source, timestamp,
+		artifact_title, confidence, verifiers, verification_level,
+		score_delta, metadata, created_at, status) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		evtID, "ANALYTICS_SNAPSHOT", "systems", "posthog-poller", now,
+		title, 0.9, `["posthog_api"]`, "STRONG",
+		scoreDelta, string(meta), now, "approved")
+	s.mu.Unlock()
+
+	s.updateDailyScore(today)
+	log.Printf("PostHog: %d pageviews since %s", totalPageviews, since)
+	return nil
+}
+
+// ─── UptimeRobot Poller ─────────────────────────────────────────────────
+
+func (s *Server) pollUptimeRobot(integrationID, apiKey, lastPoll string) error {
+	client := &http.Client{Timeout: 15 * time.Second}
+	body := strings.NewReader(fmt.Sprintf("api_key=%s&format=json&all_time_uptime_ratio=1&custom_uptime_ratios=1-7-30", apiKey))
+	req, _ := http.NewRequest("POST", "https://api.uptimerobot.com/v2/getMonitors", body)
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("uptimerobot api: %w", err)
+	}
+	defer resp.Body.Close()
+
+	var result struct {
+		Stat     string `json:"stat"`
+		Monitors []struct {
+			ID                 int    `json:"id"`
+			FriendlyName       string `json:"friendly_name"`
+			URL                string `json:"url"`
+			Status             int    `json:"status"`
+			AllTimeUptimeRatio string `json:"all_time_uptime_ratio"`
+			CustomUptimeRatio  string `json:"custom_uptime_ratio"`
+		} `json:"monitors"`
+	}
+	json.NewDecoder(resp.Body).Decode(&result)
+
+	if result.Stat != "ok" {
+		return fmt.Errorf("uptimerobot: stat=%s", result.Stat)
+	}
+
+	now := time.Now().UTC().Format(time.RFC3339)
+	today := operatorToday()
+	evtID := fmt.Sprintf("evt-uptime-%s-%s", integrationID[:15], today)
+
+	var exists int
+	s.db.QueryRow("SELECT COUNT(*) FROM events WHERE id=?", evtID).Scan(&exists)
+	if exists > 0 {
+		return nil
+	}
+
+	totalMonitors := len(result.Monitors)
+	upCount := 0
+	downCount := 0
+	monitorNames := []string{}
+	for _, m := range result.Monitors {
+		if m.Status == 2 { // 2 = up
+			upCount++
+		} else if m.Status == 9 { // 9 = down
+			downCount++
+		}
+		monitorNames = append(monitorNames, m.FriendlyName)
+	}
+
+	meta, _ := json.Marshal(map[string]interface{}{
+		"total_monitors": totalMonitors,
+		"up":             upCount,
+		"down":           downCount,
+		"monitors":       monitorNames,
+	})
+
+	scoreDelta := 0
+	title := fmt.Sprintf("🟢 Uptime: %d/%d monitors up", upCount, totalMonitors)
+	if downCount > 0 {
+		title = fmt.Sprintf("🔴 Uptime: %d DOWN, %d up of %d", downCount, upCount, totalMonitors)
+		scoreDelta = -2 // Penalty for downtime
+	} else if upCount > 0 {
+		scoreDelta = 2 // All systems healthy
+	}
+
+	s.mu.Lock()
+	s.db.Exec(`INSERT INTO events (id, event_type, lane, source, timestamp,
+		artifact_title, confidence, verifiers, verification_level,
+		score_delta, metadata, created_at, status) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		evtID, "UPTIME_CHECK", "systems", "uptimerobot-poller", now,
+		title, 0.99, `["uptimerobot_api"]`, "STRONG",
+		scoreDelta, string(meta), now, "approved")
+	s.mu.Unlock()
+
+	s.updateDailyScore(today)
+	log.Printf("UptimeRobot: %d up, %d down of %d monitors", upCount, downCount, totalMonitors)
+	return nil
+}
+
+// ─── RescueTime Poller ──────────────────────────────────────────────────
+
+func (s *Server) pollRescueTime(integrationID, apiKey, lastPoll string) error {
+	client := &http.Client{Timeout: 15 * time.Second}
+	_ = operatorToday()
+
+	// Daily summary: productive hours, productivity pulse
+	url := fmt.Sprintf("https://www.rescuetime.com/anapi/daily_summary_feed?key=%s&format=json", apiKey)
+	resp, err := client.Get(url)
+	if err != nil {
+		return fmt.Errorf("rescuetime api: %w", err)
+	}
+	defer resp.Body.Close()
+
+	var days []struct {
+		Date                string  `json:"date"`
+		ProductivityPulse   float64 `json:"productivity_pulse"`
+		TotalHours          float64 `json:"total_hours"`
+		VeryProductiveHours float64 `json:"very_productive_hours"`
+		ProductiveHours     float64 `json:"productive_hours"`
+		NeutralHours        float64 `json:"neutral_hours"`
+		DistractingHours    float64 `json:"distracting_hours"`
+		VeryDistractingHours float64 `json:"very_distracting_hours"`
+		TotalDurationFormatted string `json:"total_duration_formatted"`
+	}
+	json.NewDecoder(resp.Body).Decode(&days)
+
+	if len(days) == 0 {
+		return nil // No data yet today
+	}
+
+	now := time.Now().UTC().Format(time.RFC3339)
+	newCount := 0
+
+	for _, day := range days {
+		// Only process recent days (since last poll)
+		if lastPoll != "" {
+			if lp, err := time.Parse(time.RFC3339, lastPoll); err == nil {
+				dp, _ := time.Parse("2006-01-02", day.Date)
+				if dp.Before(lp) {
+					continue
+				}
+			}
+		}
+
+		evtID := fmt.Sprintf("evt-rt-%s-%s", integrationID[:15], day.Date)
+		var exists int
+		s.db.QueryRow("SELECT COUNT(*) FROM events WHERE id=?", evtID).Scan(&exists)
+		if exists > 0 {
+			continue
+		}
+
+		focusHours := day.VeryProductiveHours + day.ProductiveHours
+		meta, _ := json.Marshal(map[string]interface{}{
+			"productivity_pulse": day.ProductivityPulse,
+			"total_hours":       day.TotalHours,
+			"focus_hours":       focusHours,
+			"distracting_hours": day.DistractingHours + day.VeryDistractingHours,
+			"date":              day.Date,
+		})
+
+		// Score based on focus hours
+		scoreDelta := 0
+		title := fmt.Sprintf("⏱️ Focus: %.1fh productive (pulse: %.0f%%)", focusHours, day.ProductivityPulse)
+		if focusHours >= 6 {
+			scoreDelta = 3 // Outstanding focus day
+		} else if focusHours >= 4 {
+			scoreDelta = 2 // Good focus day
+		} else if focusHours >= 2 {
+			scoreDelta = 1 // Minimal focus
+		}
+		// No negative scoring for low-focus days — that's wellness, not punishment
+
+		s.mu.Lock()
+		s.db.Exec(`INSERT INTO events (id, event_type, lane, source, timestamp,
+			artifact_title, confidence, verifiers, verification_level,
+			score_delta, metadata, created_at, status) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			evtID, "FOCUS_REPORT", "systems", "rescuetime-poller", now,
+			title, 0.95, `["rescuetime_api"]`, "STRONG",
+			scoreDelta, string(meta), now, "approved")
+		s.mu.Unlock()
+
+		s.updateDailyScore(day.Date)
+		newCount++
+	}
+
+	if newCount > 0 {
+		log.Printf("RescueTime: %d daily reports", newCount)
+	}
+	return nil
+}
+
+// ─── WooCommerce Poller ─────────────────────────────────────────────────
+
+func (s *Server) pollWooCommerce(integrationID, consumerKey, configJSON, lastPoll string) error {
+	var cfg struct {
+		ConsumerSecret string `json:"consumer_secret"`
+		StoreURL       string `json:"store_url"`
+	}
+	json.Unmarshal([]byte(configJSON), &cfg)
+	if cfg.StoreURL == "" || cfg.ConsumerSecret == "" {
+		return fmt.Errorf("store_url and consumer_secret required")
+	}
+
+	// Fetch recent orders
+	after := time.Now().Add(-24 * time.Hour).UTC().Format(time.RFC3339)
+	if lastPoll != "" {
+		after = lastPoll
+	}
+
+	url := fmt.Sprintf("%s/wp-json/wc/v3/orders?after=%s&per_page=50&orderby=date&order=desc",
+		strings.TrimRight(cfg.StoreURL, "/"), after)
+
+	client := &http.Client{Timeout: 15 * time.Second}
+	req, _ := http.NewRequest("GET", url, nil)
+	req.SetBasicAuth(consumerKey, cfg.ConsumerSecret)
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("woocommerce api: %w", err)
+	}
+	defer resp.Body.Close()
+
+	var orders []struct {
+		ID          int    `json:"id"`
+		Status      string `json:"status"`
+		Total       string `json:"total"`
+		Currency    string `json:"currency"`
+		DateCreated string `json:"date_created"`
+		Billing     struct {
+			FirstName string `json:"first_name"`
+			LastName  string `json:"last_name"`
+		} `json:"billing"`
+		LineItems []struct {
+			Name string `json:"name"`
+		} `json:"line_items"`
+	}
+	json.NewDecoder(resp.Body).Decode(&orders)
+
+	newCount := 0
+	for _, order := range orders {
+		evtID := fmt.Sprintf("evt-woo-%d", order.ID)
+		var exists int
+		s.db.QueryRow("SELECT COUNT(*) FROM events WHERE id=?", evtID).Scan(&exists)
+		if exists > 0 {
+			continue
+		}
+
+		// Only score completed/processing orders
+		if order.Status != "completed" && order.Status != "processing" {
+			continue
+		}
+
+		totalF := 0.0
+		fmt.Sscanf(order.Total, "%f", &totalF)
+
+		items := []string{}
+		for _, li := range order.LineItems {
+			items = append(items, li.Name)
+		}
+
+		meta, _ := json.Marshal(map[string]interface{}{
+			"order_id":  order.ID,
+			"status":    order.Status,
+			"total":     totalF,
+			"currency":  order.Currency,
+			"items":     strings.Join(items, ", "),
+			"customer":  order.Billing.FirstName,
+		})
+
+		scoreDelta := 5
+		if totalF >= 100 {
+			scoreDelta = 8
+		}
+		if totalF >= 500 {
+			scoreDelta = 10
+		}
+
+		title := fmt.Sprintf("🛒 Order #%d: $%.2f — %s", order.ID, totalF, strings.Join(items, ", "))
+		now := time.Now().UTC().Format(time.RFC3339)
+
+		s.mu.Lock()
+		s.db.Exec(`INSERT INTO events (id, event_type, lane, source, timestamp,
+			artifact_title, confidence, verifiers, verification_level,
+			score_delta, metadata, created_at, status) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			evtID, "PAYMENT_RECEIVED", "revenue", "woocommerce-poller", order.DateCreated,
+			title, 0.95, `["woocommerce_api"]`, "STRONG",
+			scoreDelta, string(meta), now, "approved")
+		s.mu.Unlock()
+
+		orderTime, _ := time.Parse("2006-01-02T15:04:05", order.DateCreated)
+		if !orderTime.IsZero() {
+			s.updateDailyScore(orderTime.Format("2006-01-02"))
+		}
+		newCount++
+	}
+
+	if newCount > 0 {
+		log.Printf("WooCommerce: %d new orders from %s", newCount, cfg.StoreURL)
+	}
+	return nil
+}
+
+// ─── Cloudflare Poller ──────────────────────────────────────────────────
+
+func (s *Server) pollCloudflare(integrationID, apiToken, configJSON, lastPoll string) error {
+	var cfg struct {
+		AccountID string `json:"account_id"`
+		Email     string `json:"email"`
+	}
+	json.Unmarshal([]byte(configJSON), &cfg)
+
+	client := &http.Client{Timeout: 15 * time.Second}
+
+	// List zones for this account
+	zonesURL := "https://api.cloudflare.com/client/v4/zones?per_page=50"
+	if cfg.AccountID != "" {
+		zonesURL += "&account.id=" + cfg.AccountID
+	}
+	req, _ := http.NewRequest("GET", zonesURL, nil)
+	// Support both Bearer token and Global API Key auth
+	if cfg.Email != "" {
+		req.Header.Set("X-Auth-Email", cfg.Email)
+		req.Header.Set("X-Auth-Key", apiToken)
+	} else {
+		req.Header.Set("Authorization", "Bearer "+apiToken)
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("cloudflare api: %w", err)
+	}
+	defer resp.Body.Close()
+
+	var zonesResult struct {
+		Success bool `json:"success"`
+		Result  []struct {
+			ID     string `json:"id"`
+			Name   string `json:"name"`
+			Status string `json:"status"`
+		} `json:"result"`
+	}
+	json.NewDecoder(resp.Body).Decode(&zonesResult)
+
+	if !zonesResult.Success {
+		return fmt.Errorf("cloudflare zones: request failed")
+	}
+
+	now := time.Now().UTC().Format(time.RFC3339)
+	today := operatorToday()
+	evtID := fmt.Sprintf("evt-cf-%s-%s", integrationID[:15], today)
+
+	var exists int
+	s.db.QueryRow("SELECT COUNT(*) FROM events WHERE id=?", evtID).Scan(&exists)
+	if exists > 0 {
+		return nil
+	}
+
+	activeZones := 0
+	zoneNames := []string{}
+	for _, z := range zonesResult.Result {
+		if z.Status == "active" {
+			activeZones++
+		}
+		zoneNames = append(zoneNames, z.Name)
+	}
+
+	meta, _ := json.Marshal(map[string]interface{}{
+		"total_zones":  len(zonesResult.Result),
+		"active_zones": activeZones,
+		"zones":        zoneNames,
+	})
+
+	scoreDelta := 0
+	if activeZones > 0 {
+		scoreDelta = 1 // Infra is running
+	}
+	title := fmt.Sprintf("🔥 Cloudflare: %d active zones — %s", activeZones, strings.Join(zoneNames, ", "))
+
+	s.mu.Lock()
+	s.db.Exec(`INSERT INTO events (id, event_type, lane, source, timestamp,
+		artifact_title, confidence, verifiers, verification_level,
+		score_delta, metadata, created_at, status) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		evtID, "INFRA_CHECK", "systems", "cloudflare-poller", now,
+		title, 0.9, `["cloudflare_api"]`, "STRONG",
+		scoreDelta, string(meta), now, "approved")
+	s.mu.Unlock()
+
+	s.updateDailyScore(today)
+	log.Printf("Cloudflare: %d active zones, %d total", activeZones, len(zonesResult.Result))
+	return nil
+}
+
+// ─── HubSpot Poller ─────────────────────────────────────────────────────
+
+func (s *Server) pollHubSpot(integrationID, apiToken, lastPoll string) error {
+	client := &http.Client{Timeout: 15 * time.Second}
+
+	// Get recent deals (pipeline)
+	url := "https://api.hubapi.com/crm/v3/objects/deals?limit=20&properties=dealname,amount,dealstage,closedate,createdate&sorts=-createdate"
+	req, _ := http.NewRequest("GET", url, nil)
+	req.Header.Set("Authorization", "Bearer "+apiToken)
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("hubspot api: %w", err)
+	}
+	defer resp.Body.Close()
+
+	var result struct {
+		Results []struct {
+			ID         string `json:"id"`
+			Properties struct {
+				DealName  string `json:"dealname"`
+				Amount    string `json:"amount"`
+				DealStage string `json:"dealstage"`
+				CloseDate string `json:"closedate"`
+				CreateDate string `json:"createdate"`
+			} `json:"properties"`
+		} `json:"results"`
+	}
+	json.NewDecoder(resp.Body).Decode(&result)
+
+	newCount := 0
+	for _, deal := range result.Results {
+		evtID := fmt.Sprintf("evt-hs-deal-%s", deal.ID)
+		var exists int
+		s.db.QueryRow("SELECT COUNT(*) FROM events WHERE id=?", evtID).Scan(&exists)
+		if exists > 0 {
+			continue
+		}
+
+		// Only track deals created after last poll
+		if lastPoll != "" && deal.Properties.CreateDate != "" {
+			lp, _ := time.Parse(time.RFC3339, lastPoll)
+			cd, _ := time.Parse("2006-01-02T15:04:05.000Z", deal.Properties.CreateDate)
+			if cd.Before(lp) {
+				continue
+			}
+		}
+
+		amount := 0.0
+		fmt.Sscanf(deal.Properties.Amount, "%f", &amount)
+
+		meta, _ := json.Marshal(map[string]interface{}{
+			"deal_id":    deal.ID,
+			"deal_stage": deal.Properties.DealStage,
+			"amount":     amount,
+		})
+
+		scoreDelta := 3 // New pipeline deal
+		title := fmt.Sprintf("🔶 Deal: %s", deal.Properties.DealName)
+		if amount > 0 {
+			title = fmt.Sprintf("🔶 Deal: %s ($%.0f)", deal.Properties.DealName, amount)
+			if amount >= 1000 {
+				scoreDelta = 5
+			}
+		}
+		evtType := "DEAL_CREATED"
+		if deal.Properties.DealStage == "closedwon" {
+			evtType = "DEAL_WON"
+			scoreDelta = 8
+		}
+
+		now := time.Now().UTC().Format(time.RFC3339)
+
+		s.mu.Lock()
+		s.db.Exec(`INSERT INTO events (id, event_type, lane, source, timestamp,
+			artifact_title, confidence, verifiers, verification_level,
+			score_delta, metadata, created_at, status) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			evtID, evtType, "revenue", "hubspot-poller", deal.Properties.CreateDate,
+			title, 0.9, `["hubspot_api"]`, "STRONG",
+			scoreDelta, string(meta), now, "approved")
+		s.mu.Unlock()
+
+		newCount++
+	}
+
+	if newCount > 0 {
+		log.Printf("HubSpot: %d new deals", newCount)
+	}
+	return nil
+}
+
+// ─── Discord Webhook Poller ─────────────────────────────────────────────
+// Note: Discord "poller" doesn't poll Discord — it checks if our outgoing
+// webhook is still valid. Actual Discord events come via bot/webhook push.
+// This just verifies the connection is alive.
+
+func (s *Server) pollDiscord(integrationID, webhookURL, lastPoll string) error {
+	if webhookURL == "" {
+		return fmt.Errorf("webhook URL required")
+	}
+
+	// Validate webhook is still alive (GET returns webhook info)
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Get(webhookURL)
+	if err != nil {
+		return fmt.Errorf("discord webhook check: %w", err)
+	}
+	defer resp.Body.Close()
+
+	var wh struct {
+		ID        string `json:"id"`
+		Name      string `json:"name"`
+		GuildID   string `json:"guild_id"`
+		ChannelID string `json:"channel_id"`
+	}
+	json.NewDecoder(resp.Body).Decode(&wh)
+
+	if wh.ID == "" {
+		return fmt.Errorf("discord webhook invalid or expired")
+	}
+
+	// Update integration config with webhook metadata
+	now := time.Now().UTC().Format(time.RFC3339)
+	s.db.Exec(`UPDATE integrations SET config=json_set(COALESCE(config,'{}'),
+		'$.webhook_name', ?, '$.guild_id', ?, '$.channel_id', ?),
+		last_used_at=? WHERE id=?`,
+		wh.Name, wh.GuildID, wh.ChannelID, now, integrationID)
+
+	log.Printf("Discord: webhook %s (%s) verified", wh.Name, wh.ID)
 	return nil
 }
 
