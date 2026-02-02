@@ -1,5 +1,6 @@
 <script>
   import { createEventDispatcher } from 'svelte';
+  import PairingFlow from './PairingFlow.svelte';
   const dispatch = createEventDispatcher();
 
   let { apiBase = '', token = '' } = $props();
@@ -126,19 +127,13 @@
     <button onclick={load}>Retry</button>
   </div>
 {:else if showFlow}
-  <div class="flow-placeholder">
-    <button class="back-btn" onclick={() => showFlow = false}>← Back to Profile</button>
-    <h2>Assessment: {flowInstrument}</h2>
-    <p class="flow-desc">
-      {flowInstrument === 'ASI-12' ? '12 forced-choice pairs — what you DO when free to act' :
-       flowInstrument === 'CSI-8' ? '8 scenario picks — how you communicate under pressure' :
-       flowInstrument === 'ETM-6' ? 'Drag to sort — what gives/drains your energy' :
-       flowInstrument === 'RDS-6' ? '6 sliders — your relationship with risk' :
-       flowInstrument === 'COG-8' ? '8 scenarios — how you process information' : ''}
-    </p>
-    <p class="flow-coming">Interactive assessment UI coming soon</p>
-    <button class="flow-close" onclick={() => showFlow = false}>Close</button>
-  </div>
+  <PairingFlow
+    instrument={flowInstrument}
+    {apiBase}
+    {token}
+    onComplete={() => { showFlow = false; load(); }}
+    onBack={() => showFlow = false}
+  />
 {:else}
   <div class="profile">
     <div class="p-header">
