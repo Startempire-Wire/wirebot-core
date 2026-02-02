@@ -789,9 +789,8 @@
               <div class="int-lane-group">
                 <div class="int-lane-header">
                   <span class="int-lane lane-{lane}">{lane}</span>
-                  {@const laneConnected = laneProviders.reduce((n, p) => n + getConnectedProviders(p.id).length, 0)}
-                  {#if laneConnected > 0}
-                    <span class="int-lane-count">{laneConnected} connected</span>
+                  {#if laneProviders.reduce((n, p) => n + getConnectedProviders(p.id).length, 0) > 0}
+                    <span class="int-lane-count">{laneProviders.reduce((n, p) => n + getConnectedProviders(p.id).length, 0)} connected</span>
                   {/if}
                 </div>
 

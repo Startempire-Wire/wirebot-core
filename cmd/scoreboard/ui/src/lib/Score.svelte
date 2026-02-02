@@ -2,6 +2,10 @@
   import Tooltip from './Tooltip.svelte';
   let { data, lastUpdate, onHelp, user = null } = $props();
 
+  let editingIntent = $state(false);
+  let intentDraft = $state('');
+  let intentSaving = $state(false);
+
   function signalClass(s) {
     return s === 'green' ? 'sig-g' : s === 'yellow' ? 'sig-y' : 'sig-r';
   }
@@ -10,6 +14,42 @@
   }
   function pct(v) { return Math.round((v || 0) * 100); }
   function lanePct(v, max) { return max ? Math.round((v / max) * 100) : 0; }
+
+  function startEditIntent() {
+    intentDraft = data.intent || '';
+    editingIntent = true;
+    setTimeout(() => {
+      const el = document.querySelector('.intent-input');
+      if (el) { el.focus(); el.select(); }
+    }, 50);
+  }
+
+  async function saveIntent() {
+    const text = intentDraft.trim();
+    if (!text) return;
+    intentSaving = true;
+    try {
+      const token = localStorage.getItem('rl_jwt') || localStorage.getItem('operator_token') || '';
+      const resp = await fetch('/v1/intent', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': token.startsWith('ey') ? `Bearer ${token}` : token,
+        },
+        body: JSON.stringify({ intent: text }),
+      });
+      if (resp.ok) {
+        data.intent = text;
+        editingIntent = false;
+      }
+    } catch { /* silent */ }
+    intentSaving = false;
+  }
+
+  function intentKeydown(e) {
+    if (e.key === 'Enter') { e.preventDefault(); saveIntent(); }
+    if (e.key === 'Escape') { editingIntent = false; }
+  }
 </script>
 
 <div class="score-view">
@@ -30,14 +70,31 @@
     </div>
   {/if}
 
-  <!-- Intent Bar -->
-  {#if data.intent}
-    <div class="intent">
+  <!-- Intent Bar (tap to edit) -->
+  {#if editingIntent}
+    <div class="intent editing">
+      <span>🎯</span>
+      <input
+        class="intent-input"
+        type="text"
+        placeholder="What are you shipping today?"
+        bind:value={intentDraft}
+        onkeydown={intentKeydown}
+        disabled={intentSaving}
+      />
+      <button class="intent-save" onclick={saveIntent} disabled={intentSaving || !intentDraft.trim()}>
+        {intentSaving ? '...' : '✓'}
+      </button>
+      <button class="intent-cancel" onclick={() => editingIntent = false}>✕</button>
+    </div>
+  {:else if data.intent}
+    <div class="intent" role="button" tabindex="0" onclick={startEditIntent} onkeydown={(e) => e.key === 'Enter' && startEditIntent()}>
       <Tooltip concept="intent">🎯</Tooltip> <span>{data.intent}</span>
+      <span class="intent-edit-hint">tap to edit</span>
     </div>
   {:else}
-    <div class="intent empty">
-      <Tooltip concept="intent">🎯</Tooltip> <span>No intent declared — <code>wb intent "..."</code></span>
+    <div class="intent empty" role="button" tabindex="0" onclick={startEditIntent} onkeydown={(e) => e.key === 'Enter' && startEditIntent()}>
+      <Tooltip concept="intent">🎯</Tooltip> <span>Tap to set today's intent</span>
     </div>
   {/if}
 
@@ -180,8 +237,30 @@
     gap: 6px;
   }
   .intent span { flex: 1; }
+  .intent:not(.editing) { cursor: pointer; -webkit-tap-highlight-color: transparent; }
+  .intent:not(.editing):active { background: rgba(124,124,255,0.15); }
   .intent.empty { opacity: 0.5; border-style: dashed; }
-  .intent code { font-family: monospace; font-size: 11px; color: #7c7cff; }
+  .intent-edit-hint { font-size: 10px; opacity: 0.3; flex: none; }
+  .intent-input {
+    flex: 1;
+    background: transparent;
+    border: none;
+    outline: none;
+    color: #ddd;
+    font-size: 13px;
+    padding: 0;
+  }
+  .intent-input::placeholder { color: #555; }
+  .intent-save, .intent-cancel {
+    width: 28px; height: 28px;
+    border-radius: 6px; border: none;
+    font-size: 14px; cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .intent-save { background: rgba(0,255,100,0.15); color: #00ff64; }
+  .intent-save:disabled { opacity: 0.3; cursor: default; }
+  .intent-cancel { background: rgba(255,50,50,0.1); color: #ff5050; }
 
   /* Header */
   .hdr {
