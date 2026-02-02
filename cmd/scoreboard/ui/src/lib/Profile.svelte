@@ -3,7 +3,7 @@
   import PairingFlow from './PairingFlow.svelte';
   const dispatch = createEventDispatcher();
 
-  let { apiBase = '', token = '' } = $props();
+  let { apiBase = '', token = '', onAssess = null } = $props();
   let loading = $state(true);
   let error = $state('');
   let effective = $state(null);
@@ -96,8 +96,12 @@
   }
 
   function startAssessment(instrument) {
-    flowInstrument = instrument;
-    showFlow = true;
+    if (onAssess) {
+      onAssess(instrument);
+    } else {
+      flowInstrument = instrument;
+      showFlow = true;
+    }
   }
 
   function complementTop() {

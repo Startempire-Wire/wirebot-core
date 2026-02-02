@@ -8,6 +8,7 @@
   import Hints from './lib/Hints.svelte';
   import Chat from './lib/Chat.svelte';
   import Profile from './lib/Profile.svelte';
+  import PairingFlow from './lib/PairingFlow.svelte';
 
   let view = $state('score');
   let data = $state(null);
@@ -21,6 +22,8 @@
   let fabLane = $state('shipping');
   let showHints = $state(false);
   let showChat = $state(false);
+  let showPairing = $state(false);
+  let pairingInstrument = $state('');
   let showFirstVisit = $state(false);
   let tokenStatus = $state(null);  // null | 'ok' | 'fail' | 'saving'
   let tokenMsg = $state('');
@@ -667,11 +670,11 @@
   <div class="app">
     <div class="content">
       {#if view === 'score'}
-        <Score {data} {lastUpdate} onHelp={() => showHints = true} user={loggedInUser} />
+        <Score {data} {lastUpdate} onHelp={() => showHints = true} user={loggedInUser} onPairing={() => showPairing = true} />
       {:else if view === 'feed'}
         <Feed items={feed} pendingCount={data?.pending_count || 0} onHelp={() => showHints = true} />
       {:else if view === 'profile'}
-        <Profile apiBase={window.location.origin} token={getToken()} />
+        <Profile apiBase={window.location.origin} token={getToken()} onAssess={(inst) => { showPairing = true; pairingInstrument = inst; }} />
       {:else if view === 'season'}
         <Season season={data.season} {history} streak={data.streak} onHelp={() => showHints = true} />
       {:else if view === 'wrapped'}
@@ -959,7 +962,75 @@
     {/if}
 
     <!-- Wirebot Chat -->
-    <Chat bind:visible={showChat} />
+    <Chat bind:visible={showChat} onPairing={() => { showChat = false; showPairing = true; pairingInstrument = ''; }} />
+
+    <!-- Pairing Modal (slide-up sheet, same pattern as Chat) -->
+    {#if showPairing}
+      <div class="pairing-overlay" role="dialog" aria-label="Founder Profile Assessment">
+        <div class="pairing-backdrop" onclick={() => showPairing = false} role="presentation"></div>
+        <div class="pairing-sheet">
+          {#if pairingInstrument}
+            <PairingFlow
+              instrument={pairingInstrument}
+              apiBase={window.location.origin}
+              token={getToken()}
+              onComplete={() => { pairingInstrument = ''; }}
+              onBack={() => { pairingInstrument = ''; }}
+            />
+          {:else}
+            <!-- Instrument picker -->
+            <div class="pi-header">
+              <h2 class="pi-title">🧬 Calibrate Your Profile</h2>
+              <button class="pi-close" onclick={() => showPairing = false}>✕</button>
+            </div>
+            <div class="pi-desc">Each assessment helps Wirebot understand how you operate. Pick any to start.</div>
+            <div class="pi-cards">
+              <button class="pi-card" onclick={() => pairingInstrument = 'ASI-12'}>
+                <span class="pi-icon">⚡</span>
+                <div class="pi-info">
+                  <div class="pi-name">Action Style</div>
+                  <div class="pi-sub">12 forced-choice pairs · 2 min</div>
+                </div>
+                <span class="pi-go">→</span>
+              </button>
+              <button class="pi-card" onclick={() => pairingInstrument = 'CSI-8'}>
+                <span class="pi-icon">💬</span>
+                <div class="pi-info">
+                  <div class="pi-name">Communication Style</div>
+                  <div class="pi-sub">8 scenario picks · 2 min</div>
+                </div>
+                <span class="pi-go">→</span>
+              </button>
+              <button class="pi-card" onclick={() => pairingInstrument = 'ETM-6'}>
+                <span class="pi-icon">🔋</span>
+                <div class="pi-info">
+                  <div class="pi-name">Energy Topology</div>
+                  <div class="pi-sub">Drag to sort · 1 min</div>
+                </div>
+                <span class="pi-go">→</span>
+              </button>
+              <button class="pi-card" onclick={() => pairingInstrument = 'RDS-6'}>
+                <span class="pi-icon">🎲</span>
+                <div class="pi-info">
+                  <div class="pi-name">Risk Disposition</div>
+                  <div class="pi-sub">6 sliders · 1 min</div>
+                </div>
+                <span class="pi-go">→</span>
+              </button>
+              <button class="pi-card" onclick={() => pairingInstrument = 'COG-8'}>
+                <span class="pi-icon">🧠</span>
+                <div class="pi-info">
+                  <div class="pi-name">Cognitive Style</div>
+                  <div class="pi-sub">4 scenario picks · 1 min</div>
+                </div>
+                <span class="pi-go">→</span>
+              </button>
+            </div>
+            <div class="pi-footer">Takes ~7 minutes total. You can do them one at a time.</div>
+          {/if}
+        </div>
+      </div>
+    {/if}
 
     <!-- Pending badge -->
     {#if data.pending_count > 0}
@@ -1467,5 +1538,70 @@
   .login-manual input:focus { outline: none; border-color: #7c7cff; }
   .login-privacy {
     font-size: 12px; color: #444; margin-top: 8px;
+  }
+
+  /* ── Pairing Modal (slide-up sheet) ── */
+  .pairing-overlay {
+    position: fixed; inset: 0; z-index: 1100;
+    display: flex; flex-direction: column; justify-content: flex-end;
+  }
+  .pairing-backdrop {
+    position: absolute; inset: 0;
+    background: rgba(0,0,0,0.6); backdrop-filter: blur(4px);
+  }
+  .pairing-sheet {
+    position: relative;
+    background: #0d0d1a;
+    border-top: 1px solid rgba(124,124,255,0.2);
+    border-radius: 20px 20px 0 0;
+    display: flex; flex-direction: column;
+    max-height: 90dvh; min-height: 50dvh;
+    animation: pairingSlideUp 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+    overflow-y: auto;
+    padding-bottom: env(safe-area-inset-bottom, 0);
+  }
+  @keyframes pairingSlideUp {
+    from { transform: translateY(100%); opacity: 0.8; }
+    to { transform: translateY(0); opacity: 1; }
+  }
+  .pi-header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 20px 20px 8px; flex-shrink: 0;
+  }
+  .pi-title { font-size: 20px; font-weight: 700; color: #fff; }
+  .pi-close {
+    width: 36px; height: 36px; border-radius: 50%;
+    background: rgba(255,50,50,0.08); border: 1px solid rgba(255,50,50,0.2);
+    color: #ff5050; font-size: 16px; cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .pi-desc {
+    padding: 0 20px 16px; font-size: 13px; color: #888; line-height: 1.4;
+  }
+  .pi-cards {
+    display: flex; flex-direction: column; gap: 8px;
+    padding: 0 16px;
+  }
+  .pi-card {
+    display: flex; align-items: center; gap: 12px;
+    padding: 14px 16px; border-radius: 14px;
+    background: rgba(255,255,255,0.03);
+    border: 1px solid rgba(255,255,255,0.08);
+    cursor: pointer; text-align: left;
+    transition: all 0.2s;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .pi-card:hover, .pi-card:active {
+    background: rgba(124,124,255,0.08);
+    border-color: rgba(124,124,255,0.25);
+    transform: scale(1.01);
+  }
+  .pi-icon { font-size: 24px; flex-shrink: 0; }
+  .pi-info { flex: 1; }
+  .pi-name { font-size: 15px; font-weight: 600; color: #fff; }
+  .pi-sub { font-size: 11px; color: #666; margin-top: 2px; }
+  .pi-go { font-size: 16px; color: #7c7cff; opacity: 0.6; }
+  .pi-footer {
+    text-align: center; padding: 16px; font-size: 12px; color: #555;
   }
 </style>

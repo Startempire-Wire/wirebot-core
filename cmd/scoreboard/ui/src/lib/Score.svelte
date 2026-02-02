@@ -1,6 +1,6 @@
 <script>
   import Tooltip from './Tooltip.svelte';
-  let { data, lastUpdate, onHelp, user = null } = $props();
+  let { data, lastUpdate, onHelp, user = null, onPairing = null } = $props();
 
   let editingIntent = $state(false);
   let intentDraft = $state('');
@@ -153,6 +153,15 @@
         <Tooltip concept="penalty"><span class="mod penalty">⚠️ -{data.penalties} penalties</span></Tooltip>
       {/if}
     </div>
+  {/if}
+
+  <!-- Pairing nudge (if profile score is low and callback is provided) -->
+  {#if onPairing}
+    <button class="pairing-cta" onclick={onPairing}>
+      <span class="pc-icon">🧬</span>
+      <span class="pc-text">Calibrate your profile</span>
+      <span class="pc-arrow">→</span>
+    </button>
   {/if}
 
   <!-- Last Ship -->
@@ -339,6 +348,17 @@
   .penalty { background: rgba(255,50,50,.08); color: #ff4444; }
 
   .ls { text-align: center; font-size: 11px; color: #4a9eff; opacity: .65; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  .pairing-cta {
+    display: flex; align-items: center; gap: 8px;
+    width: 100%; padding: 10px 14px; margin: 8px 0;
+    background: rgba(124,124,255,0.06); border: 1px solid rgba(124,124,255,0.15);
+    border-radius: 10px; cursor: pointer; -webkit-tap-highlight-color: transparent;
+  }
+  .pairing-cta:active { background: rgba(124,124,255,0.12); }
+  .pc-icon { font-size: 16px; }
+  .pc-text { flex: 1; font-size: 13px; color: #7c7cff; text-align: left; font-weight: 500; }
+  .pc-arrow { font-size: 14px; color: #7c7cff; opacity: 0.5; }
 
   /* Clocks */
   .clk { display: flex; flex-direction: column; gap: 5px; margin-top: auto; padding-top: 8px; border-top: 1px solid #1e1e30; }

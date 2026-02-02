@@ -1,6 +1,6 @@
 <script>
   import { onMount } from 'svelte';
-  let { visible = $bindable(false) } = $props();
+  let { visible = $bindable(false), onPairing = () => {} } = $props();
 
   let messages = $state([]);
   let input = $state('');
@@ -197,15 +197,15 @@
         <button class="chat-close" onclick={close}>✕</button>
       </div>
 
-      <!-- Pairing nudge -->
+      <!-- Pairing nudge — opens assessment modal -->
       {#if pairing && !pairing.completed}
-        <div class="pairing-nudge" onclick={() => { input = "Let's do the pairing questionnaire"; send(); }}>
-          <span class="pn-icon">🤝</span>
+        <div class="pairing-nudge" onclick={onPairing}>
+          <span class="pn-icon">🧬</span>
           <span class="pn-text">
             {#if pairing.answered === 0}
-              Pair with Wirebot to unlock full context
+              Calibrate your profile to unlock full context
             {:else}
-              Pairing {pairing.answered}/{pairing.total} — continue setup
+              Profile {Math.round((pairing.score || 0))}% — continue calibration
             {/if}
           </span>
           <span class="pn-arrow">→</span>

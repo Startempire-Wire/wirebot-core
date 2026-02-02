@@ -4162,33 +4162,33 @@ func (s *Server) handlePairingStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Read pairing.json from workspace
-	pairingPath := "/home/wirebot/clawd/pairing.json"
-	data, err := os.ReadFile(pairingPath)
-	if err != nil {
+	// Use v2 pairing engine if available
+	if s.pairing != nil {
+		s.pairing.mu.RLock()
+		p := s.pairing.profile
+		score := p.PairingScore.Composite
+		completed := score >= 60
+		answered := len(p.Answers)
+		level := p.PairingScore.Level
+		s.pairing.mu.RUnlock()
+
+		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{
-			"completed": false,
-			"score":     0,
-			"message":   "Pairing not started",
+			"completed": completed,
+			"score":     score,
+			"level":     level,
+			"answered":  answered,
+			"total":     40, // 12+8+6+6+8 = 40 assessment items across 5 instruments
 		})
 		return
 	}
 
-	var pairing struct {
-		Completed    bool   `json:"completed"`
-		PairingScore int    `json:"pairingScore"`
-		CurrentPhase string `json:"currentPhase"`
-		Answers      map[string]interface{} `json:"answers"`
-	}
-	json.Unmarshal(data, &pairing)
-
-	answeredCount := len(pairing.Answers)
+	// Fallback: old v1 pairing.json (shouldn't reach here normally)
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"completed":  pairing.Completed,
-		"score":      pairing.PairingScore,
-		"phase":      pairing.CurrentPhase,
-		"answered":   answeredCount,
-		"total":      22,
+		"completed": false,
+		"score":     0,
+		"answered":  0,
+		"total":     40,
 	})
 }
 
