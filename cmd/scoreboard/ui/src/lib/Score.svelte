@@ -136,6 +136,24 @@
     </div>
   </div>
 
+  <!-- Drift Indicator -->
+  {#if data.drift}
+    <div class="drift-bar" class:drift-deep={data.drift.signal === 'deep_sync'}
+         class:drift-in={data.drift.signal === 'in_drift'}
+         class:drift-weak={data.drift.signal === 'weak' || data.drift.signal === 'disconnected'}>
+      <span class="drift-label">🧠 NEURAL DRIFT</span>
+      <div class="drift-track">
+        <div class="drift-fill" style="width:{data.drift.score || 0}%"></div>
+      </div>
+      <span class="drift-val">{data.drift.score || 0}%</span>
+    </div>
+    {#if data.drift.rabbit?.active}
+      <div class="rabbit-alert">
+        🐇 R.A.B.I.T. — {data.drift.rabbit.message}
+      </div>
+    {/if}
+  {/if}
+
   <!-- Stats (glass cards) -->
   <div class="stats">
     <div class="st glass"><span class="st-v">🔥 {data.streak?.current || 0}</span><span class="st-l"><Tooltip concept="streak" position="below">STREAK</Tooltip></span></div>
@@ -350,6 +368,53 @@
   .sig-r .sc-num { color: #ff3232; text-shadow: 0 0 40px rgba(255,50,50,.3), 0 0 80px rgba(255,50,50,.1); animation: pulse 2s infinite; }
   .sig-r .sc-sub { color: #cc2020; }
   @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.6} }
+
+  /* Drift Indicator */
+  .drift-bar {
+    display: flex; align-items: center; gap: 8px;
+    padding: 6px 12px; border-radius: 10px;
+    background: rgba(124,124,255,0.05);
+    border: 1px solid rgba(124,124,255,0.12);
+    transition: all 0.3s;
+  }
+  .drift-bar.drift-deep {
+    background: rgba(0,255,100,0.06);
+    border-color: rgba(0,255,100,0.2);
+  }
+  .drift-bar.drift-weak {
+    background: rgba(255,50,50,0.06);
+    border-color: rgba(255,50,50,0.15);
+  }
+  .drift-label {
+    font-size: 9px; letter-spacing: 0.15em; opacity: 0.5;
+    white-space: nowrap; flex-shrink: 0;
+  }
+  .drift-track {
+    flex: 1; height: 6px; border-radius: 3px;
+    background: rgba(255,255,255,0.05);
+    overflow: hidden;
+  }
+  .drift-fill {
+    height: 100%; border-radius: 3px;
+    background: linear-gradient(90deg, #7c7cff, #00ff64);
+    transition: width 1s ease;
+  }
+  .drift-deep .drift-fill { background: linear-gradient(90deg, #00ff64, #4aff9e); }
+  .drift-weak .drift-fill { background: linear-gradient(90deg, #ff6666, #ff9500); }
+  .drift-val {
+    font-size: 12px; font-weight: 700; font-variant-numeric: tabular-nums;
+    color: #7c7cff; min-width: 32px; text-align: right; flex-shrink: 0;
+  }
+  .drift-deep .drift-val { color: #00ff64; }
+  .drift-weak .drift-val { color: #ff6666; }
+
+  .rabbit-alert {
+    background: rgba(255,180,0,0.1);
+    border: 1px solid rgba(255,180,0,0.25);
+    border-radius: 8px; padding: 8px 12px;
+    font-size: 12px; color: #ffb400;
+    animation: blink 1.5s infinite;
+  }
 
   /* Stats — glassmorphism cards */
   .stats {

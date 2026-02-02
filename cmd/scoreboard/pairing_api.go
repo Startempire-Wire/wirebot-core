@@ -39,6 +39,8 @@ func (s *Server) registerPairingRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/v1/pairing/reset", s.authMember(s.handlePairingReset))
 	mux.HandleFunc("/v1/pairing/scan-vault", s.auth(s.handlePairingVaultScan))
 	mux.HandleFunc("/v1/pairing/vault-insight", s.authMember(s.handlePairingVaultInsight))
+	mux.HandleFunc("/v1/pairing/neural-drift", s.authMember(s.handlePairingDriftStatus))
+	mux.HandleFunc("/v1/pairing/handshake", s.authMember(s.handlePairingHandshake))
 }
 
 // ─── GET /v1/pairing/profile — Full FounderProfileV2 JSON ────────────────────
@@ -927,6 +929,48 @@ func (s *Server) handlePairingVaultScan(w http.ResponseWriter, r *http.Request) 
 		log.Printf("[pairing] vault scan complete: %d docs, %d words, %d signals, themes: %v",
 			docCount, totalWords, signalsIngested, insight.RecurringThemes)
 	}()
+}
+
+// ─── GET /v1/pairing/drift — Live Drift Score + R.A.B.I.T. status ───────────
+
+func (s *Server) handlePairingDriftStatus(w http.ResponseWriter, r *http.Request) {
+	// Refresh drift before returning
+	s.pairing.UpdateDrift(s.db)
+
+	s.pairing.mu.RLock()
+	drift := s.pairing.profile.Drift
+	s.pairing.mu.RUnlock()
+
+	writeJSON(w, map[string]interface{}{
+		"drift":   drift,
+		"summary": s.pairing.GetDriftSummary(),
+	})
+}
+
+// ─── POST /v1/pairing/handshake — Record daily Neural Handshake ─────────────
+
+func (s *Server) handlePairingHandshake(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		http.Error(w, "Method not allowed", 405)
+		return
+	}
+
+	s.pairing.RecordHandshake()
+	s.pairing.UpdateDrift(s.db)
+	s.pairing.Save()
+
+	s.pairing.mu.RLock()
+	streak := s.pairing.profile.Drift.HandshakeStreak
+	score := s.pairing.profile.Drift.Score
+	signal := s.pairing.profile.Drift.Signal
+	s.pairing.mu.RUnlock()
+
+	writeJSON(w, map[string]interface{}{
+		"message":          "Neural Handshake established ⚡",
+		"handshake_streak": streak,
+		"drift_score":      score,
+		"drift_signal":     signal,
+	})
 }
 
 // ─── GET /v1/pairing/vault-insight — Return cached vault analysis ────────────

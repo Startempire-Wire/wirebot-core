@@ -1362,8 +1362,22 @@ func (s *Server) handleScore(w http.ResponseWriter, r *http.Request) {
 	streak := s.getStreak("ship")
 	s.recalcSeason()
 
+	// Update live Drift Score
+	if s.pairing != nil {
+		s.pairing.UpdateDrift(s.db)
+	}
+
+	// Include Drift in response
+	var drift interface{}
+	if s.pairing != nil {
+		s.pairing.mu.RLock()
+		drift = s.pairing.profile.Drift
+		s.pairing.mu.RUnlock()
+	}
+
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"date": date, "score": daily, "streak": streak, "season": s.season,
+		"drift": drift,
 	})
 }
 

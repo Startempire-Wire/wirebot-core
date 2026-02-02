@@ -807,8 +807,69 @@ type FounderProfileV2 struct {
 		EngineVersion         string   `json:"engine_version"`
 	} `json:"meta"`
 
+	// ── Drift System (inspired by Pacific Rim neural bridge) ─────────────
+	// Live sync quality between operator and Wirebot.
+	// Unlike Pairing Score (static calibration), Drift Score measures
+	// real-time operational synchronicity.
+	Drift DriftState `json:"drift"`
+
 	// Extensible metadata (vault insights, external analysis, etc.)
 	Metadata map[string]interface{} `json:"metadata,omitempty"`
+}
+
+// DriftState tracks the live Neural Handshake quality between operator and Wirebot.
+// See: DRIFT_METAPHOR.md for full concept mapping from Pacific Rim.
+type DriftState struct {
+	// Live Drift Score: 0-100, how in-sync right now
+	Score          float64 `json:"score"`
+	Signal         string  `json:"signal"` // "deep_sync", "in_drift", "drifting", "weak", "disconnected"
+
+	// Component scores (each 0.0-1.0)
+	IntentAlignment  float64 `json:"intent_alignment"`   // Working on stated intent?
+	ResponseFlow     float64 `json:"response_flow"`      // Message cadence healthy?
+	ActionLatency    float64 `json:"action_latency"`     // Time between suggestion → action
+	OverrideRate     float64 `json:"override_rate"`      // How often operator rejects Wirebot framing
+	StallGap         float64 `json:"stall_gap"`          // Hours since last meaningful action (inverted)
+
+	// R.A.B.I.T. Detection (Random Access Brain Impulse Triggers)
+	// Detects when operator is "chasing the rabbit" — spiraling into
+	// distraction, tool-hopping, perfectionism, or fear-based avoidance.
+	Rabbit RabbitState `json:"rabbit"`
+
+	// Ghost Drift — behavioral persistence on silent days
+	GhostDrift GhostDriftState `json:"ghost_drift"`
+
+	// Neural Handshake — daily sync ritual tracking
+	LastHandshake  *time.Time `json:"last_handshake,omitempty"`
+	HandshakeStreak int       `json:"handshake_streak"` // consecutive days with morning sync
+
+	// Hemisphere assignment
+	OperatorFocus string `json:"operator_focus"` // what operator is handling today
+	WirebotFocus  string `json:"wirebot_focus"`  // what Wirebot is tracking today
+
+	// Modesty Reflex Score: how transparent is the operator?
+	// Low reflex = higher Drift ceiling. High reflex = capped.
+	ModestyReflex  float64 `json:"modesty_reflex"` // 0.0=fully open, 1.0=fully guarded
+
+	LastUpdated *time.Time `json:"last_updated,omitempty"`
+}
+
+// RabbitState detects spiral/distraction patterns.
+type RabbitState struct {
+	Active      bool    `json:"active"`       // currently chasing the rabbit?
+	Type        string  `json:"type"`         // "tool_hopping", "social_media", "perfectionism", "avoidance", "emotional_spiral"
+	Duration    float64 `json:"duration_min"` // how long in this state
+	Intensity   float64 `json:"intensity"`    // 0-1 how deep in the spiral
+	LastDetected *time.Time `json:"last_detected,omitempty"`
+	Message     string  `json:"message"` // contextual nudge text
+}
+
+// GhostDriftState tracks behavioral persistence when Wirebot isn't actively engaged.
+type GhostDriftState struct {
+	SilentDays       int     `json:"silent_days"`        // days since last Wirebot interaction
+	HabitPersistence float64 `json:"habit_persistence"`  // 0-1: do good habits continue on silent days?
+	IntentCarryover  bool    `json:"intent_carryover"`   // did operator act on yesterday's intent without prompting?
+	StreakMaintained bool    `json:"streak_maintained"`   // shipping streak survived silent day?
 }
 
 func NewFounderProfile() *FounderProfileV2 {
@@ -2353,8 +2414,9 @@ func (pe *PairingEngine) GetChatContextSummary() string {
 		}
 	}
 
-	// Line 8: Pairing level
-	lines = append(lines, fmt.Sprintf("Pairing: %.0f/100 (%s) | Accuracy: %.0f%%", eff.PairingScore, eff.Level, eff.Accuracy*100))
+	// Line 8: Pairing level + Drift
+	driftSummary := pe.GetDriftSummary()
+	lines = append(lines, fmt.Sprintf("Pairing: %.0f/100 (%s) | Accuracy: %.0f%% | %s", eff.PairingScore, eff.Level, eff.Accuracy*100, driftSummary))
 
 	return strings.Join(lines, "\n")
 }
@@ -2508,4 +2570,380 @@ var cogScoring = map[string]map[string]DimScore{
 	"COG-06": {"A": {Dim: "sequential", Value: 8}, "B": {Dim: "abstract", Value: 7}},
 	"COG-07": {"A": {Dim: "holistic", Value: 8}, "B": {Dim: "sequential", Value: 7}},
 	"COG-08": {"A": {Dim: "concrete", Value: 8}, "B": {Dim: "abstract", Value: 8}},
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// DRIFT SYSTEM — Live Neural Handshake Quality
+//
+// Inspired by Pacific Rim's Drift concept. Measures real-time synchronicity
+// between operator and Wirebot, not just static calibration.
+//
+// Components:
+//   1. Drift Score (0-100): composite of 5 factors
+//   2. R.A.B.I.T. Detection: spiral/distraction alerts
+//   3. Ghost Drift: behavioral persistence on silent days
+//   4. Modesty Reflex: transparency level affecting Drift ceiling
+//
+// See: DRIFT_METAPHOR.md
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// UpdateDrift recalculates the live Drift Score from recent activity.
+// Called after every signal and periodically from the scoring loop.
+func (pe *PairingEngine) UpdateDrift(db *sql.DB) {
+	pe.mu.Lock()
+	defer pe.mu.Unlock()
+
+	now := time.Now()
+	d := &pe.profile.Drift
+
+	// ── 1. Intent Alignment ────────────────────────────────────────────
+	// Is the operator working on what they said they'd work on?
+	// Measured by: recent events in the lane matching their stated intent
+	var intent string
+	if db != nil {
+		db.QueryRow("SELECT detail FROM events WHERE event_type='INTENT_SET' ORDER BY timestamp DESC LIMIT 1").Scan(&intent)
+	}
+	if intent != "" {
+		// Count recent events (last 4 hours) — any activity = some alignment
+		var recentCount int
+		if db != nil {
+			cutoff := now.Add(-4 * time.Hour).UTC().Format(time.RFC3339)
+			db.QueryRow("SELECT COUNT(*) FROM events WHERE timestamp > ? AND status='approved'", cutoff).Scan(&recentCount)
+		}
+		d.IntentAlignment = math.Min(1.0, float64(recentCount)/5.0)
+	} else {
+		d.IntentAlignment = 0.3 // no intent set = baseline
+	}
+
+	// ── 2. Response Flow ───────────────────────────────────────────────
+	// Healthy message cadence? Based on chat_sessions activity
+	var lastChatTime string
+	if db != nil {
+		db.QueryRow("SELECT MAX(updated_at) FROM chat_sessions").Scan(&lastChatTime)
+	}
+	if lastChatTime != "" {
+		lastChat, _ := time.Parse(time.RFC3339, lastChatTime)
+		hoursSinceChat := now.Sub(lastChat).Hours()
+		// Active within 2h = full flow, decays over 12h
+		d.ResponseFlow = math.Max(0, 1.0-hoursSinceChat/12.0)
+	} else {
+		d.ResponseFlow = 0
+	}
+
+	// ── 3. Action Latency ──────────────────────────────────────────────
+	// Time since last approved event (inverted: shorter = better)
+	var lastEventTime string
+	if db != nil {
+		db.QueryRow("SELECT MAX(timestamp) FROM events WHERE status='approved'").Scan(&lastEventTime)
+	}
+	if lastEventTime != "" {
+		lastEvt, _ := time.Parse(time.RFC3339, lastEventTime)
+		hoursSinceAction := now.Sub(lastEvt).Hours()
+		d.ActionLatency = math.Max(0, 1.0-hoursSinceAction/24.0)
+	} else {
+		d.ActionLatency = 0
+	}
+
+	// ── 4. Stall Gap ───────────────────────────────────────────────────
+	var lastShipTime string
+	if db != nil {
+		db.QueryRow("SELECT MAX(timestamp) FROM events WHERE lane='shipping' AND status='approved'").Scan(&lastShipTime)
+	}
+	if lastShipTime != "" {
+		lastShip, _ := time.Parse(time.RFC3339, lastShipTime)
+		stallHours := now.Sub(lastShip).Hours()
+		// Green under 8h, yellow at 16h, red at 24h+
+		d.StallGap = math.Max(0, 1.0-stallHours/24.0)
+	} else {
+		d.StallGap = 0
+	}
+
+	// ── 5. Override Rate ───────────────────────────────────────────────
+	// How often does operator reject events? (Lower = better sync)
+	if db != nil {
+		var total, rejected int
+		cutoff := now.AddDate(0, 0, -7).UTC().Format(time.RFC3339)
+		db.QueryRow("SELECT COUNT(*) FROM events WHERE created_at > ?", cutoff).Scan(&total)
+		db.QueryRow("SELECT COUNT(*) FROM events WHERE created_at > ? AND status='rejected'", cutoff).Scan(&rejected)
+		if total > 0 {
+			d.OverrideRate = 1.0 - float64(rejected)/float64(total)
+		} else {
+			d.OverrideRate = 0.5
+		}
+	}
+
+	// ── Composite Drift Score ──────────────────────────────────────────
+	// Weighted: action_latency 25%, stall_gap 25%, intent 20%, flow 15%, override 15%
+	d.Score = math.Round((d.ActionLatency*0.25 +
+		d.StallGap*0.25 +
+		d.IntentAlignment*0.20 +
+		d.ResponseFlow*0.15 +
+		d.OverrideRate*0.15) * 100)
+
+	// Modesty reflex caps the Drift ceiling
+	// Connected: FreshBooks=financial, Obsidian=personal, health=deep trust
+	pe.computeModestyReflex(db)
+	if d.ModestyReflex > 0.7 {
+		d.Score = math.Min(d.Score, 40) // highly guarded = capped at 40
+	} else if d.ModestyReflex > 0.5 {
+		d.Score = math.Min(d.Score, 60) // somewhat guarded = capped at 60
+	}
+
+	// Signal label
+	switch {
+	case d.Score >= 80:
+		d.Signal = "deep_sync"
+	case d.Score >= 60:
+		d.Signal = "in_drift"
+	case d.Score >= 40:
+		d.Signal = "drifting"
+	case d.Score >= 20:
+		d.Signal = "weak"
+	default:
+		d.Signal = "disconnected"
+	}
+
+	nowT := now
+	d.LastUpdated = &nowT
+	pe.dirty = true
+}
+
+// computeModestyReflex calculates how transparent/guarded the operator is.
+// Lower = more open (better for Drift). Based on what's connected and shared.
+func (pe *PairingEngine) computeModestyReflex(db *sql.DB) {
+	signals := 0
+	maxSignals := 8
+
+	if db != nil {
+		// Financial data shared?
+		var finCount int
+		db.QueryRow("SELECT COUNT(*) FROM integrations WHERE provider IN ('freshbooks','stripe','plaid') AND status='active'").Scan(&finCount)
+		if finCount > 0 {
+			signals += 2 // deep financial trust
+		}
+
+		// Personal writing shared? (Obsidian vault)
+		if vi, ok := pe.profile.Metadata["vault_insight"]; ok && vi != nil {
+			signals += 2 // profound personal trust
+		}
+
+		// Health/wellness shared?
+		var healthCount int
+		db.QueryRow("SELECT COUNT(*) FROM integrations WHERE provider IN ('fitness','sleep','nutrition','rescuetime') AND status='active'").Scan(&healthCount)
+		if healthCount > 0 {
+			signals += 1 // body trust
+		}
+
+		// Chat history depth?
+		var chatCount int
+		db.QueryRow("SELECT COUNT(*) FROM chat_sessions").Scan(&chatCount)
+		if chatCount >= 5 {
+			signals += 1 // conversational openness
+		}
+	}
+
+	// Self-awareness from vault analysis
+	if pe.profile.ObservedComm.MessagesAnalyzed > 50 {
+		signals += 1 // enough messages = some openness
+	}
+
+	// Assessment completed?
+	if len(pe.profile.Answers) > 20 {
+		signals += 1
+	}
+
+	// Modesty reflex: 1.0 = fully guarded (0 signals), 0.0 = fully open (8+ signals)
+	pe.profile.Drift.ModestyReflex = math.Max(0, 1.0-float64(signals)/float64(maxSignals))
+}
+
+// DetectRabbit checks for R.A.B.I.T. patterns — operator chasing the rabbit.
+// Called from signal processing when patterns suggest spiral behavior.
+func (pe *PairingEngine) DetectRabbit(recentMessages []string, recentEvents []string) {
+	pe.mu.Lock()
+	defer pe.mu.Unlock()
+
+	rabbit := &pe.profile.Drift.Rabbit
+
+	// Reset if no activity
+	if len(recentMessages) == 0 && len(recentEvents) == 0 {
+		rabbit.Active = false
+		return
+	}
+
+	// Analyze recent messages for spiral patterns
+	nlp := NewNLPExtractor()
+	toolHopCount := 0
+	perfectionismCount := 0
+	avoidanceCount := 0
+	emotionalCount := 0
+
+	toolWords := toSet([]string{"setup", "configure", "install", "migrate", "switch to",
+		"trying out", "researching", "looking into", "new tool", "found a",
+		"setting up", "customizing", "plugin", "app", "integration"})
+	perfWords := toSet([]string{"tweak", "adjust", "refine", "polish", "perfect",
+		"not quite right", "almost done", "one more thing", "just need to",
+		"fixing", "reorganizing", "restructuring", "redesigning"})
+	avoidWords := toSet([]string{"should", "need to", "have to", "going to",
+		"planning to", "will", "tomorrow", "next week", "soon",
+		"thinking about", "considering", "might"})
+
+	for _, msg := range recentMessages {
+		lower := strings.ToLower(msg)
+		words := tokenize(lower)
+		toolHopCount += countWordMatchesStatic(words, toolWords)
+		perfectionismCount += countWordMatchesStatic(words, perfWords)
+		avoidanceCount += countWordMatchesStatic(words, avoidWords)
+
+		features := nlp.ExtractFeatures(msg)
+		if features["vault_struggle"] > 0.3 || features["emotion_expression"] > 0.6 {
+			emotionalCount++
+		}
+	}
+
+	// Determine rabbit type
+	maxCount := toolHopCount
+	rabbitType := "tool_hopping"
+	if perfectionismCount > maxCount {
+		maxCount = perfectionismCount
+		rabbitType = "perfectionism"
+	}
+	if avoidanceCount > maxCount {
+		maxCount = avoidanceCount
+		rabbitType = "avoidance"
+	}
+	if emotionalCount > maxCount {
+		maxCount = emotionalCount
+		rabbitType = "emotional_spiral"
+	}
+
+	// Threshold: 5+ signals in recent window = rabbit detected
+	if maxCount >= 5 {
+		now := time.Now()
+		rabbit.Active = true
+		rabbit.Type = rabbitType
+		rabbit.Intensity = math.Min(1.0, float64(maxCount)/10.0)
+		rabbit.LastDetected = &now
+
+		// Generate contextual nudge
+		switch rabbitType {
+		case "tool_hopping":
+			rabbit.Message = "I notice we've been exploring tools instead of shipping. What's the one thing that moves the needle right now?"
+		case "perfectionism":
+			rabbit.Message = "This is looking good already. Ship it at 80%, iterate later. Perfect is the enemy of shipped."
+		case "avoidance":
+			rabbit.Message = "I hear a lot of 'going to' and 'planning to.' What if we just started the smallest piece right now?"
+		case "emotional_spiral":
+			rabbit.Message = "Take a breath. You're carrying a lot. What's ONE thing we can accomplish in the next 30 minutes?"
+		}
+
+		pe.dirty = true
+	} else if rabbit.Active {
+		// Decay: if no new signals, clear after 30 minutes
+		if rabbit.LastDetected != nil && time.Since(*rabbit.LastDetected) > 30*time.Minute {
+			rabbit.Active = false
+			pe.dirty = true
+		}
+	}
+}
+
+// UpdateGhostDrift checks behavioral persistence on silent days.
+func (pe *PairingEngine) UpdateGhostDrift(db *sql.DB) {
+	pe.mu.Lock()
+	defer pe.mu.Unlock()
+
+	ghost := &pe.profile.Drift.GhostDrift
+	now := time.Now()
+
+	if db == nil {
+		return
+	}
+
+	// Check last Wirebot interaction (chat session)
+	var lastChat string
+	db.QueryRow("SELECT MAX(updated_at) FROM chat_sessions").Scan(&lastChat)
+	if lastChat != "" {
+		lastChatTime, _ := time.Parse(time.RFC3339, lastChat)
+		ghost.SilentDays = int(now.Sub(lastChatTime).Hours() / 24)
+	}
+
+	// Check if shipping happened on silent days
+	if ghost.SilentDays >= 1 {
+		yesterday := now.AddDate(0, 0, -1).Format("2006-01-02")
+		var shipCount int
+		db.QueryRow("SELECT COUNT(*) FROM events WHERE lane='shipping' AND status='approved' AND timestamp LIKE ?", yesterday+"%").Scan(&shipCount)
+		ghost.StreakMaintained = shipCount > 0
+
+		// Intent carryover: did they act without being prompted?
+		var intentCount int
+		db.QueryRow("SELECT COUNT(*) FROM events WHERE event_type='INTENT_SET' AND timestamp LIKE ?", yesterday+"%").Scan(&intentCount)
+		ghost.IntentCarryover = intentCount > 0
+
+		// Habit persistence = did good behaviors continue?
+		activeSignals := 0
+		if ghost.StreakMaintained {
+			activeSignals++
+		}
+		if ghost.IntentCarryover {
+			activeSignals++
+		}
+		ghost.HabitPersistence = float64(activeSignals) / 2.0
+	}
+
+	pe.dirty = true
+}
+
+// RecordHandshake marks the daily Neural Handshake (morning standup).
+func (pe *PairingEngine) RecordHandshake() {
+	pe.mu.Lock()
+	defer pe.mu.Unlock()
+
+	now := time.Now()
+	d := &pe.profile.Drift
+
+	// Check if handshake already happened today
+	if d.LastHandshake != nil && d.LastHandshake.Format("2006-01-02") == now.Format("2006-01-02") {
+		return // already shook hands today
+	}
+
+	// Check streak continuity
+	if d.LastHandshake != nil {
+		daysSince := int(now.Sub(*d.LastHandshake).Hours() / 24)
+		if daysSince <= 1 {
+			d.HandshakeStreak++
+		} else {
+			d.HandshakeStreak = 1 // reset
+		}
+	} else {
+		d.HandshakeStreak = 1
+	}
+
+	d.LastHandshake = &now
+	pe.dirty = true
+}
+
+// GetDriftSummary returns a formatted string for chat context injection.
+func (pe *PairingEngine) GetDriftSummary() string {
+	pe.mu.RLock()
+	defer pe.mu.RUnlock()
+
+	d := pe.profile.Drift
+	parts := []string{
+		fmt.Sprintf("Drift: %.0f/100 (%s)", d.Score, d.Signal),
+	}
+
+	if d.Rabbit.Active {
+		parts = append(parts, fmt.Sprintf("⚠ R.A.B.I.T. ALERT: %s (intensity %.0f%%)", d.Rabbit.Type, d.Rabbit.Intensity*100))
+	}
+
+	if d.HandshakeStreak > 1 {
+		parts = append(parts, fmt.Sprintf("🤝 Handshake streak: %d days", d.HandshakeStreak))
+	}
+
+	if d.GhostDrift.SilentDays > 0 {
+		if d.GhostDrift.HabitPersistence > 0.5 {
+			parts = append(parts, fmt.Sprintf("👻 Ghost Drift: habits persisting (%d silent days)", d.GhostDrift.SilentDays))
+		}
+	}
+
+	return strings.Join(parts, " | ")
 }
