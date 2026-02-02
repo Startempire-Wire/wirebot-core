@@ -19,8 +19,13 @@
   let fabLane = $state('shipping');
   let showHints = $state(false);
   let showFirstVisit = $state(false);
-  let tokenStatus = $state(null);  // null | 'ok' | 'fail'
+  let tokenStatus = $state(null);  // null | 'ok' | 'fail' | 'saving'
   let tokenMsg = $state('');
+  let loginUser = $state('');
+  let loginPass = $state('');
+  let loginLoading = $state(false);
+  let loginError = $state('');
+  let loggedInUser = $state(null); // { display_name, tier, tier_level, user_id }
 
   const API = window.location.origin;
 
@@ -32,6 +37,59 @@
   function authHeaders() {
     const token = getToken();
     return token ? { 'Authorization': `Bearer ${token}` } : {};
+  }
+
+  // ── Login via Ring Leader (per bigpicture.mdx auth flow) ──
+  const RL_API = 'https://startempirewire.network/wp-json/sewn/v1';
+
+  async function loginViaRingLeader() {
+    if (!loginUser || !loginPass) { loginError = 'Enter username and password'; return; }
+    loginLoading = true;
+    loginError = '';
+    try {
+      const creds = btoa(`${loginUser}:${loginPass}`);
+      const res = await fetch(`${RL_API}/auth/token`, {
+        method: 'POST',
+        headers: { 'Authorization': `Basic ${creds}` }
+      });
+      const data = await res.json();
+      if (data.token) {
+        localStorage.setItem('wb_token', data.token);
+        localStorage.setItem('wb_user', JSON.stringify(data.user));
+        localStorage.setItem('wb_token_exp', String(Date.now() + (data.expires_in || 86400) * 1000));
+        loggedInUser = data.user;
+        loginPass = '';
+        tokenStatus = 'ok';
+        tokenMsg = `✓ Connected as ${data.user.display_name} (${data.user.tier})`;
+        setTimeout(() => { tokenStatus = null; }, 4000);
+      } else {
+        loginError = data.error || 'Login failed';
+      }
+    } catch (e) {
+      loginError = 'Connection error — check network';
+    }
+    loginLoading = false;
+  }
+
+  function logout() {
+    localStorage.removeItem('wb_token');
+    localStorage.removeItem('wb_user');
+    localStorage.removeItem('wb_token_exp');
+    loggedInUser = null;
+    tokenStatus = null;
+    tokenMsg = '';
+  }
+
+  function restoreSession() {
+    const exp = parseInt(localStorage.getItem('wb_token_exp') || '0');
+    if (exp > Date.now()) {
+      try {
+        loggedInUser = JSON.parse(localStorage.getItem('wb_user'));
+      } catch {}
+    } else if (exp > 0) {
+      // Expired — clear
+      logout();
+    }
   }
 
   let tokenTimer = null;
@@ -149,12 +207,12 @@
   }
 
   onMount(() => {
+    restoreSession();
     fetchAll();
     const interval = setInterval(fetchAll, 30000);
     if ('serviceWorker' in navigator) {
       navigator.serviceWorker.register('/sw.js').catch(() => {});
     }
-    // First-visit detection
     if (!localStorage.getItem('wb_visited')) {
       showFirstVisit = true;
     }
@@ -193,19 +251,55 @@
       {:else if view === 'settings'}
         <div class="settings-view">
           <div class="s-hdr"><h2>⚙️ Settings</h2></div>
-          <div class="s-group">
-            <label>API Token</label>
-            <input type="password" id="token-input" value={getToken()}
-              oninput={debounceToken}
-              onpaste={debounceToken}
-              placeholder="Paste token to enable write features" />
-            {#if tokenStatus}
-              <div class="token-status" class:ok={tokenStatus === 'ok'} class:fail={tokenStatus === 'fail'} class:saving={tokenStatus === 'saving'}>
-                {tokenMsg}
+
+          <!-- Auth: Login or Session -->
+          {#if loggedInUser}
+            <div class="s-group">
+              <label>Account</label>
+              <div class="session-card">
+                <div class="sc-name">{loggedInUser.display_name}</div>
+                <div class="sc-tier">
+                  <span class="tier-badge tier-{loggedInUser.tier}">{loggedInUser.tier}</span>
+                  <span class="sc-meta">Level {loggedInUser.tier_level}</span>
+                </div>
+                {#if loggedInUser.email}<div class="sc-email">{loggedInUser.email}</div>{/if}
+                <button class="btn-logout" onclick={logout}>Sign out</button>
               </div>
-            {/if}
-            <p class="s-hint">Required for: approve/reject projects, rename, quick-add, intent</p>
-          </div>
+              {#if tokenStatus}
+                <div class="token-status" class:ok={tokenStatus === 'ok'}>{tokenMsg}</div>
+              {/if}
+            </div>
+          {:else}
+            <div class="s-group">
+              <label>Sign in with Startempire Wire</label>
+              <p class="s-hint" style="margin-bottom:6px">Use your startempirewire.com credentials</p>
+              <input type="text" bind:value={loginUser} placeholder="Username"
+                onkeydown={(e) => e.key === 'Enter' && document.getElementById('login-pass')?.focus()} />
+              <input type="password" id="login-pass" bind:value={loginPass} placeholder="App password"
+                onkeydown={(e) => e.key === 'Enter' && loginViaRingLeader()} />
+              {#if loginError}
+                <div class="token-status fail">{loginError}</div>
+              {/if}
+              <button class="btn-login" onclick={loginViaRingLeader} disabled={loginLoading}>
+                {loginLoading ? 'Connecting...' : '→ Sign in'}
+              </button>
+              <p class="s-hint">Auth flows through Ring Leader → startempirewire.com</p>
+            </div>
+
+            <!-- Operator fallback -->
+            <details class="s-group">
+              <summary class="s-detail-label">Operator token (advanced)</summary>
+              <input type="password" id="token-input" value={getToken()}
+                oninput={debounceToken}
+                onpaste={debounceToken}
+                placeholder="Paste operator token" />
+              {#if tokenStatus}
+                <div class="token-status" class:ok={tokenStatus === 'ok'} class:fail={tokenStatus === 'fail'} class:saving={tokenStatus === 'saving'}>
+                  {tokenMsg}
+                </div>
+              {/if}
+            </details>
+          {/if}
           <div class="s-group">
             <label>Season</label>
             <div class="s-info">
@@ -503,6 +597,45 @@
   }
   .s-group input:focus { border-color: #7c7cff; }
   .s-hint { font-size: 11px; opacity: 0.35; }
+
+  /* Login / Session */
+  .btn-login {
+    background: #7c7cff; color: #fff; border: none; border-radius: 8px;
+    padding: 12px; font-size: 14px; font-weight: 700; cursor: pointer;
+    margin-top: 4px; transition: background 0.15s;
+  }
+  .btn-login:active { background: #5c5cdd; }
+  .btn-login:disabled { opacity: 0.5; cursor: default; }
+
+  .session-card {
+    background: #111118; border: 1px solid #2a2a40; border-radius: 10px;
+    padding: 14px; display: flex; flex-direction: column; gap: 6px;
+  }
+  .sc-name { font-size: 16px; font-weight: 700; color: #eee; }
+  .sc-tier { display: flex; align-items: center; gap: 8px; }
+  .sc-meta { font-size: 11px; color: #555; }
+  .sc-email { font-size: 12px; color: #555; }
+
+  .tier-badge {
+    font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 4px;
+    text-transform: uppercase; letter-spacing: 0.05em;
+  }
+  .tier-free { background: #222; color: #666; }
+  .tier-freewire { background: #1a2a1a; color: #4caf50; }
+  .tier-wire { background: #1a1a2e; color: #7c7cff; }
+  .tier-extrawire { background: #2e1a2e; color: #ff7cff; }
+
+  .btn-logout {
+    background: transparent; border: 1px solid #333; color: #666; border-radius: 6px;
+    padding: 6px 14px; font-size: 12px; cursor: pointer; align-self: flex-start; margin-top: 4px;
+  }
+  .btn-logout:hover { color: #ff4444; border-color: #ff4444; }
+
+  .s-detail-label {
+    font-size: 12px; color: #444; cursor: pointer; padding: 4px 0;
+  }
+  .s-detail-label:hover { color: #666; }
+  details[open] .s-detail-label { color: #7c7cff; }
 
   .token-status {
     font-size: 12px; padding: 6px 10px; border-radius: 6px; margin-top: 2px;

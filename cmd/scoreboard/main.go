@@ -3,9 +3,12 @@ package main
 import (
 	"crypto/aes"
 	"crypto/cipher"
+	"crypto/hmac"
 	"crypto/rand"
+	"crypto/sha256"
 	"database/sql"
 	"embed"
+	"encoding/base64"
 	"encoding/csv"
 	"encoding/hex"
 	"encoding/json"
@@ -38,6 +41,7 @@ var (
 	scoreboardJSON = envOr("SCOREBOARD_JSON", "/home/wirebot/clawd/scoreboard.json")
 	authToken      = envOr("SCOREBOARD_TOKEN", "65b918ba-baf5-4996-8b53-6fb0f662a0c3")
 	masterKeyHex   = envOr("SCOREBOARD_MASTER_KEY", "") // 64-char hex = 32-byte AES-256 key
+	rlJWTSecret    = envOr("RL_JWT_SECRET", "")         // Ring Leader JWT secret (HMAC-SHA256)
 )
 
 func envOr(key, def string) string {
@@ -744,13 +748,168 @@ func (s *Server) recalcSeason() {
 
 // ─── Auth ───────────────────────────────────────────────────────────────────
 
+// ─── Auth Per bigpicture.mdx ─────────────────────────────────────────────────
+// Auth flow (faithful to blueprint):
+//   ├─ WordPress Admin / Operator Token? → Allow All (tier_level=99)
+//   ├─ Valid Ring Leader JWT? → Trust tier assignment (tier_level 0-3)
+//   ├─ Valid API Key? → Apply tier limits
+//   └─ No Auth → Free tier (tier_level=0, read-only)
+//
+// Tier levels per TRUST_MODES.md:
+//   0 = Free (Mode 0: demo, no write)
+//   1 = FreeWire (Mode 1: core skills)
+//   2 = Wire (Mode 2: extended)
+//   3 = ExtraWire (Mode 3: sovereign)
+//  99 = Operator (admin override)
+
+type AuthContext struct {
+	Authenticated bool
+	UserID        int
+	Email         string
+	Tier          string // "free", "freewire", "wire", "extrawire", "operator"
+	TierLevel     int    // 0-3, or 99 for operator
+}
+
+func contextKey(key string) string { return "auth." + key }
+
+// resolveAuth extracts auth context from request without rejecting.
+func resolveAuth(r *http.Request) AuthContext {
+	token := ""
+	auth := r.Header.Get("Authorization")
+	if strings.HasPrefix(auth, "Bearer ") {
+		token = strings.TrimPrefix(auth, "Bearer ")
+	}
+	if token == "" {
+		token = r.URL.Query().Get("token")
+	}
+	if token == "" {
+		token = r.URL.Query().Get("key")
+	}
+
+	// 1. Operator token — full admin access
+	if token != "" && token == authToken {
+		return AuthContext{Authenticated: true, Tier: "operator", TierLevel: 99}
+	}
+
+	// 2. Ring Leader JWT — verify HMAC-SHA256 signature
+	if token != "" && rlJWTSecret != "" {
+		if ac, ok := verifyRingLeaderJWT(token); ok {
+			return ac
+		}
+	}
+
+	// 3. No auth — free tier (read-only public)
+	return AuthContext{Authenticated: false, Tier: "free", TierLevel: 0}
+}
+
+// verifyRingLeaderJWT verifies a Ring Leader JWT (HMAC-SHA256).
+// JWT payload: { iss, iat, exp, data: { user_id, email, tier, tier_level } }
+func verifyRingLeaderJWT(token string) (AuthContext, bool) {
+	parts := strings.Split(token, ".")
+	if len(parts) != 3 {
+		return AuthContext{}, false
+	}
+
+	headerPayload := parts[0] + "." + parts[1]
+	expectedSig := base64URLEncode(hmacSHA256([]byte(headerPayload), []byte(rlJWTSecret)))
+
+	if !hmacEqual(expectedSig, parts[2]) {
+		return AuthContext{}, false
+	}
+
+	// Decode payload
+	payloadBytes, err := base64URLDecode(parts[1])
+	if err != nil {
+		return AuthContext{}, false
+	}
+
+	var payload struct {
+		Exp  int64 `json:"exp"`
+		Data struct {
+			UserID    int    `json:"user_id"`
+			Email     string `json:"email"`
+			Tier      string `json:"tier"`
+			TierLevel int    `json:"tier_level"`
+		} `json:"data"`
+	}
+	if json.Unmarshal(payloadBytes, &payload) != nil {
+		return AuthContext{}, false
+	}
+
+	// Check expiry
+	if payload.Exp > 0 && payload.Exp < time.Now().Unix() {
+		return AuthContext{}, false
+	}
+
+	tier := payload.Data.Tier
+	if tier == "" {
+		tier = "free"
+	}
+	tierLevel := payload.Data.TierLevel
+
+	return AuthContext{
+		Authenticated: true,
+		UserID:        payload.Data.UserID,
+		Email:         payload.Data.Email,
+		Tier:          tier,
+		TierLevel:     tierLevel,
+	}, true
+}
+
+func hmacSHA256(data, key []byte) []byte {
+	h := hmac.New(sha256.New, key)
+	h.Write(data)
+	return h.Sum(nil)
+}
+
+func base64URLEncode(data []byte) string {
+	s := base64.RawURLEncoding.EncodeToString(data)
+	return s
+}
+
+func base64URLDecode(s string) ([]byte, error) {
+	// Add padding if needed
+	switch len(s) % 4 {
+	case 2:
+		s += "=="
+	case 3:
+		s += "="
+	}
+	return base64.URLEncoding.DecodeString(s)
+}
+
+func hmacEqual(a, b string) bool {
+	// Constant-time comparison
+	if len(a) != len(b) {
+		return false
+	}
+	result := 0
+	for i := 0; i < len(a); i++ {
+		result |= int(a[i]) ^ int(b[i])
+	}
+	return result == 0
+}
+
+// auth requires operator-level access (admin token or extrawire tier).
 func (s *Server) auth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		auth := r.Header.Get("Authorization")
-		token := strings.TrimPrefix(auth, "Bearer ")
-		if token != authToken && r.URL.Query().Get("token") != authToken {
+		ac := resolveAuth(r)
+		if !ac.Authenticated || ac.TierLevel < 3 {
 			w.Header().Set("Content-Type", "application/json")
-			http.Error(w, `{"error":"unauthorized"}`, 401)
+			http.Error(w, `{"error":"unauthorized","hint":"Requires operator token or ExtraWire+ Ring Leader JWT"}`, 401)
+			return
+		}
+		next(w, r)
+	}
+}
+
+// authMember requires any authenticated user (tier_level >= 1).
+func (s *Server) authMember(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		ac := resolveAuth(r)
+		if !ac.Authenticated {
+			w.Header().Set("Content-Type", "application/json")
+			http.Error(w, `{"error":"unauthorized","hint":"Login via startempirewire.com or provide Ring Leader JWT"}`, 401)
 			return
 		}
 		next(w, r)
