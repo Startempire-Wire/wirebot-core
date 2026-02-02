@@ -3693,6 +3693,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	}
 	proxyReq.Header.Set("Content-Type", "application/json")
 	proxyReq.Header.Set("Authorization", "Bearer "+gatewayToken)
+	proxyReq.Header.Set("x-openclaw-agent-id", "verious") // Use the Wirebot agent, not "main"
 
 	client := &http.Client{Timeout: 120 * time.Second}
 
@@ -3778,19 +3779,25 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 
 // ─── Chat Context Injection ──────────────────────────────────────────────
 
-// buildChatContext prepends system messages with pairing protocol + scoreboard state
+// buildChatContext prepends context system message before user messages.
+// OpenClaw already injects agent identity from workspace (IDENTITY.md, SOUL.md).
+// We only inject what the agent doesn't already know: pairing state + live scoreboard.
 func (s *Server) buildChatContext(userMessages []struct {
 	Role    string `json:"role"`
 	Content string `json:"content"`
 }) []map[string]string {
 	var result []map[string]string
 
-	// Always inject Wirebot identity + scoreboard context as system message
-	systemCtx := `You are Wirebot ⚡ — a sovereign AI business operating partner. You are embedded in the operator's scoreboard at wins.wirebot.chat. You have access to tools: wirebot_recall (memory search), wirebot_remember (store facts), wirebot_score (scoreboard data), wirebot_checklist (business setup), wirebot_business_state (Letta structured state).
+	var contextParts []string
 
-When the operator asks about their score, performance, or business — use the wirebot_score tool to get real data. Never make up numbers.`
+	// --- Live scoreboard snapshot ---
+	// Give Wirebot the current score so it doesn't have to call a tool for basic questions
+	scoreData := s.getScoreSnapshot()
+	if scoreData != "" {
+		contextParts = append(contextParts, "LIVE SCOREBOARD (as of right now):\n"+scoreData)
+	}
 
-	// Check pairing status
+	// --- Pairing state ---
 	pairingData, err := os.ReadFile("/home/wirebot/clawd/pairing.json")
 	pairingComplete := false
 	pairingAnswered := 0
@@ -3806,31 +3813,28 @@ When the operator asks about their score, performance, or business — use the w
 	}
 
 	if !pairingComplete {
-		// Load the pairing protocol
 		pairingDoc, err := os.ReadFile("/home/wirebot/wirebot-core/docs/PAIRING.md")
 		if err == nil {
-			// Trim to essential questions section (first ~3000 chars covers phases 1-3)
 			doc := string(pairingDoc)
-			if len(doc) > 4000 {
-				doc = doc[:4000] + "\n...(see full doc for remaining phases)"
+			if len(doc) > 6000 {
+				doc = doc[:6000] + "\n...(see full doc for remaining phases)"
 			}
 
-			pairingCtx := fmt.Sprintf(`IMPORTANT — PAIRING PROTOCOL:
-The operator has NOT completed pairing yet (%d/22 questions answered). Pairing is how you bond with your operator and become truly useful.
+			contextParts = append(contextParts, fmt.Sprintf(`PAIRING PROTOCOL — INCOMPLETE (%d/22 answered):
+When the operator mentions pairing, onboarding, or "getting to know you" — run through the questions below CONVERSATIONALLY. Ask one at a time, acknowledge warmly, sometimes follow-up before proceeding. Match their tone.
 
-When the operator mentions pairing, onboarding, or "getting to know you" — run through the questions below CONVERSATIONALLY, not as a form. Ask one question at a time, acknowledge each answer warmly, sometimes ask a follow-up before moving on. Match their tone and pace.
+CRITICAL: After EACH answer, call wirebot_remember with the extracted fact (e.g. "Operator's preferred name is V", "Operator is in Pacific timezone, starts day at 9am"). This ensures the answer persists across sessions.
 
-Store every answer using wirebot_remember so it persists across sessions.
-
-THE PROTOCOL:
-%s`, pairingAnswered, doc)
-			systemCtx += "\n\n" + pairingCtx
+%s`, pairingAnswered, doc))
 		}
-	} else {
-		systemCtx += "\n\nPairing is complete. You know this operator deeply. Use wirebot_recall to pull relevant context for any question."
 	}
 
-	result = append(result, map[string]string{"role": "system", "content": systemCtx})
+	if len(contextParts) > 0 {
+		result = append(result, map[string]string{
+			"role":    "system",
+			"content": strings.Join(contextParts, "\n\n---\n\n"),
+		})
+	}
 
 	// Append user's messages
 	for _, m := range userMessages {
@@ -3838,6 +3842,28 @@ THE PROTOCOL:
 	}
 
 	return result
+}
+
+// getScoreSnapshot returns a compact text summary of current scoreboard state.
+func (s *Server) getScoreSnapshot() string {
+	today := operatorToday()
+
+	var score, shipping, distribution, revenue, systems int
+	err := s.db.QueryRow(`SELECT COALESCE(execution_score,0), COALESCE(shipping_score,0),
+		COALESCE(distribution_score,0), COALESCE(revenue_score,0), COALESCE(systems_score,0)
+		FROM daily_scores WHERE date = ?`, today).Scan(&score, &shipping, &distribution, &revenue, &systems)
+	if err != nil {
+		return ""
+	}
+
+	var streak int
+	s.db.QueryRow("SELECT COALESCE(current,0) FROM streaks LIMIT 1").Scan(&streak)
+
+	var intent string
+	s.db.QueryRow("SELECT COALESCE(intent,'') FROM daily_scores WHERE date = ?", today).Scan(&intent)
+
+	return fmt.Sprintf("Score: %d/100 | Shipping: %d/40, Distribution: %d/25, Revenue: %d/20, Systems: %d/15 | Streak: %d days | Intent: %s",
+		score, shipping, distribution, revenue, systems, streak, intent)
 }
 
 // ─── Chat Session Persistence ───────────────────────────────────────────
