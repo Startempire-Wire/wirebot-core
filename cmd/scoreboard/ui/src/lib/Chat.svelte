@@ -39,16 +39,51 @@
           'Content-Type': 'application/json',
           'Authorization': token ? (token.startsWith('Bearer ') ? token : `Bearer ${token}`) : '',
         },
-        body: JSON.stringify({ messages: apiMessages }),
+        body: JSON.stringify({ messages: apiMessages, stream: true }),
       });
 
       if (!resp.ok) {
         const err = await resp.json().catch(() => ({ error: resp.statusText }));
         messages.push({ role: 'error', content: err.error || 'Request failed' });
       } else {
-        const data = await resp.json();
-        const reply = data.choices?.[0]?.message?.content || '(no response)';
-        messages.push({ role: 'assistant', content: reply });
+        // SSE streaming — show tokens as they arrive
+        messages.push({ role: 'assistant', content: '' });
+        messages = messages;
+        const assistantIdx = messages.length - 1;
+
+        const reader = resp.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+
+          // Process complete SSE lines
+          const lines = buffer.split('\n');
+          buffer = lines.pop() || ''; // keep incomplete line in buffer
+
+          for (const line of lines) {
+            if (!line.startsWith('data: ')) continue;
+            const payload = line.slice(6).trim();
+            if (payload === '[DONE]') continue;
+            try {
+              const chunk = JSON.parse(payload);
+              const delta = chunk.choices?.[0]?.delta?.content;
+              if (delta) {
+                messages[assistantIdx].content += delta;
+                messages = messages; // trigger reactivity
+                scrollBottom();
+              }
+            } catch { /* skip malformed chunks */ }
+          }
+        }
+
+        // If we got nothing, show fallback
+        if (!messages[assistantIdx].content) {
+          messages[assistantIdx].content = '(no response)';
+        }
       }
     } catch (e) {
       messages.push({ role: 'error', content: 'Connection failed — is Wirebot running?' });
