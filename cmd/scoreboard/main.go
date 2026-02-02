@@ -4770,63 +4770,62 @@ func (s *Server) pollSendy(integrationID, apiKey, configJSON, lastPoll string) e
 		return nil
 	}
 
-	// Try parsing as JSON (Sendy 6.x returns JSON brands list)
-	var brands []struct {
+	// Sendy returns brands as {"brand1": {...}, "brand2": {...}} — NOT an array
+	var brandsMap map[string]struct {
 		ID   string `json:"id"`
 		Name string `json:"name"`
 	}
-	jsonErr := json.Unmarshal(body, &brands)
+	jsonErr := json.Unmarshal(body, &brandsMap)
 
 	meta := map[string]interface{}{
 		"sendy_url": baseURL,
 	}
 
-	if jsonErr == nil && len(brands) > 0 {
-		// Got brands — count them
+	if jsonErr == nil && len(brandsMap) > 0 {
 		brandNames := []string{}
-		for _, b := range brands {
+		for _, b := range brandsMap {
 			brandNames = append(brandNames, b.Name)
 		}
 		meta["brands"] = brandNames
-		meta["brand_count"] = len(brands)
-		log.Printf("Sendy: %d brands at %s — %s", len(brands), baseURL, strings.Join(brandNames, ", "))
+		meta["brand_count"] = len(brandsMap)
+		log.Printf("Sendy: %d brands at %s — %s", len(brandsMap), baseURL, strings.Join(brandNames, ", "))
 	} else {
-		// Older Sendy or error — check if response indicates working API
 		bodyStr := string(body)
-		if strings.Contains(bodyStr, "No data passed") || strings.Contains(bodyStr, "API key") {
-			// API is responding, just needs different endpoint
+		if strings.Contains(bodyStr, "No data passed") || strings.Contains(bodyStr, "API key") || strings.Contains(bodyStr, "Invalid") {
 			meta["status"] = "api_responding"
-			log.Printf("Sendy: API responding at %s (brands endpoint not available)", baseURL)
+			log.Printf("Sendy: API responding at %s (brands: %s)", baseURL, bodyStr[:min(len(bodyStr), 80)])
 		} else {
 			return fmt.Errorf("sendy: unexpected response: %s", bodyStr[:min(len(bodyStr), 100)])
 		}
 	}
 
-	// Now try to get campaigns sent count
+	// Try to get campaigns (Sendy may not have this API in all versions)
 	resp2, err2 := client.PostForm(baseURL+"/api/campaigns/get-campaigns.php", map[string][]string{
 		"api_key": {apiKey},
 	})
 	if err2 == nil {
 		defer resp2.Body.Close()
 		body2, _ := io.ReadAll(resp2.Body)
-		var campaigns []struct {
-			ID      string `json:"id"`
-			Title   string `json:"title"`
-			SentAt  string `json:"sent_at"`
-			Opens   string `json:"opens"`
-			Clicks  string `json:"clicks"`
-		}
-		if json.Unmarshal(body2, &campaigns) == nil {
-			meta["campaigns_total"] = len(campaigns)
 
-			// Check for new campaigns since last poll
+		// Sendy campaigns may be {"campaign1":{...},"campaign2":{...}} or an array
+		var campaignsMap map[string]struct {
+			ID     string `json:"id"`
+			Title  string `json:"title"`
+			SentAt string `json:"sent_at"`
+			Sent   interface{} `json:"sent"` // Could be timestamp int or string
+			Opens  interface{} `json:"opens"`
+			Clicks interface{} `json:"clicks"`
+		}
+		if json.Unmarshal(body2, &campaignsMap) == nil && len(campaignsMap) > 0 {
+			meta["campaigns_total"] = len(campaignsMap)
 			newCampaigns := 0
-			for _, c := range campaigns {
-				if c.SentAt == "" {
+
+			for _, c := range campaignsMap {
+				campID := c.ID
+				if campID == "" {
 					continue
 				}
-				// Create individual events for recent campaigns
-				campEvtID := fmt.Sprintf("evt-sendy-camp-%s", c.ID)
+				campEvtID := fmt.Sprintf("evt-sendy-camp-%s", campID)
 				var campExists int
 				s.db.QueryRow("SELECT COUNT(*) FROM events WHERE id=?", campEvtID).Scan(&campExists)
 				if campExists > 0 {
@@ -4835,30 +4834,39 @@ func (s *Server) pollSendy(integrationID, apiKey, configJSON, lastPoll string) e
 
 				opens := 0
 				clicks := 0
-				fmt.Sscanf(c.Opens, "%d", &opens)
-				fmt.Sscanf(c.Clicks, "%d", &clicks)
+				switch v := c.Opens.(type) {
+				case float64: opens = int(v)
+				case string:  fmt.Sscanf(v, "%d", &opens)
+				}
+				switch v := c.Clicks.(type) {
+				case float64: clicks = int(v)
+				case string:  fmt.Sscanf(v, "%d", &clicks)
+				}
+
+				// Determine timestamp
+				sentTime := now
+				if c.SentAt != "" {
+					sentTime = c.SentAt
+				} else if ts, ok := c.Sent.(float64); ok && ts > 0 {
+					sentTime = time.Unix(int64(ts), 0).UTC().Format(time.RFC3339)
+				}
 
 				campMeta, _ := json.Marshal(map[string]interface{}{
-					"campaign_id": c.ID,
-					"opens":       opens,
-					"clicks":      clicks,
+					"campaign_id": campID, "opens": opens, "clicks": clicks,
 				})
 
 				campTitle := fmt.Sprintf("📧 Campaign: %s", c.Title)
-				scoreDelta := 5 // Sending a campaign is a distribution action
-				if opens > 100 {
-					scoreDelta = 7
-				}
+				scoreDelta := 5
+				if opens > 100 { scoreDelta = 7 }
 
 				s.mu.Lock()
 				s.db.Exec(`INSERT INTO events (id, event_type, lane, source, timestamp,
 					artifact_title, confidence, verifiers, verification_level,
 					score_delta, metadata, created_at, status) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-					campEvtID, "CAMPAIGN_SENT", "distribution", "sendy-poller", c.SentAt,
+					campEvtID, "CAMPAIGN_SENT", "distribution", "sendy-poller", sentTime,
 					campTitle, 0.9, `["sendy_api"]`, "STRONG",
 					scoreDelta, string(campMeta), now, "approved")
 				s.mu.Unlock()
-
 				newCampaigns++
 			}
 
