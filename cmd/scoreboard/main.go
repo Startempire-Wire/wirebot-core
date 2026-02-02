@@ -42,6 +42,8 @@ var (
 	authToken      = envOr("SCOREBOARD_TOKEN", "65b918ba-baf5-4996-8b53-6fb0f662a0c3")
 	masterKeyHex   = envOr("SCOREBOARD_MASTER_KEY", "") // 64-char hex = 32-byte AES-256 key
 	rlJWTSecret    = envOr("RL_JWT_SECRET", "")         // Ring Leader JWT secret (HMAC-SHA256)
+	stripeKey      = envOr("STRIPE_SECRET_KEY", "")    // Stripe live secret key
+	stripeWHSecret = envOr("STRIPE_WEBHOOK_SECRET", "") // Stripe webhook signing secret
 )
 
 func envOr(key, def string) string {
@@ -416,7 +418,8 @@ func main() {
 
 	// Webhook receivers (use separate tokens in query params)
 	mux.HandleFunc("/v1/webhooks/github", s.auth(s.handleGitHubWebhook))
-	mux.HandleFunc("/v1/webhooks/stripe", s.auth(s.handleStripeWebhook))
+	mux.HandleFunc("/v1/webhooks/stripe", s.handleStripeWebhook) // Stripe signs webhooks, no bearer auth
+	mux.HandleFunc("/v1/financial/snapshot", s.auth(s.handleFinancialSnapshot))
 
 	// Static files (Svelte PWA)
 	staticFS, _ := fs.Sub(staticFiles, "static")
@@ -2169,62 +2172,256 @@ func (s *Server) handleProjectAction(w http.ResponseWriter, r *http.Request) {
 }
 
 // ─── Webhook: Stripe ────────────────────────────────────────────────────────
+// Stripe webhook: real financial events. Sovereign operator sees real money.
+// Verified via Stripe webhook signature (not bearer auth).
 
 func (s *Server) handleStripeWebhook(w http.ResponseWriter, r *http.Request) {
 	cors(w)
+	if r.Method == "OPTIONS" {
+		w.WriteHeader(200)
+		return
+	}
 	if r.Method != "POST" {
 		http.Error(w, `{"error":"POST only"}`, 405)
 		return
 	}
 
+	body, err := io.ReadAll(io.LimitReader(r.Body, 65536))
+	if err != nil {
+		http.Error(w, `{"error":"read failed"}`, 400)
+		return
+	}
+
+	// Verify Stripe webhook signature if secret is configured
+	if stripeWHSecret != "" {
+		sigHeader := r.Header.Get("Stripe-Signature")
+		if !verifyStripeSignature(body, sigHeader, stripeWHSecret) {
+			log.Printf("Stripe webhook: invalid signature")
+			http.Error(w, `{"error":"invalid signature"}`, 401)
+			return
+		}
+	}
+
 	var payload map[string]interface{}
-	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+	if json.Unmarshal(body, &payload) != nil {
 		http.Error(w, `{"error":"invalid json"}`, 400)
 		return
 	}
 
 	evtTypeStripe, _ := payload["type"].(string)
-	var evtType, title string
-	var amount float64
-
 	data, _ := payload["data"].(map[string]interface{})
 	obj, _ := data["object"].(map[string]interface{})
 
+	var evtType, lane, title string
+	var amount float64
+	var scoreDelta int
+	metadata := map[string]interface{}{"stripe_event": evtTypeStripe, "currency": "usd"}
+
 	switch evtTypeStripe {
-	case "payment_intent.succeeded", "charge.succeeded":
+	case "charge.succeeded":
 		evtType = "PAYMENT_RECEIVED"
+		lane = "revenue"
 		amount, _ = obj["amount"].(float64)
-		title = fmt.Sprintf("Payment received: $%.2f", amount/100)
-	case "customer.subscription.created":
-		evtType = "SUBSCRIPTION_CREATED"
-		title = "New subscription created"
+		desc, _ := obj["description"].(string)
+		title = fmt.Sprintf("💰 Payment: $%.2f — %s", amount/100, truncate(desc, 60))
+		metadata["amount"] = amount
+		metadata["customer"], _ = obj["customer"].(string)
+		scoreDelta = 5
+
+	case "charge.failed":
+		evtType = "PAYMENT_FAILED"
+		lane = "revenue"
+		amount, _ = obj["amount"].(float64)
+		title = fmt.Sprintf("❌ Failed charge: $%.2f", amount/100)
+		metadata["amount"] = amount
+		metadata["failure_message"], _ = obj["failure_message"].(string)
+		scoreDelta = 0
+
+	case "charge.refunded":
+		evtType = "REFUND_ISSUED"
+		lane = "revenue"
+		amount, _ = obj["amount_refunded"].(float64)
+		title = fmt.Sprintf("↩️ Refund: $%.2f", amount/100)
+		metadata["amount"] = amount
+		scoreDelta = -2
+
 	case "invoice.paid":
 		evtType = "INVOICE_PAID"
+		lane = "revenue"
 		amount, _ = obj["amount_paid"].(float64)
-		title = fmt.Sprintf("Invoice paid: $%.2f", amount/100)
+		title = fmt.Sprintf("📄 Invoice paid: $%.2f", amount/100)
+		metadata["amount"] = amount
+		metadata["subscription"], _ = obj["subscription"].(string)
+		scoreDelta = 5
+
+	case "invoice.payment_failed":
+		evtType = "INVOICE_FAILED"
+		lane = "revenue"
+		amount, _ = obj["amount_due"].(float64)
+		title = fmt.Sprintf("⚠️ Invoice payment failed: $%.2f", amount/100)
+		metadata["amount"] = amount
+		scoreDelta = 0
+
+	case "payout.paid":
+		evtType = "PAYOUT_RECEIVED"
+		lane = "revenue"
+		amount, _ = obj["amount"].(float64)
+		title = fmt.Sprintf("🏦 Payout to bank: $%.2f", amount/100)
+		metadata["amount"] = amount
+		scoreDelta = 3
+
+	case "customer.subscription.created":
+		evtType = "SUBSCRIPTION_CREATED"
+		lane = "revenue"
+		plan, _ := obj["plan"].(map[string]interface{})
+		planAmt, _ := plan["amount"].(float64)
+		interval, _ := plan["interval"].(string)
+		title = fmt.Sprintf("🆕 New subscription: $%.2f/%s", planAmt/100, interval)
+		metadata["plan_amount"] = planAmt
+		metadata["interval"] = interval
+		scoreDelta = 8
+
+	case "customer.subscription.deleted":
+		evtType = "SUBSCRIPTION_CANCELED"
+		lane = "revenue"
+		title = "📉 Subscription canceled"
+		scoreDelta = -3
+
+	case "customer.subscription.updated":
+		evtType = "SUBSCRIPTION_UPDATED"
+		lane = "revenue"
+		title = "🔄 Subscription updated"
+		scoreDelta = 0
+
 	default:
-		json.NewEncoder(w).Encode(map[string]interface{}{"ok": true, "skipped": true})
+		json.NewEncoder(w).Encode(map[string]interface{}{"ok": true, "skipped": evtTypeStripe})
 		return
 	}
 
-	scoreDelta := calcScoreDelta("revenue", evtType, 0.99)
+	metaJSON, _ := json.Marshal(metadata)
 	id := fmt.Sprintf("evt-stripe-%d", time.Now().UnixNano())
+	now := time.Now().UTC().Format(time.RFC3339)
+
 	s.mu.Lock()
 	s.db.Exec(`INSERT INTO events (id, event_type, lane, source, timestamp,
 		artifact_title, confidence, verifiers, verification_level,
 		score_delta, metadata, created_at, status)
 		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-		id, evtType, "revenue", "stripe-webhook", time.Now().UTC().Format(time.RFC3339),
+		id, evtType, lane, "stripe-webhook", now,
 		title, 0.99, `["stripe_webhook"]`, "STRONG",
-		scoreDelta, fmt.Sprintf(`{"amount":%.0f,"currency":"usd"}`, amount),
-		time.Now().UTC().Format(time.RFC3339), "approved")
+		scoreDelta, string(metaJSON), now, "approved")
 	s.mu.Unlock()
 
 	today := operatorToday()
 	s.updateDailyScore(today)
 	s.recalcSeason()
 
-	json.NewEncoder(w).Encode(map[string]interface{}{"ok": true, "event_id": id, "event_type": evtType, "score_delta": scoreDelta})
+	log.Printf("Stripe: %s → %s (score_delta=%d)", evtTypeStripe, evtType, scoreDelta)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"ok": true, "event_id": id, "event_type": evtType, "score_delta": scoreDelta,
+	})
+}
+
+func truncate(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n] + "..."
+}
+
+// verifyStripeSignature checks Stripe webhook HMAC-SHA256 signature.
+func verifyStripeSignature(payload []byte, sigHeader, secret string) bool {
+	if sigHeader == "" {
+		return false
+	}
+	// Parse t=timestamp,v1=signature from Stripe-Signature header
+	var timestamp, sig string
+	for _, part := range strings.Split(sigHeader, ",") {
+		kv := strings.SplitN(part, "=", 2)
+		if len(kv) != 2 {
+			continue
+		}
+		switch kv[0] {
+		case "t":
+			timestamp = kv[1]
+		case "v1":
+			sig = kv[1]
+		}
+	}
+	if timestamp == "" || sig == "" {
+		return false
+	}
+
+	// Compute expected signature: HMAC-SHA256(secret, timestamp.payload)
+	message := timestamp + "." + string(payload)
+	expected := fmt.Sprintf("%x", hmacSHA256([]byte(message), []byte(secret)))
+	return hmacEqual(expected, sig)
+}
+
+// ─── Financial Snapshot (Operator + Wirebot reasoning) ──────────────────────
+// Returns real-time financial state from Stripe for AI reasoning.
+
+func (s *Server) handleFinancialSnapshot(w http.ResponseWriter, r *http.Request) {
+	cors(w)
+	if r.Method == "OPTIONS" {
+		w.WriteHeader(200)
+		return
+	}
+
+	if stripeKey == "" {
+		json.NewEncoder(w).Encode(map[string]interface{}{"error": "Stripe not configured"})
+		return
+	}
+
+	snapshot := map[string]interface{}{}
+
+	// Revenue from scored events (last 30/90 days)
+	var rev30, rev90 float64
+	var charges30, charges90 int
+	s.db.QueryRow(`SELECT COALESCE(SUM(json_extract(metadata,'$.amount')),0), COUNT(*)
+		FROM events WHERE source='stripe-webhook' AND event_type='PAYMENT_RECEIVED'
+		AND timestamp > datetime('now','-30 days')`).Scan(&rev30, &charges30)
+	s.db.QueryRow(`SELECT COALESCE(SUM(json_extract(metadata,'$.amount')),0), COUNT(*)
+		FROM events WHERE source='stripe-webhook' AND event_type='PAYMENT_RECEIVED'
+		AND timestamp > datetime('now','-90 days')`).Scan(&rev90, &charges90)
+
+	snapshot["revenue_30d"] = rev30 / 100
+	snapshot["revenue_90d"] = rev90 / 100
+	snapshot["charges_30d"] = charges30
+	snapshot["charges_90d"] = charges90
+	snapshot["mrr_estimate"] = rev30 / 100 // Rough MRR from last 30 days
+
+	// Recent events
+	var recentEvents []map[string]interface{}
+	rows, _ := s.db.Query(`SELECT event_type, artifact_title, timestamp, score_delta, metadata
+		FROM events WHERE source='stripe-webhook' ORDER BY timestamp DESC LIMIT 10`)
+	if rows != nil {
+		defer rows.Close()
+		for rows.Next() {
+			var et, title, ts, meta string
+			var sd int
+			rows.Scan(&et, &title, &ts, &sd, &meta)
+			recentEvents = append(recentEvents, map[string]interface{}{
+				"type": et, "title": title, "timestamp": ts, "score_delta": sd,
+			})
+		}
+	}
+	snapshot["recent_events"] = recentEvents
+
+	// Churn signals
+	var failedCharges int
+	s.db.QueryRow(`SELECT COUNT(*) FROM events WHERE source='stripe-webhook'
+		AND event_type IN ('PAYMENT_FAILED','INVOICE_FAILED')
+		AND timestamp > datetime('now','-30 days')`).Scan(&failedCharges)
+	snapshot["failed_charges_30d"] = failedCharges
+
+	var cancellations int
+	s.db.QueryRow(`SELECT COUNT(*) FROM events WHERE source='stripe-webhook'
+		AND event_type='SUBSCRIPTION_CANCELED'
+		AND timestamp > datetime('now','-30 days')`).Scan(&cancellations)
+	snapshot["cancellations_30d"] = cancellations
+
+	json.NewEncoder(w).Encode(snapshot)
 }
 
 // ─── Score Engine ───────────────────────────────────────────────────────────
