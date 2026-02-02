@@ -51,6 +51,7 @@ import (
 	"fmt"
 	"log"
 	"math"
+	"net/http"
 	"os"
 	"sort"
 	"strings"
@@ -527,6 +528,68 @@ func (cv *ComplementVector) Rebalance(actionEffective map[string]*float64, energ
 	cv.LastRebalanced = &now
 }
 
+// AdjustFromSecondary applies secondary construct data to modulate the complement
+// vector. This ensures BIZ reality, temporal patterns, risk, and cognitive style
+// influence HOW Wirebot complements (not just Action + Energy gaps).
+func (cv *ComplementVector) AdjustFromSecondary(
+	risk map[string]*float64,
+	cognitive map[string]*float64,
+	business map[string]*float64,
+	temporal map[string]*float64,
+) {
+	// High debt pressure → boost Tenacity (founder needs someone who won't let up on revenue)
+	if business != nil {
+		if dp, ok := business["debt_pressure"]; ok && dp != nil && *dp >= 6 {
+			cv.Tenacity = math.Min(1.0, cv.Tenacity*1.3)
+		}
+		// Solo operator → boost Enablement (founder has no one else to lean on)
+		if ts, ok := business["team_size"]; ok && ts != nil && *ts <= 2 {
+			cv.Enablement = math.Min(1.0, cv.Enablement*1.2)
+		}
+	}
+
+	// Low risk tolerance → boost Quick Start (Wirebot pushes past fear)
+	if risk != nil {
+		if tol, ok := risk["tolerance"]; ok && tol != nil && *tol < 4 {
+			cv.QuickStart = math.Min(1.0, cv.QuickStart*1.3)
+		}
+	}
+
+	// Sequential thinker → boost Wonder (Wirebot injects big-picture thinking)
+	if cognitive != nil {
+		if seq, ok := cognitive["sequential"]; ok && seq != nil && *seq > 7 {
+			cv.Wonder = math.Min(1.0, cv.Wonder*1.2)
+		}
+		// Abstract thinker → boost Implementor (ground the ideas)
+		if abs, ok := cognitive["abstract"]; ok && abs != nil && *abs > 7 {
+			cv.Implementor = math.Min(1.0, cv.Implementor*1.2)
+		}
+	}
+
+	// High context switch cost → boost Follow Through (keep them on track)
+	if temporal != nil {
+		if sw, ok := temporal["context_switch_cost"]; ok && sw != nil && *sw >= 7 {
+			cv.FollowThrough = math.Min(1.0, cv.FollowThrough*1.2)
+		}
+	}
+
+	// Renormalize to sum=1.0
+	total := cv.FactFinder + cv.FollowThrough + cv.QuickStart + cv.Implementor +
+		cv.Wonder + cv.Invention + cv.Discernment + cv.Galvanizing + cv.Enablement + cv.Tenacity
+	if total > 0 {
+		cv.FactFinder /= total
+		cv.FollowThrough /= total
+		cv.QuickStart /= total
+		cv.Implementor /= total
+		cv.Wonder /= total
+		cv.Invention /= total
+		cv.Discernment /= total
+		cv.Galvanizing /= total
+		cv.Enablement /= total
+		cv.Tenacity /= total
+	}
+}
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // CALIBRATION PARAMETERS — How the profile translates into Wirebot behavior
 //
@@ -860,6 +923,112 @@ func (pe *PairingEngine) Save() error {
 	return os.WriteFile(pe.profilePath, data, 0644)
 }
 
+// syncToMemory pushes the current profile summary to Mem0 and Wirebot gateway
+// so the AI has persistent memory of the founder's assessed traits.
+func (pe *PairingEngine) syncToMemory() {
+	log.Printf("[pairing] syncToMemory starting")
+	summary := pe.GetChatContextSummary()
+
+	// Push to Mem0 (if available) — endpoint is /v1/store
+	// Escape for JSON: replace newlines and quotes
+	safeSummary := strings.ReplaceAll(summary, "\\", "\\\\")
+	safeSummary = strings.ReplaceAll(safeSummary, "\"", "'")
+	safeSummary = strings.ReplaceAll(safeSummary, "\n", " | ")
+	safeSummary = strings.ReplaceAll(safeSummary, "\r", "")
+	mem0Payload := fmt.Sprintf(`{"messages":[{"role":"user","content":"Founder profile update: %s"}],"namespace":"wirebot_verious","category":"founder_profile"}`,
+		safeSummary)
+	req, err := http.NewRequest("POST", "http://localhost:8200/v1/store", strings.NewReader(mem0Payload))
+	if err != nil {
+		log.Printf("[pairing] Mem0 request build error: %v", err)
+	} else {
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Content-Length", fmt.Sprintf("%d", len(mem0Payload)))
+		client := &http.Client{Timeout: 30 * time.Second}
+		resp, err := client.Do(req)
+		if err != nil {
+			log.Printf("[pairing] Mem0 sync error: %v", err)
+		} else {
+			body := make([]byte, 200)
+			n, _ := resp.Body.Read(body)
+			resp.Body.Close()
+			log.Printf("[pairing] Mem0 sync: status=%d body=%s", resp.StatusCode, string(body[:n]))
+		}
+	}
+
+	// Push to Letta business_stage block (if available) — keep structured state current
+	lettaAgentID := "agent-82610d14-ec65-4d10-9ec2-8c479848cea9"
+	// Get current blocks to find business_stage block ID
+	getReq, err := http.NewRequest("GET",
+		fmt.Sprintf("http://localhost:8283/v1/agents/%s", lettaAgentID), nil)
+	if err == nil {
+		getReq.Header.Set("Authorization", "Bearer letta")
+		client := &http.Client{Timeout: 10 * time.Second}
+		resp, err := client.Do(getReq)
+		if err == nil {
+			var agentData struct {
+				Memory struct {
+					Blocks []struct {
+						ID    string `json:"id"`
+						Label string `json:"label"`
+					} `json:"blocks"`
+				} `json:"memory"`
+			}
+			if json.NewDecoder(resp.Body).Decode(&agentData) == nil {
+				for _, block := range agentData.Memory.Blocks {
+					if block.Label == "business_stage" {
+						// Update the block with current profile data
+						stageUpdate := fmt.Sprintf("Operating Mode: Red-to-Black\nSeason 1 started: 2026-02-01\nCurrent Score: %.0f/100\nPairing Level: %s (%.0f%% accuracy)\nProfile: %s",
+							pe.profile.PairingScore.Composite,
+							pe.profile.PairingScore.Level,
+							pe.computeAccuracy()*100,
+							safeSummary)
+						updatePayload, _ := json.Marshal(map[string]string{"value": stageUpdate})
+						patchReq, _ := http.NewRequest("PATCH",
+							fmt.Sprintf("http://localhost:8283/v1/blocks/%s", block.ID),
+							strings.NewReader(string(updatePayload)))
+						if patchReq != nil {
+							patchReq.Header.Set("Authorization", "Bearer letta")
+							patchReq.Header.Set("Content-Type", "application/json")
+							patchResp, err := client.Do(patchReq)
+							if err == nil {
+								patchResp.Body.Close()
+								log.Printf("[pairing] Letta business_stage block updated (score=%.0f)", pe.profile.PairingScore.Composite)
+							}
+						}
+						break
+					}
+				}
+			}
+			resp.Body.Close()
+		}
+	}
+
+	// Push to Wirebot gateway via wirebot_remember tool (if available)
+	gatewayToken := os.Getenv("SCOREBOARD_TOKEN")
+	if gatewayToken == "" {
+		gatewayToken = "65b918ba-baf5-4996-8b53-6fb0f662a0c3"
+	}
+	rememberPayload := fmt.Sprintf(`{"tool":"wirebot_remember","args":{"fact":"PROFILE UPDATE: %s"}}`,
+		safeSummary)
+	req2, err := http.NewRequest("POST", "http://127.0.0.1:18789/tools/invoke", strings.NewReader(rememberPayload))
+	if err != nil {
+		log.Printf("[pairing] Gateway request build error: %v", err)
+	} else {
+		req2.Header.Set("Content-Type", "application/json")
+		req2.Header.Set("Authorization", "Bearer "+gatewayToken)
+		client := &http.Client{Timeout: 15 * time.Second}
+		resp, err := client.Do(req2)
+		if err != nil {
+			log.Printf("[pairing] Gateway sync error: %v", err)
+		} else {
+			body := make([]byte, 200)
+			n, _ := resp.Body.Read(body)
+			resp.Body.Close()
+			log.Printf("[pairing] Gateway sync: status=%d body=%s", resp.StatusCode, string(body[:n]))
+		}
+	}
+}
+
 // Start begins the background signal processing goroutine
 func (pe *PairingEngine) Start() {
 	pe.running = true
@@ -978,6 +1147,12 @@ func (pe *PairingEngine) processSignal(sig Signal) {
 	// 9. Update meta
 	pe.profile.Meta.SignalsProcessed++
 	pe.dirty = true
+
+	// 10. Push profile facts to Mem0 (async, non-blocking)
+	//     Only on assessment signals (not every chat message)
+	if sig.Type == SignalAssessment {
+		go pe.syncToMemory()
+	}
 
 	elapsed := time.Since(startTime)
 	if elapsed > 50*time.Millisecond {
@@ -1491,6 +1666,15 @@ func (pe *PairingEngine) recomputeComplement() {
 		pe.profile.ActionStyle.Effective,
 		pe.profile.EnergyTopology.Effective,
 	)
+	// Also factor in risk, cognitive, business, temporal for secondary adjustments
+	// If founder has low risk tolerance, Wirebot should be bolder (inverse)
+	// If founder has high context_switch_cost, Wirebot should batch suggestions
+	pe.profile.Complement.AdjustFromSecondary(
+		pe.profile.RiskDisposition.Effective,
+		pe.profile.CognitiveStyle.Effective,
+		pe.profile.BusinessReality.Effective,
+		pe.profile.TemporalPatterns.Effective,
+	)
 	now := time.Now()
 	pe.profile.Meta.LastComplementRebal = &now
 }
@@ -1543,7 +1727,68 @@ func (pe *PairingEngine) updateCalibration() {
 		}
 	}
 
-	// Context window overrides
+	// Business Reality → calibration
+	if p.BusinessReality.Effective["debt_pressure"] != nil {
+		debt := *p.BusinessReality.Effective["debt_pressure"]
+		if debt >= 7 { // heavy/critical debt
+			cal.Recommendations.RiskFraming = "cautious"
+			cal.Accountability.NudgeIntensity = math.Min(1.0, cal.Accountability.NudgeIntensity+0.1)
+		}
+	}
+	if p.BusinessReality.Effective["team_size"] != nil {
+		team := *p.BusinessReality.Effective["team_size"]
+		if team <= 2 { // solo
+			cal.Recommendations.OptionsPresented = 2 // fewer options, solo operator is overwhelmed
+		} else {
+			cal.Recommendations.OptionsPresented = 3
+		}
+	}
+	if p.BusinessReality.Effective["bottleneck"] != nil {
+		bottle := *p.BusinessReality.Effective["bottleneck"]
+		if bottle <= 4 { // shipping bottleneck
+			cal.Proactive.PeakTaskType = "shipping"
+		} else if bottle <= 6 { // distribution bottleneck
+			cal.Proactive.PeakTaskType = "distribution"
+		} else { // revenue/ops bottleneck
+			cal.Proactive.PeakTaskType = "revenue"
+		}
+	}
+
+	// Temporal Patterns → calibration
+	if p.TemporalPatterns.Effective["planning_style"] != nil {
+		planStyle := *p.TemporalPatterns.Effective["planning_style"]
+		if planStyle >= 8 { // rigid planner
+			cal.Recommendations.PlanningDepth = "detailed"
+		} else if planStyle <= 3 { // flow state
+			cal.Recommendations.PlanningDepth = "minimal"
+		} else {
+			cal.Recommendations.PlanningDepth = "moderate"
+		}
+	}
+	if p.TemporalPatterns.Effective["work_intensity"] != nil {
+		intensity := *p.TemporalPatterns.Effective["work_intensity"]
+		if intensity >= 8 { // heavy worker: less nudging, they're already on it
+			cal.Accountability.NudgeFrequencyHours = math.Max(cal.Accountability.NudgeFrequencyHours, 10)
+		} else if intensity <= 3 { // part-time: more nudging
+			cal.Accountability.NudgeFrequencyHours = math.Min(cal.Accountability.NudgeFrequencyHours, 6)
+		}
+	}
+	if p.TemporalPatterns.Effective["context_switch_cost"] != nil {
+		switchCost := *p.TemporalPatterns.Effective["context_switch_cost"]
+		if switchCost >= 7 { // expensive context switches
+			cal.Accountability.StallInterventionH = math.Max(cal.Accountability.StallInterventionH, 6)
+		}
+	}
+	if p.TemporalPatterns.Effective["stall_recovery"] != nil {
+		recovery := *p.TemporalPatterns.Effective["stall_recovery"]
+		if recovery >= 8 { // pushes through stalls
+			cal.Accountability.NudgeIntensity = math.Max(0, cal.Accountability.NudgeIntensity-0.1)
+		} else if recovery <= 3 { // asks for help
+			cal.Communication.QuestionFrequency = "high" // ask probing questions to unstick them
+		}
+	}
+
+	// Context window overrides (these override everything above when active)
 	if cw := p.ContextWindows[CtxFinancialPressure]; cw.Activation > 0.5 {
 		cal.Recommendations.RiskFraming = "cautious"
 		cal.Recommendations.DataDensity = math.Min(1.0, cal.Recommendations.DataDensity+0.2)
@@ -1814,18 +2059,77 @@ func (pe *PairingEngine) GetChatContextSummary() string {
 	lines = append(lines, fmt.Sprintf("Communication: %s first, %d-word max, formality=%.0f%%",
 		cal.LeadWith, cal.MaxMessageWords, cal.ToneFormality*100))
 
-	// Line 3: Complement focus
-	top := pe.topComplements(3)
-	if len(top) > 0 {
-		lines = append(lines, fmt.Sprintf("Complement focus: %s", strings.Join(top, ", ")))
+	// Line 3: Business reality
+	bizParts := []string{}
+	if v, ok := eff.Business["debt_pressure"]; ok && v > 0 {
+		if v >= 7 {
+			bizParts = append(bizParts, "heavy debt pressure")
+		} else if v >= 4 {
+			bizParts = append(bizParts, "some debt")
+		}
+	}
+	if v, ok := eff.Business["team_size"]; ok && v > 0 {
+		if v <= 2 {
+			bizParts = append(bizParts, "solo operator")
+		} else {
+			bizParts = append(bizParts, "has team")
+		}
+	}
+	if v, ok := eff.Business["bottleneck"]; ok && v > 0 {
+		if v <= 4 {
+			bizParts = append(bizParts, "bottleneck=shipping")
+		} else if v <= 6 {
+			bizParts = append(bizParts, "bottleneck=distribution")
+		} else {
+			bizParts = append(bizParts, "bottleneck=revenue")
+		}
+	}
+	if len(bizParts) > 0 {
+		lines = append(lines, fmt.Sprintf("Business: %s", strings.Join(bizParts, ", ")))
 	}
 
-	// Line 4: Active contexts
+	// Line 4: Complement with behavioral instructions
+	top := pe.topComplements(3)
+	if len(top) > 0 {
+		// Map complement areas to concrete Wirebot behaviors
+		complementActions := map[string]string{
+			"Tenacity":       "provide persistent follow-up, hold to commitments, don't let things slide",
+			"Enablement":     "proactively offer help, remove blockers, connect dots across projects",
+			"Galvanizing":    "inject energy, celebrate wins, rally momentum when stalled",
+			"Follow Through": "track details, ensure nothing falls through cracks, remind about loose ends",
+			"Quick Start":    "suggest bold moves, prototype ideas, push past analysis paralysis",
+			"Fact Finder":    "surface research, data, evidence before decisions",
+			"Implementor":    "provide concrete steps, blueprints, hands-on action items",
+			"Wonder":         "ask big-picture questions, explore new possibilities, brainstorm",
+			"Invention":      "suggest novel solutions, creative approaches, unconventional paths",
+			"Discernment":    "evaluate tradeoffs, sense what feels right, trust pattern recognition",
+		}
+		var topActions []string
+		for _, t := range top {
+			name := strings.Split(t, " (")[0] // strip percentage
+			if action, ok := complementActions[name]; ok {
+				topActions = append(topActions, name+": "+action)
+			}
+		}
+		if len(topActions) > 0 {
+			lines = append(lines, fmt.Sprintf("Wirebot complement priorities: %s", strings.Join(topActions, "; ")))
+		} else {
+			lines = append(lines, fmt.Sprintf("Wirebot complement focus: %s", strings.Join(top, ", ")))
+		}
+	}
+
+	// Line 5: What calibration produces
+	fullCal := eff.Calibration
+	lines = append(lines, fmt.Sprintf("Calibration: %s first, %d-word max, nudge every %.0fh, %s planning",
+		fullCal.Communication.LeadWith, fullCal.Communication.MaxMessageWords,
+		fullCal.Accountability.NudgeFrequencyHours, fullCal.Recommendations.PlanningDepth))
+
+	// Line 6: Active contexts
 	if len(eff.ActiveContexts) > 0 {
 		lines = append(lines, fmt.Sprintf("Active contexts: %s", strings.Join(eff.ActiveContexts, ", ")))
 	}
 
-	// Line 5: Pairing level
+	// Line 7: Pairing level
 	lines = append(lines, fmt.Sprintf("Pairing: %.0f/100 (%s) | Accuracy: %.0f%%", eff.PairingScore, eff.Level, eff.Accuracy*100))
 
 	return strings.Join(lines, "\n")

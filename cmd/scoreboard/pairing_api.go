@@ -43,6 +43,13 @@ func (s *Server) handlePairingProfile(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Method not allowed", 405)
 		return
 	}
+
+	// Route: /v1/pairing/profile/effective goes to effective handler
+	if strings.HasSuffix(r.URL.Path, "/effective") {
+		s.handlePairingEffective(w, r)
+		return
+	}
+
 	s.pairing.mu.RLock()
 	data, err := json.Marshal(s.pairing.profile)
 	s.pairing.mu.RUnlock()
