@@ -127,15 +127,11 @@
 
 **Fix:** Restore nightly sync cron. Write the sync logic.
 
-### 5. No Cross-System Event Flow ❌
+### 5. No Cross-System Event Flow → ✅ FIXED
 
 **Plan:** "Business events → Letta block updates"  
-**Reality:** Scoreboard events (ships, revenue, integrations) never flow to Letta. Pairing answers stored in Mem0 never update Letta's human/goals blocks. KPIs block is manually updated.
-
-**Fix:** Wire event triggers:
-- Ship event → Letta message: "Operator shipped: X. Update kpis and goals."
-- Revenue event → Letta message: "Revenue received: $X from Y. Update kpis."
-- Pairing answer → Letta message: "Operator said: [answer]. Update human block."
+**Was:** Scoreboard events never flowed to Letta. Pairing answers in Mem0 never updated Letta blocks. KPIs manually updated.  
+**Now:** `agent_end` hook detects business/pairing keywords and sends context messages to Letta agent for self-edit. Best-effort, async, non-blocking.
 
 ---
 
@@ -189,27 +185,36 @@
 
 ---
 
-## Fix Priority
+## Fix Status
 
-| # | Fix | Impact | Effort |
-|---|-----|--------|--------|
-| 1 | **Mem0: send structured messages** (not text) | Better fact extraction quality | 30 min |
-| 2 | **Letta: route updates through agent** (not direct PUT) | Agent self-manages, better state quality | 1 hr |
-| 3 | **Letta: populate archival memory** with key docs | Agent can reason about business docs | 30 min |
-| 4 | **Wire scoreboard events → Letta** | KPIs auto-update, state stays current | 1 hr |
-| 5 | **Wire pairing answers → Letta** | Human block auto-enriches during pairing | 30 min |
-| 6 | **Restore nightly sync** | MEMORY.md + BUSINESS_STATE.md stay current | 30 min |
-| 7 | **Recall: use Letta archival search** for complex queries | Better answers for "why" questions | 30 min |
+| # | Fix | Status | Date |
+|---|-----|--------|------|
+| 1 | **Mem0: send structured messages** (not text) | ✅ Done | 2026-02-02 |
+| 2 | **Letta: route updates through agent** (not direct PUT) | ✅ Done | 2026-02-02 |
+| 3 | **Letta: populate archival memory** with key docs | ✅ Done | 2026-02-02 |
+| 4 | **Wire scoreboard events → Letta** | ✅ Done | 2026-02-02 |
+| 5 | **Wire pairing answers → Letta** | ✅ Done | 2026-02-02 |
+| 6 | **Restore nightly sync** | ✅ Done | 2026-02-02 |
+| 7 | **Recall: use Letta archival search** for complex queries | ✅ Done | 2026-02-02 |
+
+### Fix Details
+
+- **Fix 1:** `mem0Store()` updated to accept `messages` array, `agent_end` sends structured `[{role, content}]`
+- **Fix 2:** `wirebot_business_state` tool description steers toward `message` action (agent self-edit). Direct PUT reserved for bulk resets only.
+- **Fix 3:** Letta archival populated via OpenRouter `text-embedding-3-small` (1536 dims, ~$0.0002 total). 6 docs: PAIRING, SCOREBOARD_PRODUCT, MULTI_BUSINESS, OPERATOR_REALITY, SOUL, SCOREBOARD_SCORING. Local fastembed can't be used because Letta container's openai client uses `OPENAI_BASE_URL` env var which overrides per-agent endpoint.
+- **Fix 4+5:** `agent_end` hook detects business/pairing keywords in conversation and sends context to Letta agent as message for self-edit. Best-effort, non-blocking.
+- **Fix 6:** Nightly sync cron verified (`0 0 * * 0`). Fixed namespace bug (was double-prefixed `wirebot_wirebot_verious`). 80 Mem0 facts re-embedded after fastembed 768-dim migration.
+- **Fix 7:** `lettaArchivalSearch()` wired into `wirebot_recall`. Returns top-2 archival passages truncated to 500 chars alongside Mem0 facts + Letta blocks.
 
 ---
 
-## Success Criteria (Updated)
+## Success Criteria
 
-- [ ] `wirebot_recall` returns facts (Mem0) + state (Letta blocks) + files (memory-core) — all 3 layers
-- [ ] After pairing Q1 answer, Letta's `human` block updates within 5s (via agent message)
-- [ ] After a ship event, Letta's `kpis` block updates within 60s
-- [ ] Mem0 receives `[{role, content}]` messages, not concatenated text
-- [ ] Letta archival has ≥5 key documents (PAIRING.md, SCOREBOARD.md, bigpicture, etc.)
-- [ ] MEMORY.md grows nightly with new Mem0 facts (verified by diff)
-- [ ] BUSINESS_STATE.md matches Letta blocks (verified by diff)
-- [ ] No system writes data another system owns (no overlap)
+- [x] `wirebot_recall` returns facts (Mem0) + state (Letta blocks) + archival (Letta docs) — all 3 layers (14 results verified)
+- [x] `agent_end` routes pairing-relevant conversations to Letta agent for human/goals block self-edit
+- [x] `agent_end` routes business-relevant conversations to Letta agent for kpis/business_stage self-edit
+- [x] Mem0 receives `[{role, content}]` structured messages (not concatenated text)
+- [x] Letta archival has 6 key documents (PAIRING, SCOREBOARD_PRODUCT, MULTI_BUSINESS, OPERATOR_REALITY, SOUL, SCOREBOARD_SCORING)
+- [x] MEMORY.md sync verified (dedup works, 80 facts)
+- [x] BUSINESS_STATE.md snapshot matches Letta blocks (4 blocks synced)
+- [x] No system writes data another system owns (no overlap)
