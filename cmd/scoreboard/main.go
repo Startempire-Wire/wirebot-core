@@ -852,6 +852,28 @@ func (s *Server) postEvent(w http.ResponseWriter, r *http.Request) {
 	if trustedSources[evt.Source] {
 		status = "approved"
 	}
+
+	// git-discovery: check if the project is approved (auto-approve)
+	if evt.Source == "git-discovery" && evt.Status == "approved" {
+		// Discovery engine already checked project approval status
+		// Verify: project must exist in projects table as approved
+		var projStatus string
+		var repo string
+		if evt.Metadata != nil {
+			var meta map[string]interface{}
+			json.Unmarshal(evt.Metadata, &meta)
+			if r, ok := meta["repo"].(string); ok {
+				repo = r
+			}
+		}
+		if repo != "" {
+			s.db.QueryRow("SELECT status FROM projects WHERE name=? AND auto_approve=1", repo).Scan(&projStatus)
+			if projStatus == "approved" {
+				status = "approved"
+			}
+		}
+	}
+
 	// Explicit override: caller can request pending even for trusted sources
 	if evt.Status == "pending" {
 		status = "pending"
