@@ -393,6 +393,10 @@ func main() {
 	mux.HandleFunc("/v1/pending", s.auth(s.handlePending))
 	mux.HandleFunc("/v1/events/", s.auth(s.handleEventAction)) // /v1/events/<id>/approve|reject
 
+	// Project-level approval
+	mux.HandleFunc("/v1/projects", s.handleProjects)          // GET: list, POST: create/update
+	mux.HandleFunc("/v1/projects/", s.auth(s.handleProjectAction)) // POST .../approve|reject
+
 	// Social cards
 	mux.HandleFunc("/v1/card/daily", s.handleCard)
 	mux.HandleFunc("/v1/card/weekly", s.handleCard)
@@ -568,6 +572,8 @@ func buildTenantMux(s *Server) *http.ServeMux {
 	mux.HandleFunc("/v1/audit", s.auth(s.handleAudit))
 	mux.HandleFunc("/v1/pending", s.auth(s.handlePending))
 	mux.HandleFunc("/v1/events/", s.auth(s.handleEventAction))
+	mux.HandleFunc("/v1/projects", s.handleProjects)
+	mux.HandleFunc("/v1/projects/", s.auth(s.handleProjectAction))
 	mux.HandleFunc("/v1/lock", s.auth(s.handleLock))
 	mux.HandleFunc("/health", s.handleHealth)
 	return mux
@@ -655,6 +661,21 @@ func (s *Server) initDB() {
 		`CREATE INDEX IF NOT EXISTS idx_integrations_provider ON integrations(user_id, provider)`,
 		// Verification level migration on events
 		`ALTER TABLE events ADD COLUMN verification_level TEXT DEFAULT 'SELF_REPORTED'`,
+		// Project-level approval: approve/reject entire repos, remembered across sessions
+		`CREATE TABLE IF NOT EXISTS projects (
+			name TEXT PRIMARY KEY,
+			path TEXT NOT NULL DEFAULT '',
+			business TEXT NOT NULL DEFAULT '',
+			github TEXT DEFAULT '',
+			status TEXT NOT NULL DEFAULT 'pending',
+			auto_approve BOOLEAN DEFAULT 0,
+			approved_at TEXT DEFAULT '',
+			total_events INTEGER DEFAULT 0,
+			approved_events INTEGER DEFAULT 0,
+			rejected_events INTEGER DEFAULT 0,
+			notes TEXT DEFAULT '',
+			created_at TEXT NOT NULL DEFAULT ''
+		)`,
 	}
 	for _, stmt := range stmts {
 		if _, err := s.db.Exec(stmt); err != nil {
@@ -1624,6 +1645,169 @@ func (s *Server) handleGitHubWebhook(w http.ResponseWriter, r *http.Request) {
 	s.recalcSeason()
 
 	json.NewEncoder(w).Encode(map[string]interface{}{"ok": true, "event_id": id, "event_type": evtType, "score_delta": scoreDelta})
+}
+
+// ─── Project-Level Approval ──────────────────────────────────────────────────
+// Projects group events by repo. Approving a project bulk-approves all its
+// pending events AND auto-approves future discoveries for that project.
+
+func (s *Server) handleProjects(w http.ResponseWriter, r *http.Request) {
+	cors(w)
+
+	switch r.Method {
+	case "GET":
+		// List projects with event counts, grouped from events + projects table
+		rows, err := s.db.Query(`
+			SELECT 
+				COALESCE(json_extract(e.metadata, '$.repo'), 'unknown') as repo,
+				COALESCE(json_extract(e.metadata, '$.repo_path'), '') as repo_path,
+				COUNT(*) as total,
+				SUM(CASE WHEN e.status='pending' THEN 1 ELSE 0 END) as pending,
+				SUM(CASE WHEN e.status='approved' THEN 1 ELSE 0 END) as approved,
+				SUM(CASE WHEN e.status='rejected' THEN 1 ELSE 0 END) as rejected,
+				e.lane
+			FROM events e
+			WHERE e.source = 'git-discovery'
+			GROUP BY repo
+			ORDER BY pending DESC, total DESC`)
+		if err != nil {
+			http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err), 500)
+			return
+		}
+		defer rows.Close()
+
+		type ProjectView struct {
+			Name         string `json:"name"`
+			Path         string `json:"path"`
+			Business     string `json:"business"`
+			GitHub       string `json:"github"`
+			Status       string `json:"status"`       // pending, approved, rejected
+			AutoApprove  bool   `json:"auto_approve"`
+			Total        int    `json:"total_events"`
+			Pending      int    `json:"pending"`
+			Approved     int    `json:"approved"`
+			Rejected     int    `json:"rejected"`
+			Lane         string `json:"primary_lane"`
+		}
+
+		var projects []ProjectView
+		for rows.Next() {
+			var p ProjectView
+			rows.Scan(&p.Name, &p.Path, &p.Total, &p.Pending, &p.Approved, &p.Rejected, &p.Lane)
+
+			// Enrich from projects table
+			var status string
+			var autoApprove bool
+			var business, github string
+			err := s.db.QueryRow("SELECT status, auto_approve, business, github FROM projects WHERE name=?", p.Name).Scan(&status, &autoApprove, &business, &github)
+			if err == nil {
+				p.Status = status
+				p.AutoApprove = autoApprove
+				p.Business = business
+				p.GitHub = github
+			} else {
+				p.Status = "pending" // not yet in projects table
+			}
+
+			projects = append(projects, p)
+		}
+		if projects == nil {
+			projects = []ProjectView{}
+		}
+
+		// Also get pending count for badge
+		var pendingCount int
+		s.db.QueryRow("SELECT COUNT(*) FROM events WHERE status='pending'").Scan(&pendingCount)
+
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"projects":      projects,
+			"count":         len(projects),
+			"pending_total": pendingCount,
+		})
+
+	case "OPTIONS":
+		w.WriteHeader(200)
+
+	default:
+		http.Error(w, `{"error":"GET only"}`, 405)
+	}
+}
+
+func (s *Server) handleProjectAction(w http.ResponseWriter, r *http.Request) {
+	cors(w)
+	if r.Method == "OPTIONS" {
+		w.WriteHeader(200)
+		return
+	}
+	if r.Method != "POST" {
+		http.Error(w, `{"error":"POST only"}`, 405)
+		return
+	}
+
+	// Parse: /v1/projects/{name}/approve or /v1/projects/{name}/reject
+	parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/v1/projects/"), "/")
+	if len(parts) < 2 {
+		http.Error(w, `{"error":"use /v1/projects/{name}/approve or /reject"}`, 400)
+		return
+	}
+	projectName := parts[0]
+	action := parts[1]
+
+	if action != "approve" && action != "reject" {
+		http.Error(w, `{"error":"action must be approve or reject"}`, 400)
+		return
+	}
+
+	now := time.Now().UTC().Format(time.RFC3339)
+	newStatus := "approved"
+	if action == "reject" {
+		newStatus = "rejected"
+	}
+
+	// Upsert project status
+	s.mu.Lock()
+	s.db.Exec(`INSERT INTO projects (name, status, auto_approve, approved_at, created_at)
+		VALUES (?, ?, ?, ?, ?)
+		ON CONFLICT(name) DO UPDATE SET status=excluded.status, auto_approve=excluded.auto_approve, approved_at=excluded.approved_at`,
+		projectName, newStatus, action == "approve", now, now)
+
+	// Bulk update all pending events for this project
+	result, err := s.db.Exec(`UPDATE events SET status=?, score_delta=CASE WHEN ?='approved' THEN 
+		CAST(json_extract(metadata, '$.effective_score') AS INTEGER) ELSE 0 END
+		WHERE status='pending' AND json_extract(metadata, '$.repo')=?`,
+		newStatus, newStatus, projectName)
+	s.mu.Unlock()
+
+	affected := int64(0)
+	if err == nil {
+		affected, _ = result.RowsAffected()
+	}
+
+	// Recalculate daily score
+	today := operatorToday()
+	s.updateDailyScore(today)
+	s.updateStreak(today, "")
+	s.recalcSeason()
+
+	// Get updated counts
+	var total, pending, approved, rejected int
+	s.db.QueryRow(`SELECT COUNT(*), SUM(CASE WHEN status='pending' THEN 1 ELSE 0 END),
+		SUM(CASE WHEN status='approved' THEN 1 ELSE 0 END),
+		SUM(CASE WHEN status='rejected' THEN 1 ELSE 0 END)
+		FROM events WHERE json_extract(metadata, '$.repo')=?`, projectName).Scan(&total, &pending, &approved, &rejected)
+
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"ok":            true,
+		"project":       projectName,
+		"action":        action,
+		"events_affected": affected,
+		"total":         total,
+		"pending":       pending,
+		"approved":      approved,
+		"rejected":      rejected,
+	})
+
+	log.Printf("Project %s: %s (%d events affected)", projectName, action, affected)
 }
 
 // ─── Webhook: Stripe ────────────────────────────────────────────────────────
