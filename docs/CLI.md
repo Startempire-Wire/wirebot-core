@@ -18,9 +18,14 @@ The primary interface. All commands hit the OpenClaw gateway HTTP API (`127.0.0.
 ### Quick Reference
 
 ```
+PAIRING         wb pair | pair status | pair skip | pair reset
+BUSINESSES      wb overview | businesses | focus | add-business
 CHECKLIST       wb status | next | daily | complete | skip | add | list | detail | stage
-MEMORY          wb recall | remember | state | cache
+MEMORY          wb recall | remember | state | cache | memory | sync
 SYSTEM          wb health | services | logs | pillars
+SCOREBOARD      wb score | streak | season | feed | ship | submit | pending | approve | reject
+                wb intent | audit | lock | card | scoreboard/wins
+DISCOVERY       wb discover scan|watch|status|backfill | projects | approve-project | reject-project
 ADVANCED        wb raw
 ```
 
@@ -211,24 +216,37 @@ Valid stages: `idea`, `launch`, `growth`
 
 ### Memory Commands
 
-Wirebot's memory system has three layers: **Mem0** (conversation facts, vector search), **Letta** (structured business state blocks), and **Go daemon hot cache** (sub-ms substring search across both).
+Wirebot's memory system has three layers that `wb recall` searches in parallel:
+
+| Layer | System | What It Stores | Search Type |
+|-------|--------|---------------|-------------|
+| Facts | Mem0 (port 8200) | Conversation-extracted facts (80+) | Semantic vector (fastembed, 768 dims) |
+| State | Letta blocks (port 8283) | Structured business state (4 blocks) | Direct read (always included) |
+| Archival | Letta archival (port 8283) | Business docs (6 passages) | Semantic vector (OpenRouter, 1536 dims) |
+| Cache | Go daemon (port 8201) | Hot mirror of Mem0+Letta | Substring match (<1ms) |
 
 #### `wb recall <query>`
 
-Search all memory layers. Uses the Go daemon cache first (<1ms), falls back to direct Mem0 + Letta queries if cache misses.
+Search all memory layers in parallel. Returns Mem0 facts + Letta blocks + Letta archival docs.
 
 ```bash
-$ wb recall "membership tiers"
-Found 4 result(s) for "membership tiers":
+$ wb recall "revenue goals"
+Found 14 result(s) for "revenue goals":
 
-[fact] Wirebot membership tiers: Free (Mode 0), FreeWire (Mode 1), Wire (Mode 2), ExtraWire (Mode 3)
+[fact] Focuses on revenue generation and deal closing (75%)
+[fact] Revenue score: 5/20 (73%)
+[fact] Uses revenue-first sequencing approach (71%)
 
-[state:human] Name: Verious Smith III
-Business: Startempire Wire — membership-based entrepreneurial network
-...
+[state:human] Name: Verious Smith III ...
+[state:goals] Active Goals: 1. Build Dashboard Frontend ...
+[state:business_stage] Operating Mode: Red-to-Black ...
+[state:kpis] Beta testers: 0 ...
+
+[archival] [SCOREBOARD_PRODUCT] # Business Performance Scoreboard — Product Spec ...
+[archival] [OPERATOR_REALITY] # Operator Reality — Verious Smith III ...
 ```
 
-**Performance:** ~3ms (cache hit), ~80ms (cache miss, parallel Mem0+Letta)
+**Performance:** ~200ms (parallel Mem0 semantic + Letta blocks + Letta archival search)
 
 **Memory:** Logged to `cli.jsonl`. Not stored to Mem0 (read-only — would create circular reference).
 
@@ -299,6 +317,48 @@ Cache results: 6 (age: 12ms)
 
 ---
 
+#### `wb memory`
+
+Full memory system summary — fact counts, block counts, archival passages, cache status, sync schedule.
+
+```bash
+$ wb memory
+── Memory System Summary ──
+
+  Mem0:          80 facts (fastembed, 768 dims)
+  Letta blocks:  4 (2160 chars) [goals, human, kpis, business_stage]
+  Letta archival: 6 passages (OpenRouter embeddings, 1536 dims)
+  Hot cache:     80 facts + 4 blocks (60s refresh)
+  Nightly sync:  cron 0 0 * * 0
+
+  Layers: memory-core (files) → Mem0 (facts) → Letta (state+archival)
+  Recall: wb recall <query> searches all 3 in parallel
+```
+
+**Memory:** Not logged (diagnostic command).
+
+---
+
+#### `wb sync`
+
+Manually trigger memory sync (normally runs weekly via cron on Sunday midnight PT):
+- Mem0 facts → append new facts to `MEMORY.md` (dedup)
+- Letta blocks → snapshot to `BUSINESS_STATE.md`
+- memory-core auto-re-indexes on file changes
+
+```bash
+$ wb sync
+Running memory sync...
+[memory-sync] Mem0: 80 total facts, 3 new appended to MEMORY.md
+[memory-sync] Letta: 4 blocks snapshot → BUSINESS_STATE.md
+[memory-sync] Sync complete. memory-core will auto-re-index on file changes.
+Done.
+```
+
+**Memory:** Not logged (maintenance command).
+
+---
+
 ### System Commands
 
 #### `wb health`
@@ -312,18 +372,26 @@ $ wb health
 
 ── Memory Sync Daemon ──
   Status:       ok
-  Cache facts:  12
+  Cache facts:  80
   Cache blocks: 4
-  Total syncs:  847
+  Total syncs:  1582
   Uptime:       19h32m
 
 ── Mem0 ──
   Status:   running (port 8200)
-  Memories: 12
-  Embedder: BAAI/bge-base-en-v1.5
+  Memories: 80
+  Embedder: fastembed/bge-base-en-v1.5
 
 ── Letta ──
   Status: running (port 8283)
+  Blocks:   4 [goals, human, kpis, business_stage]
+  Embedder: text-embedding-3-small (1536 dims)
+  Archival: 6 passages
+
+── Scoreboard ──
+  Status:  running (port 8100)
+  Score:   21/100
+  Ships:   3 today
 
 ── Cloudflare Tunnel ──
   Status: active (helm.wirebot.chat)
@@ -344,8 +412,9 @@ SERVICE                        STATUS
 openclaw-gateway               active
 mem0-wirebot                   active
 wirebot-memory-syncd           active
+wirebot-scoreboard             active
 cloudflared-wirebot            active
-letta-wirebot (podman)         letta-wirebot Up 19 hours
+letta-wirebot (podman)         letta-wirebot Up 43 hours
 ```
 
 **Memory:** Not logged (diagnostic command).
@@ -386,6 +455,201 @@ $ wb pillars
 
 ---
 
+### Pairing Commands
+
+Wirebot's pairing protocol is a 22-question conversational onboarding. Until pairing is complete, Wirebot nudges before every command.
+
+#### `wb pair`
+
+Start or resume the pairing conversation. Shows instructions to open the scoreboard chat.
+
+#### `wb pair status`
+
+Show pairing progress: score, phase, questions answered/remaining.
+
+```bash
+$ wb pair status
+⚡ Pairing Status
+  Paired:    false
+  Score:     0%
+  Phase:     0 of 4
+  Answered:  0 / 22 questions
+```
+
+#### `wb pair skip`
+
+Dismiss the pairing nudge for 4 hours.
+
+#### `wb pair reset`
+
+Revoke pairing and clear all personalization (destructive — requires confirmation).
+
+---
+
+### Business Commands
+
+Wirebot is operator-centric, not business-centric. These commands manage the multi-business portfolio.
+
+#### `wb overview`
+
+Operator-level view — all businesses with health scores and focus recommendation.
+
+#### `wb businesses` (alias: `wb biz`)
+
+List all tracked businesses with health scores.
+
+#### `wb focus <name>`
+
+Switch active business context. Changes which tasks appear in `wb status/next/daily`.
+
+#### `wb add-business <name>`
+
+Add a new business to the portfolio. Flags: `--stage`, `--priority`, `--domain`.
+
+---
+
+### Scoreboard Commands
+
+The Business Performance Scoreboard lives at `wins.wirebot.chat`. These commands interact with it from the CLI.
+
+#### `wb score [date]`
+
+Today's execution score with lane breakdown.
+
+```bash
+$ wb score
+⚡ EXECUTION SCORE: 21
+  SHIPPING:     15/40
+  DISTRIBUTION: 0/25
+  REVENUE:      5/20
+  SYSTEMS:      1/15
+  Ships today:  3
+  Intent:       🎯 Wire all fallback models + fix scoreboard issues
+  Result:       ❌ LOSS
+```
+
+#### `wb streak`
+
+Current and best ship streaks.
+
+```bash
+$ wb streak
+🔥 STREAK: 2 days
+  Best ever: 2 days
+  Last ship: 2026-02-02
+```
+
+#### `wb season`
+
+Season progress, record, and average score.
+
+```bash
+$ wb season
+📅 SEASON 1: Red-to-Black
+  Feb 01 → May 01 (Day 1 of 88)
+  Record: 0W-2L
+  Avg:    30/day
+  Total:  61 pts
+```
+
+#### `wb feed [n]`
+
+Activity feed — last n events (default 15).
+
+#### `wb ship "<title>" [--lane <lane>] [--url <url>]`
+
+Log a ship event. Adds points to the scoreboard.
+
+```bash
+$ wb ship "Memory architecture fixes complete" --lane systems
+✅ Shipped: Memory architecture fixes complete (+5 systems)
+```
+
+#### `wb submit "<title>" [--lane <lane>] [--url <url>]`
+
+Submit a gated event (pending operator approval before it scores).
+
+#### `wb pending`
+
+List events awaiting approval.
+
+#### `wb approve <event-id>`
+
+Approve a pending event (it now scores).
+
+#### `wb reject <event-id>`
+
+Reject a pending event (removed from scoring).
+
+#### `wb intent "<text>"`
+
+Declare today's shipping intent. Without an argument, shows current intent.
+
+```bash
+$ wb intent "Complete memory fixes and update docs"
+🎯 Intent set: Complete memory fixes and update docs
+```
+
+#### `wb audit [lane]`
+
+Full audit trail with score derivation. Optionally filter by lane.
+
+#### `wb lock [date]`
+
+Lock end-of-day score and check intent fulfillment.
+
+#### `wb card daily|weekly|season`
+
+Open a social share card (SVG) for the specified period.
+
+#### `wb scoreboard` (alias: `wb wins`)
+
+Quick scoreboard view — combined score + streak + season.
+
+---
+
+### Discovery Commands
+
+The Git Discovery Engine tracks VPS repositories and auto-discovers commits for scoreboard scoring.
+
+#### `wb discover scan`
+
+Scan VPS for git repositories. Discovers new repos not yet tracked.
+
+#### `wb discover watch`
+
+Check tracked repos for new commits. Runs every 5 minutes via cron.
+
+#### `wb discover status`
+
+Show tracked repos and pending discovery events.
+
+#### `wb discover backfill [n]`
+
+Discover commits from the last n days (default 7).
+
+#### `wb projects`
+
+List all discovered projects with approval status.
+
+```bash
+$ wb projects
+PROJECT                        STATUS     COMMITS
+wirebot-core                   approved   58
+Startempire-Wire-Network       pending    12
+focusa                         pending    3
+```
+
+#### `wb approve-project <name>`
+
+Approve a project — bulk-approves all pending commits and auto-approves future commits.
+
+#### `wb reject-project <name>`
+
+Reject a project — bulk-rejects pending commits and silently skips future commits.
+
+---
+
 ### Advanced Commands
 
 #### `wb raw <tool> '<json-args>'`
@@ -403,10 +667,11 @@ $ wb raw wirebot_remember '{"fact":"Launched beta on March 15"}'
 
 | Tool | Description |
 |------|-------------|
-| `wirebot_checklist` | Business Setup Checklist Engine |
-| `wirebot_recall` | Cascading memory search |
-| `wirebot_remember` | Store fact to long-term memory |
+| `wirebot_recall` | Search all memory layers (Mem0 facts + Letta blocks + Letta archival) |
+| `wirebot_remember` | Store fact to long-term memory (Mem0 LLM extraction) |
 | `wirebot_business_state` | Read/update Letta business state blocks |
+| `wirebot_checklist` | Business Setup Checklist Engine (64 tasks, 3 stages) |
+| `wirebot_score` | Submit scoreboard events (gated, pending approval) |
 
 **Memory:** Logged to `cli.jsonl` AND stored to Mem0 (significant action).
 
@@ -524,40 +789,45 @@ wb recall "completed task"
 ┌─────────────────────────────────────────────────────────────┐
 │                        wb CLI                               │
 │                   /usr/local/bin/wb                          │
-└──────────────────────┬──────────────────────────────────────┘
-                       │ HTTP POST /tools/invoke
-                       ▼
-┌─────────────────────────────────────────────────────────────┐
-│              OpenClaw Gateway (:18789)                       │
-│         systemd: openclaw-gateway.service                   │
-│                                                             │
-│  Tools:                                                     │
-│    wirebot_recall ──→ Go cache (:8201) → Mem0 → Letta     │
-│    wirebot_remember ──→ Mem0 (:8200)                       │
-│    wirebot_business_state ──→ Letta (:8283)                │
-│    wirebot_checklist ──→ local checklist.json               │
-└─────────────────────────────────────────────────────────────┘
-                       │
-        ┌──────────────┼──────────────┐
-        ▼              ▼              ▼
-  ┌──────────┐  ┌──────────┐  ┌──────────────┐
-  │ Go Syncd │  │  Mem0    │  │    Letta     │
-  │  :8201   │  │  :8200   │  │    :8283     │
-  │ hot cache│  │ fastembed│  │  PostgreSQL  │
-  │ file watch│ │ Qdrant   │  │  4 blocks    │
-  └──────────┘  └──────────┘  └──────────────┘
-        │
-        ▼
-  ┌──────────────────────┐
-  │  /home/wirebot/clawd │
-  │  ├── memory/         │
-  │  │   ├── cli.jsonl   │  ← wb CLI log
-  │  │   └── 2026-*.md   │  ← daily logs
-  │  ├── IDENTITY.md     │
-  │  ├── SOUL.md         │
-  │  ├── checklist.json  │
-  │  └── ...             │
-  └──────────────────────┘
+└──────────────────────┬──────────────┬───────────────────────┘
+                       │              │
+          /tools/invoke│              │ HTTP direct
+                       ▼              ▼
+┌──────────────────────────┐  ┌──────────────────────────────┐
+│  OpenClaw Gateway (:18789)│  │  Scoreboard API (:8100)      │
+│  systemd: openclaw-gateway│  │  systemd: wirebot-scoreboard │
+│                          │  │  SQLite event store           │
+│  5 Tools:                │  │  14+ endpoints                │
+│   wirebot_recall ─┐      │  │  Chat proxy → Gateway         │
+│   wirebot_remember│      │  │  Integration pollers (8)      │
+│   wirebot_state  ─┤→ mem │  │  Tenant manager               │
+│   wirebot_checklist│     │  └──────────────────────────────┘
+│   wirebot_score ──┘      │
+└──────────────────────────┘
+           │
+  ┌────────┼────────┬────────────┐
+  ▼        ▼        ▼            ▼
+┌────────┐┌──────┐┌──────────┐┌──────────────┐
+│Go Syncd││ Mem0 ││  Letta   ││ memory-core  │
+│ :8201  ││:8200 ││  :8283   ││ (embedded)   │
+│hot     ││fast- ││4 blocks  ││ BM25+vector  │
+│cache   ││embed ││6 archival││ workspace    │
+│60s     ││Qdrant││PostgreSQL││ files        │
+│refresh ││80+   ││agent LLM ││              │
+└────────┘└──────┘└──────────┘└──────────────┘
+     │
+     ▼
+┌──────────────────────────┐
+│  /home/wirebot/clawd     │
+│  ├── memory/cli.jsonl    │  ← wb CLI log
+│  ├── memory/2026-*.md    │  ← daily logs
+│  ├── IDENTITY.md         │  ← agent identity
+│  ├── SOUL.md             │  ← 12 pillars
+│  ├── MEMORY.md           │  ← synced Mem0 facts
+│  ├── BUSINESS_STATE.md   │  ← synced Letta blocks
+│  ├── pairing.json        │  ← pairing progress
+│  └── checklist.json      │  ← task state
+└──────────────────────────┘
 ```
 
 ---
@@ -568,13 +838,21 @@ wb recall "completed task"
 |---------|----------|-------|
 | Gateway URL | hardcoded in `wb` | `http://127.0.0.1:18789` |
 | Gateway token | hardcoded in `wb` | `65b918ba-...` |
+| Scoreboard URL | hardcoded in `wb` | `http://127.0.0.1:8100` |
 | Sync daemon URL | hardcoded in `wb` | `http://127.0.0.1:8201` |
 | Gateway config | `/data/wirebot/users/verious/openclaw.json` | Full OpenClaw config |
-| Auth profiles | `.../agents/verious/agent/auth-profiles.json` | OpenRouter API key |
+| Auth profiles | `.../agents/verious/agent/auth-profiles.json` | Kimi + ZAI + OpenRouter keys |
+| Gateway secrets | `/run/wirebot/gateway.env` (tmpfs) | Injected by ExecStartPre |
+| Scoreboard secrets | `/run/wirebot/scoreboard.env` (tmpfs) | Token, RL JWT secret |
 | CLI memory log | `/home/wirebot/clawd/memory/cli.jsonl` | Append-only JSONL |
 | Gateway log | `/home/wirebot/logs/openclaw-gateway.log` | Rotating log |
 | Checklist data | `/home/wirebot/clawd/checklist.json` | 64 seed tasks |
+| Pairing state | `/home/wirebot/clawd/pairing.json` | 22-question progress |
 | Workspace | `/home/wirebot/clawd/` | Agent workspace root |
+| Memory sync script | `/data/wirebot/bin/memory-sync.sh` | Weekly cron (Sun midnight PT) |
+| Discovery script | `/data/wirebot/bin/wb-discover` | Git commit scanner |
+| Scoreboard DB | `/data/wirebot/scoreboard/events.db` | SQLite event store |
+| Tenant DBs | `/data/wirebot/scoreboard/tenants/{randID}/events.db` | Per-member DBs |
 
 ---
 
