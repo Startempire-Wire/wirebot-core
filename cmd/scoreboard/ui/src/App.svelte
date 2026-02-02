@@ -7,6 +7,7 @@
   import Nav from './lib/Nav.svelte';
   import Hints from './lib/Hints.svelte';
   import Chat from './lib/Chat.svelte';
+  import Profile from './lib/Profile.svelte';
 
   let view = $state('score');
   let data = $state(null);
@@ -669,6 +670,8 @@
         <Score {data} {lastUpdate} onHelp={() => showHints = true} user={loggedInUser} />
       {:else if view === 'feed'}
         <Feed items={feed} pendingCount={data?.pending_count || 0} onHelp={() => showHints = true} />
+      {:else if view === 'profile'}
+        <Profile apiBase={window.location.origin} token={getToken()} />
       {:else if view === 'season'}
         <Season season={data.season} {history} streak={data.streak} onHelp={() => showHints = true} />
       {:else if view === 'wrapped'}
