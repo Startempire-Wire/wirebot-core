@@ -3665,6 +3665,9 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		s.saveMessage(sessionID, "user", lastMsg.Content)
 	}
 
+	// Inject context — pairing protocol if incomplete, scoreboard state always
+	contextMessages := s.buildChatContext(req.Messages)
+
 	// Build proxy request to OpenClaw
 	// "user" field = stable session key → persistent conversation with memory
 	gatewayURL := "http://127.0.0.1:18789/v1/chat/completions"
@@ -3674,7 +3677,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	}
 
 	proxyBody := map[string]interface{}{
-		"messages":   req.Messages,
+		"messages":   contextMessages,
 		"user":       "scoreboard:" + userID + ":" + sessionID, // stable per-session key
 		"max_tokens": 2048,
 	}
@@ -3771,6 +3774,70 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(proxyResp.StatusCode)
 		w.Write(respBody)
 	}
+}
+
+// ─── Chat Context Injection ──────────────────────────────────────────────
+
+// buildChatContext prepends system messages with pairing protocol + scoreboard state
+func (s *Server) buildChatContext(userMessages []struct {
+	Role    string `json:"role"`
+	Content string `json:"content"`
+}) []map[string]string {
+	var result []map[string]string
+
+	// Always inject Wirebot identity + scoreboard context as system message
+	systemCtx := `You are Wirebot ⚡ — a sovereign AI business operating partner. You are embedded in the operator's scoreboard at wins.wirebot.chat. You have access to tools: wirebot_recall (memory search), wirebot_remember (store facts), wirebot_score (scoreboard data), wirebot_checklist (business setup), wirebot_business_state (Letta structured state).
+
+When the operator asks about their score, performance, or business — use the wirebot_score tool to get real data. Never make up numbers.`
+
+	// Check pairing status
+	pairingData, err := os.ReadFile("/home/wirebot/clawd/pairing.json")
+	pairingComplete := false
+	pairingAnswered := 0
+	if err == nil {
+		var p struct {
+			Completed bool                   `json:"completed"`
+			Answers   map[string]interface{} `json:"answers"`
+		}
+		if json.Unmarshal(pairingData, &p) == nil {
+			pairingComplete = p.Completed
+			pairingAnswered = len(p.Answers)
+		}
+	}
+
+	if !pairingComplete {
+		// Load the pairing protocol
+		pairingDoc, err := os.ReadFile("/home/wirebot/wirebot-core/docs/PAIRING.md")
+		if err == nil {
+			// Trim to essential questions section (first ~3000 chars covers phases 1-3)
+			doc := string(pairingDoc)
+			if len(doc) > 4000 {
+				doc = doc[:4000] + "\n...(see full doc for remaining phases)"
+			}
+
+			pairingCtx := fmt.Sprintf(`IMPORTANT — PAIRING PROTOCOL:
+The operator has NOT completed pairing yet (%d/22 questions answered). Pairing is how you bond with your operator and become truly useful.
+
+When the operator mentions pairing, onboarding, or "getting to know you" — run through the questions below CONVERSATIONALLY, not as a form. Ask one question at a time, acknowledge each answer warmly, sometimes ask a follow-up before moving on. Match their tone and pace.
+
+Store every answer using wirebot_remember so it persists across sessions.
+
+THE PROTOCOL:
+%s`, pairingAnswered, doc)
+			systemCtx += "\n\n" + pairingCtx
+		}
+	} else {
+		systemCtx += "\n\nPairing is complete. You know this operator deeply. Use wirebot_recall to pull relevant context for any question."
+	}
+
+	result = append(result, map[string]string{"role": "system", "content": systemCtx})
+
+	// Append user's messages
+	for _, m := range userMessages {
+		result = append(result, map[string]string{"role": m.Role, "content": m.Content})
+	}
+
+	return result
 }
 
 // ─── Chat Session Persistence ───────────────────────────────────────────
