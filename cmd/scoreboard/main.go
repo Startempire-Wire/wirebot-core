@@ -1074,8 +1074,9 @@ func (s *Server) postEvent(w http.ResponseWriter, r *http.Request) {
 		"woo-poller":      true,
 		"uptime-poller":   true,
 		"posthog-poller":  true,
-		"discord-poller":  true,
-		"automated":       true,
+		"discord-poller":       true,
+		"automated":            true,
+		"memberpress-webhook":  true,
 	}
 	status := "pending"
 	if trustedSources[evt.Source] {
