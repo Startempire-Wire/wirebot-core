@@ -767,11 +767,6 @@ func (s *Server) postEvent(w http.ResponseWriter, r *http.Request) {
 		evt.Confidence = 1.0
 	}
 
-	status := "approved"
-	if evt.Status == "pending" {
-		status = "pending"
-	}
-
 	// Determine verification level from source
 	verLevel := evt.VerificationLevel
 	if verLevel == "" {
@@ -787,6 +782,24 @@ func (s *Server) postEvent(w http.ResponseWriter, r *http.Request) {
 		default:
 			verLevel = "SELF_REPORTED"
 		}
+	}
+
+	// Auto-approve ONLY trusted automated sources.
+	// Everything else is gated (pending) until operator approves.
+	// This prevents gaming — you can't self-report your way to a high score.
+	trustedSources := map[string]bool{
+		"github-webhook": true,
+		"stripe-webhook": true,
+		"rss-poller":     true,
+		"youtube-poller": true,
+	}
+	status := "pending"
+	if trustedSources[evt.Source] {
+		status = "approved"
+	}
+	// Explicit override: caller can request pending even for trusted sources
+	if evt.Status == "pending" {
+		status = "pending"
 	}
 
 	scoreDelta := calcScoreDelta(evt.Lane, evt.EventType, evt.Confidence)
