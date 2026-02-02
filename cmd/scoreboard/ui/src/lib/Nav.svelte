@@ -1,6 +1,6 @@
 <script>
   import { createEventDispatcher } from 'svelte';
-  let { active } = $props();
+  let { active, pendingCount = 0 } = $props();
   const dispatch = createEventDispatcher();
 
   const tabs = [
@@ -18,7 +18,12 @@
       class="tab {active === tab.id ? 'active' : ''}"
       onclick={() => dispatch('nav', tab.id)}
     >
-      <span class="tab-icon">{tab.icon}</span>
+      <span class="tab-icon">
+        {tab.icon}
+        {#if tab.id === 'feed' && pendingCount > 0}
+          <span class="nav-badge">{pendingCount > 99 ? '99+' : pendingCount}</span>
+        {/if}
+      </span>
       <span class="tab-label">{tab.label}</span>
     </button>
   {/each}
@@ -54,6 +59,24 @@
   }
 
   .tab.active { color: #7c7cff; }
-  .tab-icon { font-size: 18px; }
+  .tab-icon { font-size: 18px; position: relative; }
   .tab-label { font-size: 9px; letter-spacing: 0.05em; }
+
+  .nav-badge {
+    position: absolute;
+    top: -6px;
+    right: -10px;
+    min-width: 16px;
+    height: 16px;
+    padding: 0 4px;
+    border-radius: 8px;
+    background: #ff4444;
+    color: white;
+    font-size: 9px;
+    font-weight: 700;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    line-height: 1;
+  }
 </style>

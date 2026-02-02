@@ -135,7 +135,7 @@
       {#if view === 'score'}
         <Score {data} {lastUpdate} onHelp={() => showHints = true} />
       {:else if view === 'feed'}
-        <Feed items={feed} onHelp={() => showHints = true} />
+        <Feed items={feed} pendingCount={data?.pending_count || 0} onHelp={() => showHints = true} />
       {:else if view === 'season'}
         <Season season={data.season} {history} streak={data.streak} onHelp={() => showHints = true} />
       {:else if view === 'wrapped'}
@@ -208,7 +208,7 @@
       </button>
     {/if}
 
-    <Nav active={view} on:nav={handleNav} />
+    <Nav active={view} pendingCount={data?.pending_count || 0} on:nav={handleNav} />
 
     <!-- Hints panel -->
     <Hints bind:visible={showHints} />

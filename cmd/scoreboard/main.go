@@ -183,16 +183,17 @@ type LanesView struct {
 }
 
 type FeedItem struct {
-	ID         string `json:"id"`
-	Type       string `json:"type"`
-	Lane       string `json:"lane"`
-	Source     string `json:"source"`
-	Timestamp  string `json:"timestamp"`
-	Title      string `json:"title"`
-	Delta      int    `json:"score_delta"`
-	Icon       string `json:"icon"`
-	URL        string `json:"url,omitempty"`
+	ID         string  `json:"id"`
+	Type       string  `json:"type"`
+	Lane       string  `json:"lane"`
+	Source     string  `json:"source"`
+	Timestamp  string  `json:"timestamp"`
+	Title      string  `json:"title"`
+	Delta      int     `json:"score_delta"`
+	Icon       string  `json:"icon"`
+	URL        string  `json:"url,omitempty"`
 	Confidence float64 `json:"confidence"`
+	Status     string  `json:"status"`
 }
 
 // ─── Server ─────────────────────────────────────────────────────────────────
@@ -1182,7 +1183,7 @@ func (s *Server) handleScoreboard(w http.ResponseWriter, r *http.Request) {
 
 	// Dashboard mode: include today's feed
 	if mode == "dashboard" || mode == "mobile" {
-		feed := s.getFeedItems(20, today, "")
+		feed := s.getFeedItems(20, today, "", "approved")
 		json.NewEncoder(w).Encode(map[string]interface{}{
 			"scoreboard": view, "feed": feed,
 		})
@@ -1198,18 +1199,28 @@ func (s *Server) handleFeed(w http.ResponseWriter, r *http.Request) {
 	cors(w)
 	date := r.URL.Query().Get("date")
 	lane := r.URL.Query().Get("lane")
+	status := r.URL.Query().Get("status") // "pending", "approved", "rejected", or "" (all)
 	limitStr := r.URL.Query().Get("limit")
 	limit := 30
 	if l, err := strconv.Atoi(limitStr); err == nil && l > 0 && l <= 200 {
 		limit = l
 	}
 
-	items := s.getFeedItems(limit, date, lane)
-	json.NewEncoder(w).Encode(map[string]interface{}{"items": items, "count": len(items)})
+	items := s.getFeedItems(limit, date, lane, status)
+
+	// Also return pending count for badge display
+	var pendingCount int
+	s.db.QueryRow("SELECT COUNT(*) FROM events WHERE status='pending'").Scan(&pendingCount)
+
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"items":         items,
+		"count":         len(items),
+		"pending_count": pendingCount,
+	})
 }
 
-func (s *Server) getFeedItems(limit int, date, lane string) []FeedItem {
-	query := `SELECT id, event_type, lane, source, timestamp, artifact_title, artifact_url, score_delta, confidence
+func (s *Server) getFeedItems(limit int, date, lane, status string) []FeedItem {
+	query := `SELECT id, event_type, lane, source, timestamp, artifact_title, artifact_url, score_delta, confidence, status
 		FROM events WHERE 1=1`
 	args := []interface{}{}
 	if date != "" {
@@ -1219,6 +1230,10 @@ func (s *Server) getFeedItems(limit int, date, lane string) []FeedItem {
 	if lane != "" {
 		query += " AND lane = ?"
 		args = append(args, lane)
+	}
+	if status != "" {
+		query += " AND status = ?"
+		args = append(args, status)
 	}
 	query += " ORDER BY timestamp DESC LIMIT ?"
 	args = append(args, limit)
@@ -1233,7 +1248,7 @@ func (s *Server) getFeedItems(limit int, date, lane string) []FeedItem {
 	var items []FeedItem
 	for rows.Next() {
 		var f FeedItem
-		rows.Scan(&f.ID, &f.Type, &f.Lane, &f.Source, &f.Timestamp, &f.Title, &f.URL, &f.Delta, &f.Confidence)
+		rows.Scan(&f.ID, &f.Type, &f.Lane, &f.Source, &f.Timestamp, &f.Title, &f.URL, &f.Delta, &f.Confidence, &f.Status)
 		f.Icon = icons[f.Lane]
 		if f.Icon == "" {
 			f.Icon = "📌"
