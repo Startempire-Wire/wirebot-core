@@ -32,11 +32,10 @@
 
       projects = (projData.projects || []).filter(p => p.pending > 0 || p.status !== 'pending');
 
-      // Group events by project name (parsed from title prefix "[name] ...")
+      // Group events by inferred project name
       const grouped = {};
       for (const evt of (evtData.items || [])) {
-        const match = (evt.title || '').match(/^\[([^\]]+)\]/);
-        const proj = match ? match[1] : 'other';
+        const proj = inferProjectClient(evt);
         if (!grouped[proj]) grouped[proj] = [];
         grouped[proj].push(evt);
       }
@@ -181,6 +180,46 @@
   function statusIcon(s) {
     return { approved: '✅', rejected: '❌' }[s] || '⏳';
   }
+  // Infer project from event signals — mirrors server-side inferProject
+  const ghRepoMap = {
+    'wirebot-core': 'wirebot-core', 'focusa': 'focusa',
+    'Startempire-Wire-Network': 'chrome-extension',
+    'Startempire-Wire-Network-Ring-Leader': 'ring-leader',
+    'Startempire-Wire-Network-Connect': 'connect-plugin',
+    'Startempire-Wire-Network-Parent-Core': 'parent-core',
+    'Startempire-Wire-Network-Websockets': 'websockets',
+    'Startempire-Wire-Network-Screenshots': 'screenshots',
+  };
+
+  function inferProjectClient(evt) {
+    const title = evt.title || '';
+    const url = evt.url || '';
+    const source = evt.source || '';
+
+    // 1. Title prefix [name]
+    const m = title.match(/^\[([^\]]+)\]/);
+    if (m) return m[1];
+
+    // 2. GitHub URL
+    const gh = url.match(/github\.com\/([^/]+)\/([^/]+)/);
+    if (gh) {
+      const repo = gh[2].replace('.git', '');
+      return ghRepoMap[repo] || repo.toLowerCase();
+    }
+
+    // 3. URL domain
+    if (url.includes('startempirewire.com')) return 'startempirewire.com';
+    if (url.includes('startempirewire.network')) return 'startempirewire.network';
+    if (url.includes('wirebot.chat')) return 'wirebot';
+
+    // 4. Source fallback
+    if (source === 'github-webhook') return 'github';
+    if (source === 'rss-poller') return 'rss-content';
+    if (source === 'stripe-webhook') return 'stripe';
+
+    return 'other';
+  }
+
   function commitMsg(title, projName) {
     // Strip "[project-name] " prefix for cleaner display
     return (title || '').replace(`[${projName}] `, '');

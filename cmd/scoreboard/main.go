@@ -17,6 +17,7 @@ import (
 	"math"
 	"net/http"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -1669,6 +1670,91 @@ func (s *Server) handleGitHubWebhook(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]interface{}{"ok": true, "event_id": id, "event_type": evtType, "score_delta": scoreDelta})
 }
 
+// ─── Project Inference ──────────────────────────────────────────────────────
+// Infer project name from whatever signals an event has: metadata, title, URL, source.
+// This prevents "unknown" buckets when metadata is missing or sparse.
+
+// inferProject determines the project name for an event using all available signals.
+func inferProject(metadata, title, artifactURL, source string) string {
+	// 1. Best: explicit repo in metadata
+	if metadata != "" && metadata != "{}" {
+		var meta map[string]interface{}
+		if json.Unmarshal([]byte(metadata), &meta) == nil {
+			if repo, ok := meta["repo"].(string); ok && repo != "" {
+				return repo
+			}
+		}
+	}
+
+	// 2. Title prefix pattern: "[project-name] commit message"
+	if len(title) > 2 && title[0] == '[' {
+		end := strings.Index(title, "]")
+		if end > 1 {
+			return title[1:end]
+		}
+	}
+
+	// 3. GitHub URL patterns
+	if strings.Contains(artifactURL, "github.com/") {
+		// https://github.com/Org/Repo/commit/sha or /releases/tag/v1
+		parts := strings.Split(artifactURL, "/")
+		for i, p := range parts {
+			if p == "github.com" && i+2 < len(parts) {
+				repo := parts[i+2] // Org/Repo — take repo name
+				// Clean common suffixes
+				repo = strings.TrimSuffix(repo, ".git")
+				// Map known GitHub repos to short names
+				return inferGitHubShortName(parts[i+1], repo)
+			}
+		}
+	}
+
+	// 4. URL domain patterns
+	if strings.Contains(artifactURL, "startempirewire.com") {
+		return "startempirewire.com"
+	}
+	if strings.Contains(artifactURL, "startempirewire.network") {
+		return "startempirewire.network"
+	}
+	if strings.Contains(artifactURL, "wirebot.chat") {
+		return "wirebot"
+	}
+
+	// 5. Source-based fallback
+	switch source {
+	case "github-webhook":
+		return "github" // generic but better than unknown
+	case "rss-poller":
+		return "rss-content"
+	case "stripe-webhook":
+		return "stripe"
+	case "youtube-poller":
+		return "youtube"
+	}
+
+	return "other"
+}
+
+// inferGitHubShortName maps GitHub org/repo to a human-friendly project name.
+func inferGitHubShortName(org, repo string) string {
+	// Known mappings
+	knownRepos := map[string]string{
+		"wirebot-core":                              "wirebot-core",
+		"focusa":                                    "focusa",
+		"Startempire-Wire-Network":                  "chrome-extension",
+		"Startempire-Wire-Network-Ring-Leader":      "ring-leader",
+		"Startempire-Wire-Network-Connect":          "connect-plugin",
+		"Startempire-Wire-Network-Parent-Core":      "parent-core",
+		"Startempire-Wire-Network-Websockets":       "websockets",
+		"Startempire-Wire-Network-Screenshots":      "screenshots",
+	}
+	if short, ok := knownRepos[repo]; ok {
+		return short
+	}
+	// Fallback: use repo name as-is (lowercase)
+	return strings.ToLower(repo)
+}
+
 // ─── Project-Level Approval ──────────────────────────────────────────────────
 // Projects group events by repo. Approving a project bulk-approves all its
 // pending events AND auto-approves future discoveries for that project.
@@ -1678,20 +1764,9 @@ func (s *Server) handleProjects(w http.ResponseWriter, r *http.Request) {
 
 	switch r.Method {
 	case "GET":
-		// List projects with event counts, grouped from events + projects table
-		rows, err := s.db.Query(`
-			SELECT 
-				COALESCE(json_extract(e.metadata, '$.repo'), 'unknown') as repo,
-				COALESCE(json_extract(e.metadata, '$.repo_path'), '') as repo_path,
-				COUNT(*) as total,
-				SUM(CASE WHEN e.status='pending' THEN 1 ELSE 0 END) as pending,
-				SUM(CASE WHEN e.status='approved' THEN 1 ELSE 0 END) as approved,
-				SUM(CASE WHEN e.status='rejected' THEN 1 ELSE 0 END) as rejected,
-				e.lane
-			FROM events e
-			WHERE e.source = 'git-discovery'
-			GROUP BY repo
-			ORDER BY pending DESC, total DESC`)
+		// List projects using inferProject for intelligent grouping.
+		// Scans ALL events so webhooks, RSS, etc. also group properly.
+		rows, err := s.db.Query(`SELECT metadata, artifact_title, artifact_url, source, status, lane FROM events`)
 		if err != nil {
 			http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err), 500)
 			return
@@ -1699,45 +1774,82 @@ func (s *Server) handleProjects(w http.ResponseWriter, r *http.Request) {
 		defer rows.Close()
 
 		type ProjectView struct {
-			Name         string `json:"name"`
-			Path         string `json:"path"`
-			Business     string `json:"business"`
-			GitHub       string `json:"github"`
-			Status       string `json:"status"`       // pending, approved, rejected
-			AutoApprove  bool   `json:"auto_approve"`
-			Total        int    `json:"total_events"`
-			Pending      int    `json:"pending"`
-			Approved     int    `json:"approved"`
-			Rejected     int    `json:"rejected"`
-			Lane         string `json:"primary_lane"`
+			Name        string   `json:"name"`
+			Path        string   `json:"path"`
+			Business    string   `json:"business"`
+			GitHub      string   `json:"github"`
+			Status      string   `json:"status"`
+			AutoApprove bool     `json:"auto_approve"`
+			Total       int      `json:"total_events"`
+			Pending     int      `json:"pending"`
+			Approved    int      `json:"approved"`
+			Rejected    int      `json:"rejected"`
+			Lane        string   `json:"primary_lane"`
+			Sources     []string `json:"sources,omitempty"`
 		}
 
-		var projects []ProjectView
+		projMap := map[string]*ProjectView{}
+		srcMap := map[string]map[string]bool{}
+
 		for rows.Next() {
-			var p ProjectView
-			rows.Scan(&p.Name, &p.Path, &p.Total, &p.Pending, &p.Approved, &p.Rejected, &p.Lane)
+			var metadata, title, url, source, status, lane string
+			rows.Scan(&metadata, &title, &url, &source, &status, &lane)
 
-			// Enrich from projects table
-			var status string
-			var autoApprove bool
-			var business, github string
-			err := s.db.QueryRow("SELECT status, auto_approve, business, github FROM projects WHERE name=?", p.Name).Scan(&status, &autoApprove, &business, &github)
-			if err == nil {
-				p.Status = status
-				p.AutoApprove = autoApprove
-				p.Business = business
-				p.GitHub = github
-			} else {
-				p.Status = "pending" // not yet in projects table
+			projName := inferProject(metadata, title, url, source)
+
+			pv, exists := projMap[projName]
+			if !exists {
+				pv = &ProjectView{Name: projName, Lane: lane}
+				projMap[projName] = pv
+				srcMap[projName] = map[string]bool{}
 			}
-
-			projects = append(projects, p)
+			pv.Total++
+			srcMap[projName][source] = true
+			switch status {
+			case "pending":
+				pv.Pending++
+			case "approved":
+				pv.Approved++
+			case "rejected":
+				pv.Rejected++
+			}
 		}
-		if projects == nil {
-			projects = []ProjectView{}
+
+		// Enrich from projects table + build final list
+		var projects []ProjectView
+		for name, pv := range projMap {
+			var dbStatus string
+			var autoApprove bool
+			var business, github, path string
+			err := s.db.QueryRow("SELECT status, auto_approve, business, github, path FROM projects WHERE name=?", name).Scan(&dbStatus, &autoApprove, &business, &github, &path)
+			if err == nil {
+				pv.Status = dbStatus
+				pv.AutoApprove = autoApprove
+				pv.Business = business
+				pv.GitHub = github
+				pv.Path = path
+			} else {
+				if pv.Pending > 0 {
+					pv.Status = "pending"
+				} else if pv.Approved > 0 {
+					pv.Status = "inferred"
+				}
+			}
+			var sources []string
+			for src := range srcMap[name] {
+				sources = append(sources, src)
+			}
+			pv.Sources = sources
+			projects = append(projects, *pv)
 		}
 
-		// Also get pending count for badge
+		sort.Slice(projects, func(i, j int) bool {
+			if projects[i].Pending != projects[j].Pending {
+				return projects[i].Pending > projects[j].Pending
+			}
+			return projects[i].Total > projects[j].Total
+		})
+
 		var pendingCount int
 		s.db.QueryRow("SELECT COUNT(*) FROM events WHERE status='pending'").Scan(&pendingCount)
 
