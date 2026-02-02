@@ -24,6 +24,7 @@
   let showChat = $state(false);
   let showPairing = $state(false);
   let pairingInstrument = $state('');
+  let showProfile = $state(false);
   let eqBars = $state([]);
   let eqScore = $state(0);
   let eqLevel = $state('');
@@ -780,7 +781,7 @@
                 {/if}
 
                 <!-- Founder Profile Equalizer (inside profile card) -->
-                <div class="eq-strip" onclick={() => showPairing = true}>
+                <div class="eq-strip" onclick={() => showProfile = true}>
                   <div class="eq-label">
                     <span>🧬 Founder Profile</span>
                     <span class="eq-arrow">→</span>
@@ -1109,6 +1110,26 @@
             </div>
             <div class="pi-footer">Takes ~10 minutes total. You can do them one at a time.</div>
           {/if}
+        </div>
+      </div>
+    {/if}
+
+    <!-- Profile Modal (full equalizer view) -->
+    {#if showProfile}
+      <div class="pairing-overlay" role="dialog" aria-label="Founder Profile">
+        <div class="pairing-backdrop" onclick={() => showProfile = false} role="presentation"></div>
+        <div class="pairing-content">
+          <div class="pi-header">
+            <button class="pi-close" onclick={() => showProfile = false}>✕</button>
+            <h2 class="pi-title">🧬 Founder Profile</h2>
+          </div>
+          <div class="profile-scroll">
+            <Profile
+              apiBase=""
+              token={localStorage.getItem('wb_token') || localStorage.getItem('rl_jwt') || localStorage.getItem('operator_token') || ''}
+              onAssess={(id) => { showProfile = false; pairingInstrument = id; showPairing = true; }}
+            />
+          </div>
         </div>
       </div>
     {/if}
@@ -1685,6 +1706,18 @@
   @keyframes pairingFadeIn {
     from { opacity: 0; transform: translateY(24px); }
     to { opacity: 1; transform: translateY(0); }
+  }
+  .pairing-content {
+    position: absolute; inset: 0;
+    background: #0d0d1a;
+    display: flex; flex-direction: column;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    animation: pairingFadeIn 0.25s ease-out;
+  }
+  .profile-scroll {
+    flex: 1; overflow-y: auto; padding: 0 16px 80px;
+    -webkit-overflow-scrolling: touch;
   }
   .pi-header {
     display: flex; align-items: center; justify-content: space-between;

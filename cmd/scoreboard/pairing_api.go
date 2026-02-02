@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -626,9 +627,102 @@ func (s *Server) handlePairingScan(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Method not allowed", 405)
 		return
 	}
-	// TODO: Scan chat history from DB and ingest all messages
-	writeJSON(w, map[string]string{
-		"message": "Communication scan queued. Messages will be processed in background.",
+
+	// Scan ALL historical chat messages from DB and feed into pairing engine
+	go func() {
+		rows, err := s.db.Query(`
+			SELECT role, content, created_at FROM chat_messages 
+			WHERE role = 'user' AND content != '' 
+			ORDER BY created_at ASC`)
+		if err != nil {
+			log.Printf("[pairing] scan: DB query error: %v", err)
+			return
+		}
+		defer rows.Close()
+
+		scanned := 0
+		for rows.Next() {
+			var role, content, createdAt string
+			if err := rows.Scan(&role, &content, &createdAt); err != nil {
+				continue
+			}
+			s.pairing.Ingest(Signal{
+				Type:    SignalMessage,
+				Source:  "chat_backfill",
+				Content: content,
+				Features: map[string]float64{},
+				Metadata: map[string]interface{}{
+					"backfill":   true,
+					"created_at": createdAt,
+				},
+			})
+			scanned++
+			// Small pause to avoid flooding the channel
+			time.Sleep(50 * time.Millisecond)
+		}
+
+		// Also scan all events for document-like and account signals
+		erows, err := s.db.Query(`
+			SELECT event_type, artifact_title, metadata, source, created_at 
+			FROM events WHERE status = 'approved' 
+			ORDER BY created_at ASC`)
+		if err != nil {
+			log.Printf("[pairing] scan events: DB query error: %v", err)
+		} else {
+			defer erows.Close()
+			for erows.Next() {
+				var etype, title, metadata, source, createdAt string
+				if err := erows.Scan(&etype, &title, &metadata, &source, &createdAt); err != nil {
+					continue
+				}
+
+				// Feed events through the event signal path
+				s.pairing.Ingest(Signal{
+					Type:    SignalEvent,
+					Source:  source,
+					Content: title + " " + metadata,
+					Features: map[string]float64{},
+					Metadata: map[string]interface{}{
+						"event_type": etype,
+						"backfill":   true,
+						"created_at": createdAt,
+					},
+				})
+				scanned++
+				time.Sleep(10 * time.Millisecond)
+			}
+		}
+
+		// Feed integration account data
+		irows, err := s.db.Query(`
+			SELECT provider, status FROM integrations WHERE status = 'active'`)
+		if err == nil {
+			defer irows.Close()
+			for irows.Next() {
+				var provider, status string
+				if err := irows.Scan(&provider, &status); err != nil {
+					continue
+				}
+				s.pairing.Ingest(Signal{
+					Type:    SignalAccount,
+					Source:  provider,
+					Content: "",
+					Features: map[string]float64{},
+					Metadata: map[string]interface{}{
+						"provider": provider,
+						"status":   status,
+					},
+				})
+				scanned++
+			}
+		}
+
+		log.Printf("[pairing] scan complete: %d signals ingested from history", scanned)
+	}()
+
+	writeJSON(w, map[string]interface{}{
+		"message": "Communication scan started. Processing all historical messages and events in background.",
+		"status":  "scanning",
 	})
 }
 

@@ -313,6 +313,14 @@ func (tm *TenantManager) GetOrCreate(tenantID string) (*Server, error) {
 	s := &Server{db: db, tenantID: tenantID}
 	s.initDB()
 	s.loadSeason()
+
+	// Each tenant gets their own pairing engine with isolated profile
+	// No Letta/Mem0/Gateway by default — tenant configures their own memory stack
+	profilePath := tenantDir + "/profile.json"
+	os.MkdirAll(tenantDir, 0750)
+	s.pairing = NewPairingEngine(profilePath, db, PairingConfig{})
+	s.pairing.Start()
+
 	tm.tenants[tenantID] = s
 
 	log.Printf("Loaded tenant: %s (db: %s)", tenantID, dbFile)
@@ -384,7 +392,14 @@ func main() {
 
 	// Initialize and start the Pairing Engine
 	os.MkdirAll("/data/wirebot/pairing", 0750)
-	s.pairing = NewPairingEngine("/data/wirebot/pairing/profile.json")
+	s.pairing = NewPairingEngine("/data/wirebot/pairing/profile.json", s.db, PairingConfig{
+		LettaAgentID: envOr("LETTA_AGENT_ID", "agent-82610d14-ec65-4d10-9ec2-8c479848cea9"),
+		LettaURL:     envOr("LETTA_URL", "http://localhost:8283"),
+		Mem0Namespace: envOr("MEM0_NAMESPACE", "wirebot_verious"),
+		Mem0URL:       envOr("MEM0_URL", "http://localhost:8200"),
+		GatewayToken:  envOr("GATEWAY_TOKEN", authToken),
+		GatewayURL:    envOr("GATEWAY_URL", "http://127.0.0.1:18789"),
+	})
 	s.pairing.Start()
 
 	mux := http.NewServeMux()
@@ -736,6 +751,16 @@ func (s *Server) initDB() {
 			approved_at TEXT NOT NULL,
 			approved_count INTEGER DEFAULT 1,
 			notes TEXT DEFAULT ''
+		)`,
+		`CREATE TABLE IF NOT EXISTS pairing_evidence (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			signal_type TEXT NOT NULL,
+			source TEXT NOT NULL DEFAULT '',
+			summary TEXT NOT NULL DEFAULT '',
+			features TEXT DEFAULT '{}',
+			profile_impact TEXT DEFAULT '{}',
+			constructs TEXT DEFAULT '[]',
+			created_at TEXT NOT NULL DEFAULT (datetime('now'))
 		)`,
 	}
 	for _, stmt := range stmts {
@@ -2432,6 +2457,20 @@ func (s *Server) handleStripeWebhook(w http.ResponseWriter, r *http.Request) {
 	today := operatorToday()
 	s.updateDailyScore(today)
 	s.recalcSeason()
+
+	// Feed Stripe data into pairing engine for business reality calibration
+	s.pairing.Ingest(Signal{
+		Type:      SignalAccount,
+		Source:    "stripe",
+		Timestamp: time.Now(),
+		Content:   title,
+		Features:  map[string]float64{},
+		Metadata: map[string]interface{}{
+			"provider":        "stripe",
+			"event_type":      evtType,
+			"monthly_revenue": float64(scoreDelta) * 100, // approximate
+		},
+	})
 
 	log.Printf("Stripe: %s → %s (score_delta=%d)", evtTypeStripe, evtType, scoreDelta)
 	json.NewEncoder(w).Encode(map[string]interface{}{
@@ -4592,6 +4631,19 @@ func (s *Server) pollDueIntegrations() {
 		} else {
 			s.db.Exec("UPDATE integrations SET last_poll_at=?, next_poll_at=?, last_error='', last_used_at=? WHERE id=?",
 				now, nextPoll, now, id)
+			// Feed integration data into pairing engine
+			s.pairing.Ingest(Signal{
+				Type:      SignalAccount,
+				Source:    provider,
+				Timestamp: time.Now(),
+				Content:   "",
+				Features:  map[string]float64{},
+				Metadata: map[string]interface{}{
+					"provider":       provider,
+					"integration_id": id,
+					"status":         "active",
+				},
+			})
 		}
 	}
 }

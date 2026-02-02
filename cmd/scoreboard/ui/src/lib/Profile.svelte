@@ -10,6 +10,7 @@
   let accuracy = $state(null);
   let evidence = $state(null);
   let complement = $state(null);
+  let insights = $state(null);
   let showFlow = $state(false);
   let flowInstrument = $state('');
 
@@ -25,11 +26,12 @@
     loading = true;
     error = '';
     try {
-      [effective, accuracy, complement, evidence] = await Promise.all([
+      [effective, accuracy, complement, evidence, insights] = await Promise.all([
         fetchAPI('/v1/pairing/profile/effective'),
         fetchAPI('/v1/pairing/accuracy'),
         fetchAPI('/v1/pairing/complement'),
         fetchAPI('/v1/pairing/evidence?limit=10'),
+        fetchAPI('/v1/pairing/insights'),
       ]);
     } catch (e) {
       error = e.message;
@@ -242,6 +244,37 @@
       </div>
     {/if}
 
+    <!-- Self-Perception Gaps -->
+    {#if insights?.self_perception_gaps && Object.keys(insights.self_perception_gaps).length > 0}
+      <div class="gaps-section">
+        <h3>🪞 Self-Perception Gaps</h3>
+        <p class="gaps-desc">Where your self-assessment differs from observed behavior</p>
+        {#each Object.entries(insights.self_perception_gaps) as [dim, info]}
+          <div class="gap-item" class:overestimate={info.delta > 0} class:underestimate={info.delta < 0}>
+            <span class="gap-dim">{dim.replace('_', ' ')}</span>
+            <span class="gap-delta">{info.delta > 0 ? '+' : ''}{info.delta.toFixed(1)}</span>
+            <span class="gap-interp">{info.interpretation}</span>
+          </div>
+        {/each}
+      </div>
+    {/if}
+
+    <!-- Active Contexts -->
+    {#if insights?.active_contexts?.length > 0}
+      <div class="contexts-section">
+        <h3>🎯 Active Contexts</h3>
+        {#each insights.active_contexts as ctx}
+          <div class="ctx-item">
+            <span class="ctx-name">{ctx.window.replace('_', ' ')}</span>
+            <div class="ctx-bar">
+              <div class="ctx-fill" style="width: {ctx.activation * 100}%"></div>
+            </div>
+            <span class="ctx-desc">{ctx.description}</span>
+          </div>
+        {/each}
+      </div>
+    {/if}
+
     <!-- Recent Evidence -->
     {#if evidence?.evidence?.length > 0}
       <div class="evidence-section">
@@ -432,6 +465,26 @@
   .ev-icon { font-size: 14px; }
   .ev-summary { flex: 1; font-size: 12px; color: #ccc; }
   .ev-time { font-size: 10px; color: #666; }
+
+  /* Self-Perception Gaps */
+  .gaps-section { margin-bottom: 20px; }
+  .gaps-section h3 { font-size: 14px; color: #fff; margin: 0 0 4px; }
+  .gaps-desc { font-size: 11px; color: #888; margin: 0 0 8px; }
+  .gap-item { display: flex; align-items: center; gap: 8px; padding: 6px 0; border-bottom: 1px solid #222; }
+  .gap-dim { font-size: 12px; color: #ccc; min-width: 100px; }
+  .gap-delta { font-size: 14px; font-weight: 600; min-width: 40px; text-align: right; }
+  .overestimate .gap-delta { color: #ff6b6b; }
+  .underestimate .gap-delta { color: #51cf66; }
+  .gap-interp { font-size: 11px; color: #888; }
+
+  /* Active Contexts */
+  .contexts-section { margin-bottom: 20px; }
+  .contexts-section h3 { font-size: 14px; color: #fff; margin: 0 0 8px; }
+  .ctx-item { margin-bottom: 10px; }
+  .ctx-name { font-size: 11px; color: #aaa; text-transform: uppercase; letter-spacing: 0.5px; }
+  .ctx-bar { height: 6px; background: #222; border-radius: 3px; margin: 4px 0; overflow: hidden; }
+  .ctx-fill { height: 100%; background: linear-gradient(90deg, #7c7cff, #ff7cff); border-radius: 3px; transition: width 0.3s; }
+  .ctx-desc { font-size: 11px; color: #666; }
 
   /* Accuracy */
   .accuracy-section { margin-bottom: 20px; }

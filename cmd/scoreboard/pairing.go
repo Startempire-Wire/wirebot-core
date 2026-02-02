@@ -47,6 +47,7 @@ package main
 
 import (
 	"crypto/rand"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -383,6 +384,17 @@ func (cw *ContextWindow) AddSignal(strength float64) {
 // Decay applies exponential decay: activation *= e^(-hours/τ).
 // When activation drops below 0.05, the window fully deactivates (reset to zero).
 // Called every 5 minutes by the periodic tasks goroutine.
+// Activate boosts this context window's activation level.
+// strength: 0-1 (negative values reduce activation, e.g. revenue reduces financial pressure)
+func (cw *ContextWindow) Activate(strength float64, now time.Time) {
+	cw.LastSignal = &now
+	cw.SignalCount++
+	if cw.ActivatedAt == nil {
+		cw.ActivatedAt = &now
+	}
+	cw.Activation = math.Min(1.0, math.Max(0, cw.Activation+strength))
+}
+
 func (cw *ContextWindow) Decay(now time.Time) {
 	if cw.LastSignal == nil {
 		return
@@ -856,10 +868,22 @@ func NewFounderProfile() *FounderProfileV2 {
 
 // PairingEngine is the central pairing system coordinator. Create with
 // NewPairingEngine(path) and start processing with pe.Start().
+// PairingConfig holds tenant-specific configuration for the pairing engine.
+// Each sovereign user gets their own config — no hardcoded values.
+type PairingConfig struct {
+	LettaAgentID   string // Letta agent to update (empty = skip)
+	LettaURL       string // Letta server URL (default: http://localhost:8283)
+	Mem0Namespace  string // Mem0 namespace for this user (e.g. "wirebot_verious")
+	Mem0URL        string // Mem0 server URL (default: http://localhost:8200)
+	GatewayToken   string // OpenClaw gateway token for wirebot_remember
+	GatewayURL     string // OpenClaw gateway URL (default: http://127.0.0.1:18789)
+}
+
 type PairingEngine struct {
 	mu         sync.RWMutex
 	profile    *FounderProfileV2
 	profilePath string
+	config     PairingConfig
 	signalChan chan Signal
 	evidence   []EvidenceEntry
 	predictions []PredictionEntry
@@ -868,6 +892,7 @@ type PairingEngine struct {
 	dirty      bool
 	lastSave   time.Time
 	running    bool
+	db         *sql.DB // shared scoreboard database for evidence persistence
 
 	// Behavioral accumulators (rolling windows)
 	recentShips     []time.Time
@@ -876,9 +901,25 @@ type PairingEngine struct {
 	dailyEventCounts map[string]int // date string → count
 }
 
-func NewPairingEngine(profilePath string) *PairingEngine {
+func NewPairingEngine(profilePath string, db *sql.DB, cfg PairingConfig) *PairingEngine {
+	// Apply defaults
+	if cfg.LettaURL == "" {
+		cfg.LettaURL = "http://localhost:8283"
+	}
+	if cfg.Mem0URL == "" {
+		cfg.Mem0URL = "http://localhost:8200"
+	}
+	if cfg.GatewayURL == "" {
+		cfg.GatewayURL = "http://127.0.0.1:18789"
+	}
+	if cfg.GatewayToken == "" {
+		cfg.GatewayToken = os.Getenv("SCOREBOARD_TOKEN")
+	}
+
 	pe := &PairingEngine{
 		profilePath:     profilePath,
+		config:          cfg,
+		db:              db,
 		signalChan:      make(chan Signal, 1000),
 		evidence:        make([]EvidenceEntry, 0, 10000),
 		predictions:     make([]PredictionEntry, 0, 1000),
@@ -911,6 +952,21 @@ func (pe *PairingEngine) loadOrCreate() *FounderProfileV2 {
 	return p
 }
 
+func (pe *PairingEngine) persistEvidence(ev *EvidenceEntry) {
+	featuresJSON, _ := json.Marshal(ev.FeaturesExtracted)
+	impactJSON, _ := json.Marshal(ev.ProfileImpact)
+	constructsJSON, _ := json.Marshal(ev.ConstructsAffected)
+	_, err := pe.db.Exec(
+		`INSERT INTO pairing_evidence (signal_type, source, summary, features, profile_impact, constructs, created_at) 
+		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		string(ev.SignalType), ev.Source, ev.Summary,
+		string(featuresJSON), string(impactJSON), string(constructsJSON),
+		ev.Timestamp.Format(time.RFC3339))
+	if err != nil {
+		log.Printf("[pairing] persistEvidence error: %v", err)
+	}
+}
+
 func (pe *PairingEngine) Save() error {
 	pe.mu.RLock()
 	data, err := json.MarshalIndent(pe.profile, "", "  ")
@@ -928,103 +984,104 @@ func (pe *PairingEngine) Save() error {
 func (pe *PairingEngine) syncToMemory() {
 	log.Printf("[pairing] syncToMemory starting")
 	summary := pe.GetChatContextSummary()
+	client := &http.Client{Timeout: 30 * time.Second}
 
-	// Push to Mem0 (if available) — endpoint is /v1/store
 	// Escape for JSON: replace newlines and quotes
 	safeSummary := strings.ReplaceAll(summary, "\\", "\\\\")
 	safeSummary = strings.ReplaceAll(safeSummary, "\"", "'")
 	safeSummary = strings.ReplaceAll(safeSummary, "\n", " | ")
 	safeSummary = strings.ReplaceAll(safeSummary, "\r", "")
-	mem0Payload := fmt.Sprintf(`{"messages":[{"role":"user","content":"Founder profile update: %s"}],"namespace":"wirebot_verious","category":"founder_profile"}`,
-		safeSummary)
-	req, err := http.NewRequest("POST", "http://localhost:8200/v1/store", strings.NewReader(mem0Payload))
-	if err != nil {
-		log.Printf("[pairing] Mem0 request build error: %v", err)
-	} else {
-		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("Content-Length", fmt.Sprintf("%d", len(mem0Payload)))
-		client := &http.Client{Timeout: 30 * time.Second}
-		resp, err := client.Do(req)
+
+	// ── 1. Mem0 (if namespace configured) ───────────────────────────────────
+	if pe.config.Mem0Namespace != "" {
+		mem0Payload := fmt.Sprintf(
+			`{"messages":[{"role":"user","content":"Founder profile update: %s"}],"namespace":"%s","category":"founder_profile"}`,
+			safeSummary, pe.config.Mem0Namespace)
+		req, err := http.NewRequest("POST", pe.config.Mem0URL+"/v1/store", strings.NewReader(mem0Payload))
 		if err != nil {
-			log.Printf("[pairing] Mem0 sync error: %v", err)
+			log.Printf("[pairing] Mem0 request build error: %v", err)
 		} else {
-			body := make([]byte, 200)
-			n, _ := resp.Body.Read(body)
-			resp.Body.Close()
-			log.Printf("[pairing] Mem0 sync: status=%d body=%s", resp.StatusCode, string(body[:n]))
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("Content-Length", fmt.Sprintf("%d", len(mem0Payload)))
+			resp, err := client.Do(req)
+			if err != nil {
+				log.Printf("[pairing] Mem0 sync error: %v", err)
+			} else {
+				body := make([]byte, 200)
+				n, _ := resp.Body.Read(body)
+				resp.Body.Close()
+				log.Printf("[pairing] Mem0 sync: status=%d body=%s", resp.StatusCode, string(body[:n]))
+			}
 		}
 	}
 
-	// Push to Letta business_stage block (if available) — keep structured state current
-	lettaAgentID := "agent-82610d14-ec65-4d10-9ec2-8c479848cea9"
-	// Get current blocks to find business_stage block ID
-	getReq, err := http.NewRequest("GET",
-		fmt.Sprintf("http://localhost:8283/v1/agents/%s", lettaAgentID), nil)
-	if err == nil {
-		getReq.Header.Set("Authorization", "Bearer letta")
-		client := &http.Client{Timeout: 10 * time.Second}
-		resp, err := client.Do(getReq)
+	// ── 2. Letta (if agent ID configured) ───────────────────────────────────
+	if pe.config.LettaAgentID != "" {
+		getReq, err := http.NewRequest("GET",
+			fmt.Sprintf("%s/v1/agents/%s", pe.config.LettaURL, pe.config.LettaAgentID), nil)
 		if err == nil {
-			var agentData struct {
-				Memory struct {
-					Blocks []struct {
-						ID    string `json:"id"`
-						Label string `json:"label"`
-					} `json:"blocks"`
-				} `json:"memory"`
-			}
-			if json.NewDecoder(resp.Body).Decode(&agentData) == nil {
-				for _, block := range agentData.Memory.Blocks {
-					if block.Label == "business_stage" {
-						// Update the block with current profile data
-						stageUpdate := fmt.Sprintf("Operating Mode: Red-to-Black\nSeason 1 started: 2026-02-01\nCurrent Score: %.0f/100\nPairing Level: %s (%.0f%% accuracy)\nProfile: %s",
-							pe.profile.PairingScore.Composite,
-							pe.profile.PairingScore.Level,
-							pe.computeAccuracy()*100,
-							safeSummary)
-						updatePayload, _ := json.Marshal(map[string]string{"value": stageUpdate})
-						patchReq, _ := http.NewRequest("PATCH",
-							fmt.Sprintf("http://localhost:8283/v1/blocks/%s", block.ID),
-							strings.NewReader(string(updatePayload)))
-						if patchReq != nil {
-							patchReq.Header.Set("Authorization", "Bearer letta")
-							patchReq.Header.Set("Content-Type", "application/json")
-							patchResp, err := client.Do(patchReq)
-							if err == nil {
-								patchResp.Body.Close()
-								log.Printf("[pairing] Letta business_stage block updated (score=%.0f)", pe.profile.PairingScore.Composite)
+			getReq.Header.Set("Authorization", "Bearer letta")
+			resp, err := client.Do(getReq)
+			if err == nil {
+				var agentData struct {
+					Memory struct {
+						Blocks []struct {
+							ID    string `json:"id"`
+							Label string `json:"label"`
+						} `json:"blocks"`
+					} `json:"memory"`
+				}
+				if json.NewDecoder(resp.Body).Decode(&agentData) == nil {
+					for _, block := range agentData.Memory.Blocks {
+						if block.Label == "business_stage" {
+							stageUpdate := fmt.Sprintf(
+								"Current Score: %.0f/100\nPairing Level: %s (%.0f%% accuracy)\nProfile: %s",
+								pe.profile.PairingScore.Composite,
+								pe.profile.PairingScore.Level,
+								pe.computeAccuracy()*100,
+								safeSummary)
+							updatePayload, _ := json.Marshal(map[string]string{"value": stageUpdate})
+							patchReq, _ := http.NewRequest("PATCH",
+								fmt.Sprintf("%s/v1/blocks/%s", pe.config.LettaURL, block.ID),
+								strings.NewReader(string(updatePayload)))
+							if patchReq != nil {
+								patchReq.Header.Set("Authorization", "Bearer letta")
+								patchReq.Header.Set("Content-Type", "application/json")
+								patchResp, err := client.Do(patchReq)
+								if err == nil {
+									patchResp.Body.Close()
+									log.Printf("[pairing] Letta block updated (score=%.0f)", pe.profile.PairingScore.Composite)
+								}
 							}
+							break
 						}
-						break
 					}
 				}
+				resp.Body.Close()
 			}
-			resp.Body.Close()
 		}
 	}
 
-	// Push to Wirebot gateway via wirebot_remember tool (if available)
-	gatewayToken := os.Getenv("SCOREBOARD_TOKEN")
-	if gatewayToken == "" {
-		gatewayToken = "65b918ba-baf5-4996-8b53-6fb0f662a0c3"
-	}
-	rememberPayload := fmt.Sprintf(`{"tool":"wirebot_remember","args":{"fact":"PROFILE UPDATE: %s"}}`,
-		safeSummary)
-	req2, err := http.NewRequest("POST", "http://127.0.0.1:18789/tools/invoke", strings.NewReader(rememberPayload))
-	if err != nil {
-		log.Printf("[pairing] Gateway request build error: %v", err)
-	} else {
-		req2.Header.Set("Content-Type", "application/json")
-		req2.Header.Set("Authorization", "Bearer "+gatewayToken)
-		client := &http.Client{Timeout: 15 * time.Second}
-		resp, err := client.Do(req2)
+	// ── 3. Gateway memory-core (if token configured) ────────────────────────
+	if pe.config.GatewayToken != "" {
+		rememberPayload := fmt.Sprintf(
+			`{"tool":"wirebot_remember","args":{"fact":"PROFILE UPDATE: %s"}}`, safeSummary)
+		req, err := http.NewRequest("POST", pe.config.GatewayURL+"/tools/invoke",
+			strings.NewReader(rememberPayload))
 		if err != nil {
-			log.Printf("[pairing] Gateway sync error: %v", err)
+			log.Printf("[pairing] Gateway request build error: %v", err)
 		} else {
-			body := make([]byte, 200)
-			n, _ := resp.Body.Read(body)
-			resp.Body.Close()
-			log.Printf("[pairing] Gateway sync: status=%d body=%s", resp.StatusCode, string(body[:n]))
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("Authorization", "Bearer "+pe.config.GatewayToken)
+			resp, err := client.Do(req)
+			if err != nil {
+				log.Printf("[pairing] Gateway sync error: %v", err)
+			} else {
+				body := make([]byte, 200)
+				n, _ := resp.Body.Read(body)
+				resp.Body.Close()
+				log.Printf("[pairing] Gateway sync: status=%d body=%s", resp.StatusCode, string(body[:n]))
+			}
 		}
 	}
 }
@@ -1136,12 +1193,19 @@ func (pe *PairingEngine) processSignal(sig Signal) {
 	// 7. Update calibration parameters
 	pe.updateCalibration()
 
-	// 8. Compute evidence summary
+	// 7b. Update self-perception gaps
+	pe.updateSelfPerceptionGaps()
+
+	// 8. Compute evidence summary and persist
 	ev.Summary = pe.summarizeEvidence(sig, &ev)
 	pe.evidence = append(pe.evidence, ev)
-	// Keep last 10000
+	// Keep last 10000 in memory
 	if len(pe.evidence) > 10000 {
 		pe.evidence = pe.evidence[len(pe.evidence)-10000:]
+	}
+	// Persist to SQLite (non-blocking)
+	if pe.db != nil {
+		go pe.persistEvidence(&ev)
 	}
 
 	// 9. Update meta
@@ -1599,6 +1663,52 @@ func (pe *PairingEngine) scoreTIME(qid string, val interface{}, ev *EvidenceEntr
 	ev.ConstructsAffected = append(ev.ConstructsAffected, "temporal_patterns")
 }
 
+// ─── Self-Perception Gap Detection ──────────────────────────────────────────
+// Compares self-reported (assessment) scores vs behavioral (observed) scores.
+// A positive delta means the founder THINKS they're higher than behavior shows.
+// A negative delta means the founder is UNDERSELLING themselves.
+// Only computed when we have both self-report AND behavioral data on the same dimension.
+
+func (pe *PairingEngine) updateSelfPerceptionGaps() {
+	pe.profile.SelfPerceptionDeltas = make(map[string]float64)
+
+	// Only meaningful when we have behavioral data (50+ messages)
+	if pe.profile.ObservedComm.MessagesAnalyzed < 10 {
+		return
+	}
+
+	// Compare DualTrackDimension: Trait (self-report from assessments) vs State (behavioral from NLP)
+	constructs := map[string]*DualTrackDimension{
+		"action_style":   pe.profile.ActionStyle,
+		"disc":           pe.profile.CommunicationDNA,
+		"energy":         pe.profile.EnergyTopology,
+		"risk":           pe.profile.RiskDisposition,
+		"cognitive":      pe.profile.CognitiveStyle,
+		"temporal":       pe.profile.TemporalPatterns,
+	}
+
+	for name, dt := range constructs {
+		if dt == nil {
+			continue
+		}
+		for dim, traitVal := range dt.Trait {
+			if traitVal == nil {
+				continue
+			}
+			stateVal, ok := dt.State[dim]
+			if !ok || stateVal == nil {
+				continue
+			}
+			// Delta = trait (self-report) - state (behavioral)
+			// Positive = overestimates self, Negative = underestimates
+			delta := *traitVal - *stateVal
+			if math.Abs(delta) > 1.0 { // Only record significant gaps
+				pe.profile.SelfPerceptionDeltas[name+"."+dim] = delta
+			}
+		}
+	}
+}
+
 // ─── Drift Detection ─────────────────────────────────────────────────────────
 
 func (pe *PairingEngine) detectDrift(ev *EvidenceEntry) {
@@ -1646,12 +1756,105 @@ func (pe *PairingEngine) evaluateContextWindows(sig Signal, ev *EvidenceEntry) {
 	now := time.Now()
 	pe.profile.Meta.LastContextWindowEval = &now
 
-	// Decay all windows
+	// Decay all windows first
 	for _, cw := range pe.profile.ContextWindows {
 		cw.Decay(now)
 	}
 
-	// Record active windows
+	content := strings.ToLower(sig.Content)
+
+	// Financial Pressure detection
+	financialKeywords := []string{"debt", "payment", "overdue", "invoice", "rent", "broke", "cash flow",
+		"can't afford", "behind on", "collection", "owe", "loan", "credit", "bills",
+		"revenue pressure", "need money", "tight budget", "payroll"}
+	for _, kw := range financialKeywords {
+		if strings.Contains(content, kw) {
+			pe.profile.ContextWindows[CtxFinancialPressure].Activate(0.6, now)
+			ev.ProfileImpact["context.financial_pressure"] = 0.6
+			break
+		}
+	}
+
+	// Shipping Sprint detection
+	sprintKeywords := []string{"ship it", "deploy", "launch", "go live", "release", "push to prod",
+		"deadline", "by friday", "by monday", "this week", "need to ship", "gotta ship",
+		"sprint", "crunch", "shipping sprint", "feature complete"}
+	for _, kw := range sprintKeywords {
+		if strings.Contains(content, kw) {
+			pe.profile.ContextWindows[CtxShippingSprint].Activate(0.5, now)
+			ev.ProfileImpact["context.shipping_sprint"] = 0.5
+			break
+		}
+	}
+
+	// Celebration detection
+	celebrationKeywords := []string{"shipped", "launched", "we did it", "let's go", "hell yeah",
+		"landed", "closed the deal", "got paid", "first customer", "milestone",
+		"🎉", "🚀", "celebration", "win", "won", "nailed it", "crushed it"}
+	for _, kw := range celebrationKeywords {
+		if strings.Contains(content, kw) {
+			pe.profile.ContextWindows[CtxCelebration].Activate(0.5, now)
+			ev.ProfileImpact["context.celebration"] = 0.5
+			break
+		}
+	}
+
+	// Stall detection
+	stallKeywords := []string{"stuck", "blocked", "no progress", "spinning", "don't know what to do",
+		"overwhelmed", "paralyzed", "can't decide", "stalled", "lost", "frozen",
+		"too much", "confused", "which one", "where do i start"}
+	for _, kw := range stallKeywords {
+		if strings.Contains(content, kw) {
+			pe.profile.ContextWindows[CtxStall].Activate(0.6, now)
+			ev.ProfileImpact["context.stall"] = 0.6
+			break
+		}
+	}
+
+	// Recovery Period detection
+	recoveryKeywords := []string{"burned out", "exhausted", "taking a break", "need rest",
+		"stepping back", "recharging", "mental health", "overwhelmed", "sick",
+		"vacation", "time off", "slow day"}
+	for _, kw := range recoveryKeywords {
+		if strings.Contains(content, kw) {
+			pe.profile.ContextWindows[CtxRecoveryPeriod].Activate(0.5, now)
+			ev.ProfileImpact["context.recovery"] = 0.5
+			break
+		}
+	}
+
+	// Life Event detection
+	lifeEventKeywords := []string{"baby", "moving", "divorce", "death", "hospital", "surgery",
+		"family emergency", "wedding", "new house", "relocation", "breakup",
+		"lost someone", "accident", "court", "legal"}
+	for _, kw := range lifeEventKeywords {
+		if strings.Contains(content, kw) {
+			pe.profile.ContextWindows[CtxLifeEvent].Activate(0.7, now)
+			ev.ProfileImpact["context.life_event"] = 0.7
+			break
+		}
+	}
+
+	// Event-type based activation
+	if etype, ok := sig.Metadata["event_type"].(string); ok {
+		switch {
+		case strings.Contains(etype, "SHIPPED") || strings.Contains(etype, "DEPLOYED"):
+			pe.profile.ContextWindows[CtxShippingSprint].Activate(0.4, now)
+			pe.profile.ContextWindows[CtxCelebration].Activate(0.3, now)
+		case strings.Contains(etype, "PAYMENT") || strings.Contains(etype, "REVENUE"):
+			pe.profile.ContextWindows[CtxFinancialPressure].Activate(-0.2, now) // revenue REDUCES pressure
+		}
+	}
+
+	// NLP-extracted features for context
+	if fp, ok := sig.Features["financial_pressure"]; ok && fp > 0.5 {
+		pe.profile.ContextWindows[CtxFinancialPressure].Activate(fp*0.5, now)
+	}
+	if tu, ok := sig.Features["temporal_urgency"]; ok && tu > 0.5 {
+		pe.profile.ContextWindows[CtxShippingSprint].Activate(tu*0.4, now)
+	}
+
+	// Record active windows in evidence
 	for wType, cw := range pe.profile.ContextWindows {
 		if cw.Activation > 0.3 {
 			ev.ProfileImpact["context."+string(wType)] = cw.Activation
@@ -2129,7 +2332,25 @@ func (pe *PairingEngine) GetChatContextSummary() string {
 		lines = append(lines, fmt.Sprintf("Active contexts: %s", strings.Join(eff.ActiveContexts, ", ")))
 	}
 
-	// Line 7: Pairing level
+	// Line 7: Self-perception gaps (where founder may not see themselves clearly)
+	pe.mu.RLock()
+	gaps := pe.profile.SelfPerceptionDeltas
+	pe.mu.RUnlock()
+	if len(gaps) > 0 {
+		var gapParts []string
+		for dim, delta := range gaps {
+			if delta > 1.0 {
+				gapParts = append(gapParts, fmt.Sprintf("%s: overestimates by %.1f (gently reality-check)", dim, delta))
+			} else if delta < -1.0 {
+				gapParts = append(gapParts, fmt.Sprintf("%s: undersells by %.1f (reinforce confidence)", dim, -delta))
+			}
+		}
+		if len(gapParts) > 0 {
+			lines = append(lines, fmt.Sprintf("Self-perception gaps: %s", strings.Join(gapParts, "; ")))
+		}
+	}
+
+	// Line 8: Pairing level
 	lines = append(lines, fmt.Sprintf("Pairing: %.0f/100 (%s) | Accuracy: %.0f%%", eff.PairingScore, eff.Level, eff.Accuracy*100))
 
 	return strings.Join(lines, "\n")
