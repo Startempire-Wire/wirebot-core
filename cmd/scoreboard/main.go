@@ -237,6 +237,7 @@ type Server struct {
 	mu       sync.RWMutex
 	season   Season
 	tenantID string // empty = operator (default), otherwise randID
+	pairing  *PairingEngine // Living profile engine (pairing.go)
 }
 
 // ─── Tenant Manager ─────────────────────────────────────────────────────────
@@ -381,6 +382,11 @@ func main() {
 	s.initDB()
 	s.loadSeason()
 
+	// Initialize and start the Pairing Engine
+	os.MkdirAll("/data/wirebot/pairing", 0750)
+	s.pairing = NewPairingEngine("/data/wirebot/pairing/profile.json")
+	s.pairing.Start()
+
 	mux := http.NewServeMux()
 
 	// Public endpoints
@@ -421,6 +427,7 @@ func main() {
 	mux.HandleFunc("/v1/chat/sessions", s.auth(s.handleChatSessions))
 	mux.HandleFunc("/v1/chat/sessions/", s.auth(s.handleChatSession))
 	mux.HandleFunc("/v1/pairing/status", s.authMember(s.handlePairingStatus))
+	s.registerPairingRoutes(mux)
 
 	// Integrations management
 	mux.HandleFunc("/v1/integrations", s.auth(s.handleIntegrations))
@@ -1145,6 +1152,21 @@ func (s *Server) postEvent(w http.ResponseWriter, r *http.Request) {
 		s.updateDailyScore(today)
 		s.updateStreak(today, evt.ArtifactTitle)
 		s.recalcSeason()
+	}
+
+	// Feed event to pairing engine
+	if s.pairing != nil {
+		s.pairing.Ingest(Signal{
+			Type:      SignalEvent,
+			Source:    evt.Source,
+			Timestamp: time.Now(),
+			Metadata: map[string]interface{}{
+				"event_type": evt.EventType,
+				"lane":       evt.Lane,
+				"project":    evt.ArtifactTitle,
+				"status":     status,
+			},
+		})
 	}
 
 	daily := s.getDailyScore(operatorToday())
@@ -3560,6 +3582,27 @@ func (s *Server) handleEventAction(w http.ResponseWriter, r *http.Request) {
 		s.recalcSeason()
 
 		daily := s.getDailyScore(date)
+
+		// Feed approval to pairing engine
+		if s.pairing != nil {
+			var createdAt string
+			s.db.QueryRow("SELECT created_at FROM events WHERE id=?", eventID).Scan(&createdAt)
+			latency := 0.0
+			if ct, err := time.Parse(time.RFC3339, createdAt); err == nil {
+				latency = time.Since(ct).Seconds()
+			}
+			s.pairing.Ingest(Signal{
+				Type:      SignalApproval,
+				Source:    "scoreboard",
+				Timestamp: time.Now(),
+				Metadata: map[string]interface{}{
+					"action":          "approve",
+					"event_id":        eventID,
+					"latency_seconds": latency,
+				},
+			})
+		}
+
 		json.NewEncoder(w).Encode(map[string]interface{}{
 			"ok": true, "event_id": eventID, "action": "approved",
 			"score_delta": scoreDelta, "new_daily_score": daily.ExecutionScore,
@@ -3567,6 +3610,20 @@ func (s *Server) handleEventAction(w http.ResponseWriter, r *http.Request) {
 	} else {
 		s.db.Exec("UPDATE events SET status='rejected', score_delta=0 WHERE id=?", eventID)
 		s.mu.Unlock()
+
+		// Feed rejection to pairing engine
+		if s.pairing != nil {
+			s.pairing.Ingest(Signal{
+				Type:      SignalApproval,
+				Source:    "scoreboard",
+				Timestamp: time.Now(),
+				Metadata: map[string]interface{}{
+					"action":   "reject",
+					"event_id": eventID,
+				},
+			})
+		}
+
 		json.NewEncoder(w).Encode(map[string]interface{}{
 			"ok": true, "event_id": eventID, "action": "rejected",
 		})
@@ -3710,6 +3767,15 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	lastMsg := req.Messages[len(req.Messages)-1]
 	if lastMsg.Role == "user" {
 		s.saveMessage(sessionID, "user", lastMsg.Content)
+		// Feed message to pairing engine for NLP analysis
+		if s.pairing != nil {
+			s.pairing.Ingest(Signal{
+				Type:      SignalMessage,
+				Source:    "chat",
+				Timestamp: time.Now(),
+				Content:   lastMsg.Content,
+			})
+		}
 	}
 
 	// Inject context — pairing protocol if incomplete, scoreboard state always
@@ -3844,35 +3910,32 @@ func (s *Server) buildChatContext(userMessages []struct {
 		contextParts = append(contextParts, "LIVE SCOREBOARD (as of right now):\n"+scoreData)
 	}
 
-	// --- Pairing state ---
-	pairingData, err := os.ReadFile("/home/wirebot/clawd/pairing.json")
-	pairingComplete := false
-	pairingAnswered := 0
-	if err == nil {
-		var p struct {
-			Completed bool                   `json:"completed"`
-			Answers   map[string]interface{} `json:"answers"`
-		}
-		if json.Unmarshal(pairingData, &p) == nil {
-			pairingComplete = p.Completed
-			pairingAnswered = len(p.Answers)
-		}
-	}
+	// --- Pairing profile (v2 engine) ---
+	if s.pairing != nil {
+		pairingSummary := s.pairing.GetChatContextSummary()
+		contextParts = append(contextParts, "FOUNDER PROFILE:\n"+pairingSummary)
 
-	if !pairingComplete {
-		pairingDoc, err := os.ReadFile("/home/wirebot/wirebot-core/docs/PAIRING.md")
+		// If pairing is early (score < 20), also inject conversational guidance
+		eff := s.pairing.GetEffectiveProfile()
+		if eff.PairingScore < 20 {
+			contextParts = append(contextParts, `PAIRING — EARLY STAGE:
+The founder profile is still being built. When the operator mentions pairing, onboarding, or "getting to know you" — guide them to the assessment at /profile in the scoreboard app. You can also ask calibration questions conversationally:
+- "What gives you energy in your business? What drains you?"
+- "When you're under pressure, do you speed up or slow down?"
+- "How do you prefer to get advice — bottom-line first or full context?"
+After EACH answer, call wirebot_remember to persist the fact.`)
+		}
+	} else {
+		// Fallback: read old v1 pairing.json
+		pairingData, err := os.ReadFile("/home/wirebot/clawd/pairing.json")
 		if err == nil {
-			doc := string(pairingDoc)
-			if len(doc) > 6000 {
-				doc = doc[:6000] + "\n...(see full doc for remaining phases)"
+			var p struct {
+				Completed bool                   `json:"completed"`
+				Answers   map[string]interface{} `json:"answers"`
 			}
-
-			contextParts = append(contextParts, fmt.Sprintf(`PAIRING PROTOCOL — INCOMPLETE (%d/22 answered):
-When the operator mentions pairing, onboarding, or "getting to know you" — run through the questions below CONVERSATIONALLY. Ask one at a time, acknowledge warmly, sometimes follow-up before proceeding. Match their tone.
-
-CRITICAL: After EACH answer, call wirebot_remember with the extracted fact (e.g. "Operator's preferred name is V", "Operator is in Pacific timezone, starts day at 9am"). This ensures the answer persists across sessions.
-
-%s`, pairingAnswered, doc))
+			if json.Unmarshal(pairingData, &p) == nil && !p.Completed {
+				contextParts = append(contextParts, "Pairing incomplete. Guide operator to /profile for assessment.")
+			}
 		}
 	}
 

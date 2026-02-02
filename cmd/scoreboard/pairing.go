@@ -46,10 +46,14 @@
 package main
 
 import (
+	"crypto/rand"
 	"encoding/json"
+	"fmt"
 	"log"
 	"math"
 	"os"
+	"sort"
+	"strings"
 	"sync"
 	"time"
 )
@@ -1157,8 +1161,10 @@ func (pe *PairingEngine) processAssessment(sig Signal, ev *EvidenceEntry) {
 
 	answers, ok := sig.Metadata["answers"].([]interface{})
 	if !ok {
+		log.Printf("[pairing] processAssessment: answers not []interface{}, type=%T", sig.Metadata["answers"])
 		return
 	}
+	log.Printf("[pairing] processAssessment: processing %d answers", len(answers))
 
 	for _, raw := range answers {
 		a, ok := raw.(map[string]interface{})
@@ -1177,18 +1183,20 @@ func (pe *PairingEngine) processAssessment(sig Signal, ev *EvidenceEntry) {
 		}
 		pe.profile.Answers = append(pe.profile.Answers, answer)
 
-		// Route to scoring
-		switch inst {
-		case "ASI-12":
+		// Route to scoring — match by instrument_id OR by question_id prefix
+		switch {
+		case inst == "ASI-12" || strings.HasPrefix(qid, "ASI-"):
 			pe.scoreASI(qid, val, ev)
-		case "CSI-8":
+		case inst == "CSI-8" || strings.HasPrefix(qid, "CSI-"):
 			pe.scoreCSI(qid, val, ev)
-		case "ETM-6":
+		case inst == "ETM-6" || strings.HasPrefix(qid, "ETM-"):
 			pe.scoreETM(val, ev)
-		case "RDS-6":
+		case inst == "RDS-6" || strings.HasPrefix(qid, "RDS-"):
 			pe.scoreRDS(qid, val, ev)
-		case "COG-8":
+		case inst == "COG-8" || strings.HasPrefix(qid, "COG-"):
 			pe.scoreCOG(qid, val, ev)
+		default:
+			log.Printf("[pairing] Unknown instrument: inst=%s qid=%s", inst, qid)
 		}
 	}
 }
@@ -1275,13 +1283,20 @@ func (pe *PairingEngine) processAccountData(sig Signal, ev *EvidenceEntry) {
 func (pe *PairingEngine) scoreASI(qid string, val interface{}, ev *EvidenceEntry) {
 	choice, ok := val.(string)
 	if !ok {
+		log.Printf("[pairing] scoreASI: val not string, type=%T val=%v", val, val)
 		return
 	}
-	// Each question maps choice to a dimension with a score
 	scores := asiScoring[qid]
+	if scores == nil {
+		log.Printf("[pairing] scoreASI: no scoring table for qid=%s", qid)
+		return
+	}
 	if s, ok := scores[choice]; ok {
 		pe.profile.ActionStyle.UpdateEMA(s.Dim, s.Value)
 		ev.ProfileImpact["action_style."+s.Dim] = s.Value
+		log.Printf("[pairing] scoreASI: %s choice=%s → %s=%.0f", qid, choice, s.Dim, s.Value)
+	} else {
+		log.Printf("[pairing] scoreASI: %s choice=%s not in scoring table (keys: %v)", qid, choice, scores)
 	}
 	ev.ConstructsAffected = append(ev.ConstructsAffected, "action_style")
 }
