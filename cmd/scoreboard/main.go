@@ -724,6 +724,12 @@ func (s *Server) initDB() {
 			notes TEXT DEFAULT '',
 			created_at TEXT NOT NULL DEFAULT ''
 		)`,
+		`CREATE TABLE IF NOT EXISTS trusted_sources (
+			source TEXT PRIMARY KEY,
+			approved_at TEXT NOT NULL,
+			approved_count INTEGER DEFAULT 1,
+			notes TEXT DEFAULT ''
+		)`,
 	}
 	for _, stmt := range stmts {
 		if _, err := s.db.Exec(stmt); err != nil {
@@ -1060,9 +1066,14 @@ func (s *Server) postEvent(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// ALL events start as pending. Operator approves what counts.
-	// No auto-approve — full operator control over the score.
+	// Events start pending UNLESS their source has been approved before.
+	// Approve once → trusted forever.
 	status := "pending"
+	var trustedCount int
+	s.db.QueryRow(`SELECT approved_count FROM trusted_sources WHERE source=?`, evt.Source).Scan(&trustedCount)
+	if trustedCount > 0 {
+		status = "approved"
+	}
 
 	// git-discovery: check if the project is approved (auto-approve)
 	if evt.Source == "git-discovery" && evt.Status == "approved" {
@@ -3515,10 +3526,10 @@ func (s *Server) handleEventAction(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Check event exists and is pending
-	var currentStatus, lane, evtType, title string
+	var currentStatus, lane, evtType, title, source string
 	var confidence float64
-	err := s.db.QueryRow("SELECT status, lane, event_type, artifact_title, confidence FROM events WHERE id=?", eventID).
-		Scan(&currentStatus, &lane, &evtType, &title, &confidence)
+	err := s.db.QueryRow("SELECT status, lane, event_type, artifact_title, confidence, source FROM events WHERE id=?", eventID).
+		Scan(&currentStatus, &lane, &evtType, &title, &confidence, &source)
 	if err != nil {
 		http.Error(w, `{"error":"event not found"}`, 404)
 		return
@@ -3532,6 +3543,12 @@ func (s *Server) handleEventAction(w http.ResponseWriter, r *http.Request) {
 	if action == "approve" {
 		scoreDelta := calcScoreDelta(lane, evtType, confidence)
 		s.db.Exec("UPDATE events SET status='approved', score_delta=? WHERE id=?", scoreDelta, eventID)
+
+		// Trust this source forever — approve once, in forever
+		now := time.Now().UTC().Format(time.RFC3339)
+		s.db.Exec(`INSERT INTO trusted_sources (source, approved_at, approved_count)
+			VALUES (?, ?, 1)
+			ON CONFLICT(source) DO UPDATE SET approved_count = approved_count + 1`, source, now)
 		s.mu.Unlock()
 
 		// Recalculate daily score
