@@ -1446,12 +1446,42 @@ func (s *Server) handleScoreboard(w http.ResponseWriter, r *http.Request) {
 		PendingCount: pendingCount,
 	}
 
-	// Dashboard mode: include today's feed
+	// Dashboard mode: include today's feed + checklist summary
 	if mode == "dashboard" || mode == "mobile" {
 		feed := s.getFeedItems(20, today, "", "approved")
-		json.NewEncoder(w).Encode(map[string]interface{}{
+		resp := map[string]interface{}{
 			"scoreboard": view, "feed": feed,
-		})
+		}
+		// Add checklist summary if available
+		if data, err := os.ReadFile(checklistPath); err == nil {
+			var cl map[string]interface{}
+			if json.Unmarshal(data, &cl) == nil {
+				tasks, _ := cl["tasks"].([]interface{})
+				total := len(tasks)
+				completed := 0
+				nextTask := ""
+				for _, t := range tasks {
+					tm, _ := t.(map[string]interface{})
+					status, _ := tm["status"].(string)
+					if status == "completed" || status == "done" {
+						completed++
+					} else if nextTask == "" && status != "skipped" {
+						nextTask, _ = tm["title"].(string)
+					}
+				}
+				pct := 0
+				if total > 0 {
+					pct = completed * 100 / total
+				}
+				resp["checklist"] = map[string]interface{}{
+					"total":     total,
+					"completed": completed,
+					"percent":   pct,
+					"next_task": nextTask,
+				}
+			}
+		}
+		json.NewEncoder(w).Encode(resp)
 		return
 	}
 
