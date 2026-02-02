@@ -1,11 +1,17 @@
 package main
 
 import (
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/rand"
 	"database/sql"
 	"embed"
 	"encoding/csv"
+	"encoding/hex"
 	"encoding/json"
+	"encoding/xml"
 	"fmt"
+	"io"
 	"io/fs"
 	"log"
 	"math"
@@ -30,6 +36,7 @@ var (
 	checklistPath  = envOr("CHECKLIST_PATH", "/home/wirebot/clawd/checklist.json")
 	scoreboardJSON = envOr("SCOREBOARD_JSON", "/home/wirebot/clawd/scoreboard.json")
 	authToken      = envOr("SCOREBOARD_TOKEN", "65b918ba-baf5-4996-8b53-6fb0f662a0c3")
+	masterKeyHex   = envOr("SCOREBOARD_MASTER_KEY", "") // 64-char hex = 32-byte AES-256 key
 )
 
 func envOr(key, def string) string {
@@ -42,21 +49,64 @@ func envOr(key, def string) string {
 // ─── Data Types ─────────────────────────────────────────────────────────────
 
 type Event struct {
-	ID            string  `json:"id"`
-	EventType     string  `json:"event_type"`
-	Lane          string  `json:"lane"`
-	Source        string  `json:"source"`
-	Timestamp     string  `json:"timestamp"`
-	ArtifactType  string  `json:"artifact_type,omitempty"`
-	ArtifactURL   string  `json:"artifact_url,omitempty"`
-	ArtifactTitle string  `json:"artifact_title,omitempty"`
-	Confidence    float64 `json:"confidence"`
-	Verifiers     string  `json:"verifiers,omitempty"`
-	ScoreDelta    int     `json:"score_delta"`
-	BusinessID    string  `json:"business_id,omitempty"`
-	Metadata      string  `json:"metadata,omitempty"`
-	Status        string  `json:"status"` // approved, pending, rejected
-	CreatedAt     string  `json:"created_at"`
+	ID                string  `json:"id"`
+	EventType         string  `json:"event_type"`
+	Lane              string  `json:"lane"`
+	Source            string  `json:"source"`
+	Timestamp         string  `json:"timestamp"`
+	ArtifactType      string  `json:"artifact_type,omitempty"`
+	ArtifactURL       string  `json:"artifact_url,omitempty"`
+	ArtifactTitle     string  `json:"artifact_title,omitempty"`
+	Confidence        float64 `json:"confidence"`
+	Verifiers         string  `json:"verifiers,omitempty"`
+	VerificationLevel string  `json:"verification_level,omitempty"` // STRONG, MEDIUM, WEAK, SELF_REPORTED, UNVERIFIED
+	ScoreDelta        int     `json:"score_delta"`
+	BusinessID        string  `json:"business_id,omitempty"`
+	Metadata          string  `json:"metadata,omitempty"`
+	Status            string  `json:"status"` // approved, pending, rejected
+	CreatedAt         string  `json:"created_at"`
+}
+
+// ─── Integration Types ──────────────────────────────────────────────────────
+
+type Integration struct {
+	ID               string `json:"id"`
+	UserID           string `json:"user_id"`
+	Provider         string `json:"provider"`
+	AuthType         string `json:"auth_type"` // oauth2, api_key, webhook_secret, rss_url
+	DisplayName      string `json:"display_name"`
+	Scopes           string `json:"scopes"`
+	Status           string `json:"status"` // active, expired, revoked, error
+	Sensitivity      string `json:"sensitivity"` // public, standard, sensitive, financial
+	WirebotVisible   bool   `json:"wirebot_visible"`
+	WirebotDetail    string `json:"wirebot_detail_level"` // full, summary, binary, none
+	ShareLevel       string `json:"share_level"` // private, anonymized, shared, public
+	PollInterval     int    `json:"poll_interval_seconds"`
+	LastUsedAt       string `json:"last_used_at,omitempty"`
+	LastError        string `json:"last_error,omitempty"`
+	CreatedAt        string `json:"created_at"`
+}
+
+type RSSItem struct {
+	Title   string `xml:"title"`
+	Link    string `xml:"link"`
+	PubDate string `xml:"pubDate"`
+	GUID    string `xml:"guid"`
+}
+
+type RSSFeed struct {
+	Channel struct {
+		Items []RSSItem `xml:"item"`
+	} `xml:"channel"`
+}
+
+type AtomFeed struct {
+	Entries []struct {
+		Title   string `xml:"title"`
+		Link    struct{ Href string `xml:"href,attr"` } `xml:"link"`
+		Updated string `xml:"updated"`
+		ID      string `xml:"id"`
+	} `xml:"entry"`
 }
 
 type DailyScore struct {
@@ -195,6 +245,10 @@ func main() {
 	// EOD score lock
 	mux.HandleFunc("/v1/lock", s.auth(s.handleLock))
 
+	// Integrations management
+	mux.HandleFunc("/v1/integrations", s.auth(s.handleIntegrations))
+	mux.HandleFunc("/v1/integrations/", s.auth(s.handleIntegrationConfig))
+
 	// Webhook receivers (use separate tokens in query params)
 	mux.HandleFunc("/v1/webhooks/github", s.auth(s.handleGitHubWebhook))
 	mux.HandleFunc("/v1/webhooks/stripe", s.auth(s.handleStripeWebhook))
@@ -210,6 +264,9 @@ func main() {
 		}
 		fileServer.ServeHTTP(w, r)
 	})
+
+	// Start integration poller
+	s.startPoller()
 
 	log.Printf("Scoreboard listening on %s", listenAddr)
 	log.Fatal(http.ListenAndServe(listenAddr, mux))
@@ -269,6 +326,34 @@ func (s *Server) initDB() {
 			last_date TEXT DEFAULT '',
 			last_artifact TEXT DEFAULT ''
 		)`,
+		// Integration credentials (encrypted at rest)
+		`CREATE TABLE IF NOT EXISTS integrations (
+			id TEXT PRIMARY KEY,
+			user_id TEXT NOT NULL DEFAULT 'default',
+			provider TEXT NOT NULL,
+			auth_type TEXT NOT NULL,
+			encrypted_data BLOB,
+			nonce BLOB,
+			display_name TEXT DEFAULT '',
+			scopes TEXT DEFAULT '[]',
+			status TEXT DEFAULT 'active',
+			sensitivity TEXT DEFAULT 'standard',
+			wirebot_visible BOOLEAN DEFAULT 1,
+			wirebot_detail_level TEXT DEFAULT 'full',
+			share_level TEXT DEFAULT 'private',
+			poll_interval_seconds INTEGER DEFAULT 1800,
+			last_used_at TEXT DEFAULT '',
+			last_error TEXT DEFAULT '',
+			last_poll_at TEXT DEFAULT '',
+			next_poll_at TEXT DEFAULT '',
+			config TEXT DEFAULT '{}',
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_integrations_user ON integrations(user_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_integrations_provider ON integrations(user_id, provider)`,
+		// Verification level migration on events
+		`ALTER TABLE events ADD COLUMN verification_level TEXT DEFAULT 'SELF_REPORTED'`,
 	}
 	for _, stmt := range stmts {
 		if _, err := s.db.Exec(stmt); err != nil {
@@ -386,18 +471,19 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) postEvent(w http.ResponseWriter, r *http.Request) {
 	var evt struct {
-		EventType     string          `json:"event_type"`
-		Lane          string          `json:"lane"`
-		Source        string          `json:"source"`
-		Timestamp     string          `json:"timestamp"`
-		ArtifactType  string          `json:"artifact_type"`
-		ArtifactURL   string          `json:"artifact_url"`
-		ArtifactTitle string          `json:"artifact_title"`
-		Confidence    float64         `json:"confidence"`
-		Verifiers     json.RawMessage `json:"verifiers"`
-		BusinessID    string          `json:"business_id"`
-		Metadata      json.RawMessage `json:"metadata"`
-		Status        string          `json:"status"` // "pending" or "" (defaults to "approved")
+		EventType         string          `json:"event_type"`
+		Lane              string          `json:"lane"`
+		Source            string          `json:"source"`
+		Timestamp         string          `json:"timestamp"`
+		ArtifactType      string          `json:"artifact_type"`
+		ArtifactURL       string          `json:"artifact_url"`
+		ArtifactTitle     string          `json:"artifact_title"`
+		Confidence        float64         `json:"confidence"`
+		Verifiers         json.RawMessage `json:"verifiers"`
+		VerificationLevel string          `json:"verification_level"`
+		BusinessID        string          `json:"business_id"`
+		Metadata          json.RawMessage `json:"metadata"`
+		Status            string          `json:"status"` // "pending" or "" (defaults to "approved")
 	}
 	if err := json.NewDecoder(r.Body).Decode(&evt); err != nil {
 		http.Error(w, `{"error":"invalid json"}`, 400)
@@ -419,7 +505,26 @@ func (s *Server) postEvent(w http.ResponseWriter, r *http.Request) {
 		status = "pending"
 	}
 
+	// Determine verification level from source
+	verLevel := evt.VerificationLevel
+	if verLevel == "" {
+		switch evt.Source {
+		case "github-webhook", "stripe-webhook":
+			verLevel = "STRONG"
+		case "rss-poller", "youtube-poller":
+			verLevel = "MEDIUM"
+		case "wb-cli", "wb-complete", "wb-ship", "pwa":
+			verLevel = "SELF_REPORTED"
+		case "claude", "pi", "letta", "opencode":
+			verLevel = "WEAK"
+		default:
+			verLevel = "SELF_REPORTED"
+		}
+	}
+
 	scoreDelta := calcScoreDelta(evt.Lane, evt.EventType, evt.Confidence)
+	// Apply verification multiplier
+	scoreDelta = int(float64(scoreDelta) * verificationMultiplier(verLevel))
 	// Pending events get 0 score until approved
 	effectiveDelta := scoreDelta
 	if status == "pending" {
@@ -438,12 +543,12 @@ func (s *Server) postEvent(w http.ResponseWriter, r *http.Request) {
 
 	s.mu.Lock()
 	_, err := s.db.Exec(`INSERT INTO events (id, event_type, lane, source, timestamp,
-		artifact_type, artifact_url, artifact_title, confidence, verifiers,
+		artifact_type, artifact_url, artifact_title, confidence, verifiers, verification_level,
 		score_delta, business_id, metadata, status, created_at)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		id, evt.EventType, evt.Lane, evt.Source, evt.Timestamp,
 		evt.ArtifactType, evt.ArtifactURL, evt.ArtifactTitle, evt.Confidence,
-		verifiers, effectiveDelta, evt.BusinessID, metadata, status, time.Now().UTC().Format(time.RFC3339))
+		verifiers, verLevel, effectiveDelta, evt.BusinessID, metadata, status, time.Now().UTC().Format(time.RFC3339))
 	s.mu.Unlock()
 
 	if err != nil {
@@ -1143,15 +1248,17 @@ func (s *Server) handleGitHubWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Insert as event
+	// Insert as event with STRONG verification
 	scoreDelta := calcScoreDelta("shipping", evtType, 0.95)
 	id := fmt.Sprintf("evt-gh-%d", time.Now().UnixNano())
 	s.mu.Lock()
 	s.db.Exec(`INSERT INTO events (id, event_type, lane, source, timestamp,
-		artifact_url, artifact_title, confidence, score_delta, created_at)
-		VALUES (?,?,?,?,?,?,?,?,?,?)`,
+		artifact_url, artifact_title, confidence, verifiers, verification_level,
+		score_delta, created_at, status)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		id, evtType, "shipping", "github-webhook", time.Now().UTC().Format(time.RFC3339),
-		url, title, 0.95, scoreDelta, time.Now().UTC().Format(time.RFC3339))
+		url, title, 0.95, `["github_webhook"]`, "STRONG",
+		scoreDelta, time.Now().UTC().Format(time.RFC3339), "approved")
 	s.mu.Unlock()
 
 	today := time.Now().Format("2006-01-02")
@@ -1205,10 +1312,13 @@ func (s *Server) handleStripeWebhook(w http.ResponseWriter, r *http.Request) {
 	id := fmt.Sprintf("evt-stripe-%d", time.Now().UnixNano())
 	s.mu.Lock()
 	s.db.Exec(`INSERT INTO events (id, event_type, lane, source, timestamp,
-		artifact_title, confidence, score_delta, metadata, created_at)
-		VALUES (?,?,?,?,?,?,?,?,?,?)`,
+		artifact_title, confidence, verifiers, verification_level,
+		score_delta, metadata, created_at, status)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		id, evtType, "revenue", "stripe-webhook", time.Now().UTC().Format(time.RFC3339),
-		title, 0.99, scoreDelta, fmt.Sprintf(`{"amount":%.0f}`, amount), time.Now().UTC().Format(time.RFC3339))
+		title, 0.99, `["stripe_webhook"]`, "STRONG",
+		scoreDelta, fmt.Sprintf(`{"amount":%.0f,"currency":"usd"}`, amount),
+		time.Now().UTC().Format(time.RFC3339), "approved")
 	s.mu.Unlock()
 
 	today := time.Now().Format("2006-01-02")
@@ -1249,7 +1359,7 @@ func calcScoreDelta(lane, eventType string, confidence float64) int {
 		if pts, ok := laneMap[eventType]; ok {
 			return int(float64(pts) * confidence)
 		}
-		return 3
+		return int(3.0 * confidence)
 	}
 	return 1
 }
@@ -1662,6 +1772,492 @@ func (s *Server) handleLock(w http.ResponseWriter, r *http.Request) {
 		"ships": daily.ShipsCount, "streak": streak,
 		"record": s.season.Record,
 	})
+}
+
+// ─── Encryption Helpers ──────────────────────────────────────────────────
+
+func (s *Server) getMasterKey() ([]byte, error) {
+	if masterKeyHex == "" {
+		// Generate and log a new key on first run (operator must persist it)
+		key := make([]byte, 32)
+		rand.Read(key)
+		masterKeyHex = hex.EncodeToString(key)
+		log.Printf("WARNING: No SCOREBOARD_MASTER_KEY set. Generated ephemeral key: %s", masterKeyHex)
+		log.Printf("Set SCOREBOARD_MASTER_KEY=%s in your environment to persist credentials across restarts.", masterKeyHex)
+		return key, nil
+	}
+	return hex.DecodeString(masterKeyHex)
+}
+
+func (s *Server) encryptCredential(plaintext []byte) (encrypted []byte, nonce []byte, err error) {
+	key, err := s.getMasterKey()
+	if err != nil {
+		return nil, nil, fmt.Errorf("master key: %w", err)
+	}
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, nil, fmt.Errorf("aes cipher: %w", err)
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, nil, fmt.Errorf("gcm: %w", err)
+	}
+	nonce = make([]byte, gcm.NonceSize())
+	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
+		return nil, nil, fmt.Errorf("nonce: %w", err)
+	}
+	encrypted = gcm.Seal(nil, nonce, plaintext, nil)
+	return encrypted, nonce, nil
+}
+
+func (s *Server) decryptCredential(encrypted []byte, nonce []byte) ([]byte, error) {
+	key, err := s.getMasterKey()
+	if err != nil {
+		return nil, fmt.Errorf("master key: %w", err)
+	}
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, fmt.Errorf("aes cipher: %w", err)
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, fmt.Errorf("gcm: %w", err)
+	}
+	return gcm.Open(nil, nonce, encrypted, nil)
+}
+
+// ─── Integration Management ─────────────────────────────────────────────
+
+func (s *Server) handleIntegrations(w http.ResponseWriter, r *http.Request) {
+	cors(w)
+	switch r.Method {
+	case "GET":
+		// List all integrations (metadata only, no secrets)
+		rows, err := s.db.Query(`SELECT id, user_id, provider, auth_type, display_name, scopes,
+			status, sensitivity, wirebot_visible, wirebot_detail_level, share_level,
+			poll_interval_seconds, last_used_at, last_error, created_at FROM integrations ORDER BY created_at`)
+		if err != nil {
+			http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err), 500)
+			return
+		}
+		defer rows.Close()
+		var list []Integration
+		for rows.Next() {
+			var i Integration
+			rows.Scan(&i.ID, &i.UserID, &i.Provider, &i.AuthType, &i.DisplayName, &i.Scopes,
+				&i.Status, &i.Sensitivity, &i.WirebotVisible, &i.WirebotDetail, &i.ShareLevel,
+				&i.PollInterval, &i.LastUsedAt, &i.LastError, &i.CreatedAt)
+			list = append(list, i)
+		}
+		if list == nil {
+			list = []Integration{}
+		}
+		json.NewEncoder(w).Encode(map[string]interface{}{"integrations": list})
+
+	case "POST":
+		// Add a new integration
+		var body struct {
+			Provider    string `json:"provider"`
+			AuthType    string `json:"auth_type"`
+			DisplayName string `json:"display_name"`
+			Credential  string `json:"credential"` // API key, URL, or OAuth token JSON
+			Sensitivity string `json:"sensitivity"`
+			PollInterval int   `json:"poll_interval_seconds"`
+			Config      string `json:"config"` // provider-specific config JSON
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			http.Error(w, `{"error":"invalid json"}`, 400)
+			return
+		}
+		if body.Provider == "" || body.AuthType == "" {
+			http.Error(w, `{"error":"provider and auth_type required"}`, 400)
+			return
+		}
+
+		// Encrypt credential
+		encrypted, nonce, err := s.encryptCredential([]byte(body.Credential))
+		if err != nil {
+			http.Error(w, fmt.Sprintf(`{"error":"encryption failed: %s"}`, err), 500)
+			return
+		}
+
+		id := fmt.Sprintf("int-%d", time.Now().UnixNano())
+		sensitivity := body.Sensitivity
+		if sensitivity == "" {
+			sensitivity = "standard"
+		}
+		pollInterval := body.PollInterval
+		if pollInterval == 0 {
+			pollInterval = 1800 // 30 minutes default
+		}
+		config := body.Config
+		if config == "" {
+			config = "{}"
+		}
+		now := time.Now().UTC().Format(time.RFC3339)
+		nextPoll := time.Now().Add(time.Duration(pollInterval) * time.Second).UTC().Format(time.RFC3339)
+
+		s.mu.Lock()
+		_, err = s.db.Exec(`INSERT INTO integrations (id, user_id, provider, auth_type, encrypted_data, nonce,
+			display_name, sensitivity, poll_interval_seconds, config, created_at, updated_at, next_poll_at)
+			VALUES (?, 'default', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			id, body.Provider, body.AuthType, encrypted, nonce,
+			body.DisplayName, sensitivity, pollInterval, config, now, now, nextPoll)
+		s.mu.Unlock()
+		if err != nil {
+			http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err), 500)
+			return
+		}
+
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"ok": true, "id": id, "provider": body.Provider, "status": "active",
+		})
+
+	default:
+		http.Error(w, `{"error":"GET or POST"}`, 405)
+	}
+}
+
+func (s *Server) handleIntegrationConfig(w http.ResponseWriter, r *http.Request) {
+	cors(w)
+	// PATCH /v1/integrations/<id> — update settings (not credentials)
+	parts := strings.Split(r.URL.Path, "/")
+	if len(parts) < 4 {
+		http.Error(w, `{"error":"id required"}`, 400)
+		return
+	}
+	id := parts[3]
+
+	if r.Method == "DELETE" {
+		s.mu.Lock()
+		s.db.Exec("DELETE FROM integrations WHERE id=?", id)
+		s.mu.Unlock()
+		json.NewEncoder(w).Encode(map[string]interface{}{"ok": true, "deleted": id})
+		return
+	}
+
+	if r.Method != "PATCH" {
+		http.Error(w, `{"error":"PATCH or DELETE"}`, 405)
+		return
+	}
+
+	var body struct {
+		WirebotVisible bool   `json:"wirebot_visible"`
+		WirebotDetail  string `json:"wirebot_detail_level"`
+		ShareLevel     string `json:"share_level"`
+		Sensitivity    string `json:"sensitivity"`
+		Status         string `json:"status"`
+		PollInterval   int    `json:"poll_interval_seconds"`
+	}
+	json.NewDecoder(r.Body).Decode(&body)
+
+	updates := []string{}
+	args := []interface{}{}
+	if body.WirebotDetail != "" {
+		updates = append(updates, "wirebot_detail_level=?")
+		args = append(args, body.WirebotDetail)
+	}
+	if body.ShareLevel != "" {
+		updates = append(updates, "share_level=?")
+		args = append(args, body.ShareLevel)
+	}
+	if body.Sensitivity != "" {
+		updates = append(updates, "sensitivity=?")
+		args = append(args, body.Sensitivity)
+	}
+	if body.Status != "" {
+		updates = append(updates, "status=?")
+		args = append(args, body.Status)
+	}
+	if body.PollInterval > 0 {
+		updates = append(updates, "poll_interval_seconds=?")
+		args = append(args, body.PollInterval)
+	}
+	updates = append(updates, "wirebot_visible=?", "updated_at=?")
+	args = append(args, body.WirebotVisible, time.Now().UTC().Format(time.RFC3339), id)
+
+	if len(updates) > 0 {
+		s.mu.Lock()
+		s.db.Exec("UPDATE integrations SET "+strings.Join(updates, ", ")+" WHERE id=?", args...)
+		s.mu.Unlock()
+	}
+	json.NewEncoder(w).Encode(map[string]interface{}{"ok": true, "id": id})
+}
+
+// ─── RSS Poller ─────────────────────────────────────────────────────────
+
+func (s *Server) startPoller() {
+	// Run immediately on start, then every 60 seconds
+	go func() {
+		time.Sleep(5 * time.Second) // Wait for server to be ready
+		s.pollDueIntegrations()
+		ticker := time.NewTicker(60 * time.Second)
+		for range ticker.C {
+			s.pollDueIntegrations()
+		}
+	}()
+}
+
+func (s *Server) pollDueIntegrations() {
+	now := time.Now().UTC().Format(time.RFC3339)
+	rows, err := s.db.Query(`SELECT id, provider, auth_type, encrypted_data, nonce, config,
+		last_poll_at, poll_interval_seconds FROM integrations
+		WHERE status='active' AND (next_poll_at <= ? OR next_poll_at = '') LIMIT 10`, now)
+	if err != nil {
+		log.Printf("Poller query error: %v", err)
+		return
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var id, provider, authType, config, lastPoll string
+		var encData, nonce []byte
+		var pollInterval int
+		rows.Scan(&id, &provider, &authType, &encData, &nonce, &config, &lastPoll, &pollInterval)
+
+		// Decrypt credential
+		var credential string
+		if len(encData) > 0 && len(nonce) > 0 {
+			decrypted, err := s.decryptCredential(encData, nonce)
+			if err != nil {
+				log.Printf("Poller: failed to decrypt %s (%s): %v", id, provider, err)
+				s.db.Exec("UPDATE integrations SET last_error=?, status='error' WHERE id=?", err.Error(), id)
+				continue
+			}
+			credential = string(decrypted)
+		}
+
+		// Poll based on provider
+		var pollErr error
+		switch provider {
+		case "rss", "blog_rss", "podcast_rss":
+			pollErr = s.pollRSS(id, credential, lastPoll)
+		case "youtube":
+			pollErr = s.pollYouTube(id, credential, config, lastPoll)
+		default:
+			log.Printf("Poller: unknown provider %s for integration %s", provider, id)
+		}
+
+		// Update poll timestamps
+		nextPoll := time.Now().Add(time.Duration(pollInterval) * time.Second).UTC().Format(time.RFC3339)
+		if pollErr != nil {
+			s.db.Exec("UPDATE integrations SET last_poll_at=?, next_poll_at=?, last_error=? WHERE id=?",
+				now, nextPoll, pollErr.Error(), id)
+		} else {
+			s.db.Exec("UPDATE integrations SET last_poll_at=?, next_poll_at=?, last_error='', last_used_at=? WHERE id=?",
+				now, nextPoll, now, id)
+		}
+	}
+}
+
+func (s *Server) pollRSS(integrationID, feedURL, lastPoll string) error {
+	client := &http.Client{Timeout: 15 * time.Second}
+	resp, err := client.Get(feedURL)
+	if err != nil {
+		return fmt.Errorf("fetch RSS: %w", err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20)) // 1MB max
+	if err != nil {
+		return fmt.Errorf("read RSS: %w", err)
+	}
+
+	// Parse RSS or Atom
+	var items []struct {
+		Title   string
+		Link    string
+		PubDate string
+		GUID    string
+	}
+
+	// Try RSS first
+	var rss RSSFeed
+	if err := xml.Unmarshal(body, &rss); err == nil && len(rss.Channel.Items) > 0 {
+		for _, item := range rss.Channel.Items {
+			items = append(items, struct {
+				Title   string
+				Link    string
+				PubDate string
+				GUID    string
+			}{item.Title, item.Link, item.PubDate, item.GUID})
+		}
+	} else {
+		// Try Atom
+		var atom AtomFeed
+		if err := xml.Unmarshal(body, &atom); err == nil {
+			for _, entry := range atom.Entries {
+				items = append(items, struct {
+					Title   string
+					Link    string
+					PubDate string
+					GUID    string
+				}{entry.Title, entry.Link.Href, entry.Updated, entry.ID})
+			}
+		}
+	}
+
+	if len(items) == 0 {
+		return nil // No items or parse error
+	}
+
+	// Filter to items newer than last poll
+	lastPollTime := time.Time{}
+	if lastPoll != "" {
+		lastPollTime, _ = time.Parse(time.RFC3339, lastPoll)
+	}
+
+	newCount := 0
+	for _, item := range items {
+		pubTime := parseFlexibleTime(item.PubDate)
+		if pubTime.IsZero() || (!lastPollTime.IsZero() && !pubTime.After(lastPollTime)) {
+			continue
+		}
+
+		// Check if we already have this event (by URL)
+		var exists int
+		s.db.QueryRow("SELECT COUNT(*) FROM events WHERE artifact_url=?", item.Link).Scan(&exists)
+		if exists > 0 {
+			continue
+		}
+
+		// Determine event type based on feed URL
+		eventType := "BLOG_PUBLISHED"
+		lane := "distribution"
+		if strings.Contains(feedURL, "podcast") || strings.Contains(feedURL, "anchor") {
+			eventType = "PODCAST_PUBLISHED"
+		}
+
+		score := calcScoreDelta(lane, eventType, 0.90)
+		score = int(float64(score) * verificationMultiplier("MEDIUM"))
+		id := fmt.Sprintf("evt-%d", time.Now().UnixNano()+int64(newCount))
+		now := time.Now().UTC().Format(time.RFC3339)
+
+		s.mu.Lock()
+		s.db.Exec(`INSERT INTO events (id, event_type, lane, source, timestamp,
+			artifact_url, artifact_title, confidence, verifiers, verification_level,
+			score_delta, created_at, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			id, eventType, lane, "rss-poller", pubTime.UTC().Format(time.RFC3339),
+			item.Link, item.Title, 0.90, `["rss_feed"]`, "MEDIUM",
+			score, now, "approved")
+		s.mu.Unlock()
+
+		s.updateDailyScore(pubTime.Format("2006-01-02"))
+		newCount++
+		log.Printf("RSS: New %s — %s (%s)", eventType, item.Title, item.Link)
+	}
+
+	if newCount > 0 {
+		log.Printf("RSS poller: %d new items from %s", newCount, feedURL)
+	}
+	return nil
+}
+
+func parseFlexibleTime(s string) time.Time {
+	formats := []string{
+		time.RFC3339,
+		time.RFC1123Z,
+		time.RFC1123,
+		"Mon, 02 Jan 2006 15:04:05 -0700",
+		"2006-01-02T15:04:05Z",
+		"2006-01-02T15:04:05-07:00",
+		"2006-01-02",
+	}
+	for _, fmt := range formats {
+		if t, err := time.Parse(fmt, s); err == nil {
+			return t
+		}
+	}
+	return time.Time{}
+}
+
+func (s *Server) pollYouTube(integrationID, apiKey, configJSON, lastPoll string) error {
+	var config struct {
+		ChannelID string `json:"channel_id"`
+	}
+	json.Unmarshal([]byte(configJSON), &config)
+	if config.ChannelID == "" || apiKey == "" {
+		return fmt.Errorf("channel_id and api_key required")
+	}
+
+	publishedAfter := time.Now().Add(-24 * time.Hour).UTC().Format(time.RFC3339)
+	if lastPoll != "" {
+		publishedAfter = lastPoll
+	}
+
+	url := fmt.Sprintf("https://www.googleapis.com/youtube/v3/search?part=snippet&channelId=%s&order=date&publishedAfter=%s&type=video&maxResults=10&key=%s",
+		config.ChannelID, publishedAfter, apiKey)
+
+	client := &http.Client{Timeout: 15 * time.Second}
+	resp, err := client.Get(url)
+	if err != nil {
+		return fmt.Errorf("youtube api: %w", err)
+	}
+	defer resp.Body.Close()
+
+	var result struct {
+		Items []struct {
+			ID      struct{ VideoId string `json:"videoId"` } `json:"id"`
+			Snippet struct {
+				Title       string `json:"title"`
+				PublishedAt string `json:"publishedAt"`
+			} `json:"snippet"`
+		} `json:"items"`
+		Error struct{ Message string `json:"message"` } `json:"error"`
+	}
+	json.NewDecoder(resp.Body).Decode(&result)
+	if result.Error.Message != "" {
+		return fmt.Errorf("youtube: %s", result.Error.Message)
+	}
+
+	newCount := 0
+	for _, item := range result.Items {
+		videoURL := fmt.Sprintf("https://youtube.com/watch?v=%s", item.ID.VideoId)
+		var exists int
+		s.db.QueryRow("SELECT COUNT(*) FROM events WHERE artifact_url=?", videoURL).Scan(&exists)
+		if exists > 0 {
+			continue
+		}
+
+		score := calcScoreDelta("distribution", "VIDEO_PUBLISHED", 0.95)
+		id := fmt.Sprintf("evt-%d", time.Now().UnixNano()+int64(newCount))
+		now := time.Now().UTC().Format(time.RFC3339)
+
+		s.mu.Lock()
+		s.db.Exec(`INSERT INTO events (id, event_type, lane, source, timestamp,
+			artifact_url, artifact_title, confidence, verifiers, verification_level,
+			score_delta, created_at, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			id, "VIDEO_PUBLISHED", "distribution", "youtube-poller", item.Snippet.PublishedAt,
+			videoURL, item.Snippet.Title, 0.95, `["youtube_api"]`, "STRONG",
+			score, now, "approved")
+		s.mu.Unlock()
+
+		pubTime, _ := time.Parse(time.RFC3339, item.Snippet.PublishedAt)
+		if !pubTime.IsZero() {
+			s.updateDailyScore(pubTime.Format("2006-01-02"))
+		}
+		newCount++
+		log.Printf("YouTube: New VIDEO_PUBLISHED — %s (%s)", item.Snippet.Title, videoURL)
+	}
+	return nil
+}
+
+// ─── Verification Level Score Multiplier ────────────────────────────────
+
+func verificationMultiplier(level string) float64 {
+	switch level {
+	case "STRONG":
+		return 1.0
+	case "MEDIUM":
+		return 0.85
+	case "WEAK":
+		return 0.70
+	case "SELF_REPORTED":
+		return 0.80
+	case "UNVERIFIED":
+		return 0.50
+	default:
+		return 0.80
+	}
 }
 
 func (s *Server) getStallHours() float64 {
