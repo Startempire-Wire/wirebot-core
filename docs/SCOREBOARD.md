@@ -242,3 +242,25 @@ Context switch penalty? -5 per switch after 2nd
 - [VISION.md](./VISION.md) — Sovereign mode philosophy
 - Source: `/data/wirebot/reference/business-performance-scoreboard.md`
 - Source: `/data/wirebot/reference/asset-portfolio-activation.md`
+
+## Lane Infrastructure
+
+### Automated Sources (trusted, auto-approve)
+| Source | Lane | Interval | Status |
+|--------|------|----------|--------|
+| Git Discovery | shipping | 5 min | ✅ Active |
+| GitHub Webhooks | shipping | real-time | ✅ Active (7 repos) |
+| Blog RSS (2 feeds) | distribution | 15 min | ✅ Active |
+| Sendy Campaigns | distribution | 1 hour | ✅ Active (4 brands) |
+| Stripe Webhook | revenue | real-time | ✅ Active (9 event types) |
+| MemberPress Webhook | revenue | real-time | ✅ Active (mu-plugin) |
+| WooCommerce Poller | revenue | 30 min | ✅ Active (no orders) |
+| Cloudflare Poller | systems | daily | ✅ Active (50 zones) |
+| Systems Health Check | systems | 6 hours | ✅ Active (4 services) |
+| SSL/Disk/Integration Audit | systems | daily cron | ✅ Active |
+
+### Pending Integration (need browser-side API key entry)
+- UptimeRobot, PostHog, RescueTime, Discord, HubSpot
+
+### Pending OAuth Apps
+- GitHub, YouTube (need app creation on provider platforms)
