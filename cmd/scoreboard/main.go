@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/hmac"
@@ -414,6 +415,9 @@ func main() {
 
 	// EOD score lock
 	mux.HandleFunc("/v1/lock", s.auth(s.handleLock))
+
+	// Wirebot chat proxy — full conversations with memory retention
+	mux.HandleFunc("/v1/chat", s.auth(s.handleChat))
 
 	// Integrations management
 	mux.HandleFunc("/v1/integrations", s.auth(s.handleIntegrations))
@@ -3593,6 +3597,118 @@ func (s *Server) handleCard(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "public, max-age=300")
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.Write([]byte(svg))
+}
+
+// ─── POST /v1/chat — Wirebot Chat Proxy ─────────────────────────────────
+// Proxies to OpenClaw gateway with session stickiness.
+// The "user" field ensures persistent sessions with full memory retention.
+
+func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
+	cors(w)
+	if r.Method == "OPTIONS" {
+		return
+	}
+	if r.Method != "POST" {
+		http.Error(w, `{"error":"POST only"}`, 405)
+		return
+	}
+
+	// Auth already enforced by s.auth() wrapper (tier >= 3)
+	ac := resolveAuth(r)
+	userID := "operator"
+	if ac.UserID > 0 {
+		userID = fmt.Sprintf("member-%d", ac.UserID)
+	}
+
+	// Parse incoming request
+	var req struct {
+		Messages []struct {
+			Role    string `json:"role"`
+			Content string `json:"content"`
+		} `json:"messages"`
+		Stream bool `json:"stream,omitempty"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, `{"error":"Invalid request body"}`, 400)
+		return
+	}
+	if len(req.Messages) == 0 {
+		http.Error(w, `{"error":"messages required"}`, 400)
+		return
+	}
+
+	// Build proxy request to OpenClaw
+	// "user" field = stable session key → persistent conversation with memory
+	gatewayURL := "http://127.0.0.1:18789/v1/chat/completions"
+	gatewayToken := os.Getenv("SCOREBOARD_TOKEN")
+	if gatewayToken == "" {
+		gatewayToken = "65b918ba-baf5-4996-8b53-6fb0f662a0c3"
+	}
+
+	proxyBody := map[string]interface{}{
+		"messages":   req.Messages,
+		"user":       "scoreboard:" + userID, // stable session key
+		"max_tokens": 2048,
+	}
+	if req.Stream {
+		proxyBody["stream"] = true
+	}
+
+	bodyBytes, _ := json.Marshal(proxyBody)
+	proxyReq, err := http.NewRequest("POST", gatewayURL, bytes.NewReader(bodyBytes))
+	if err != nil {
+		http.Error(w, `{"error":"Failed to create proxy request"}`, 502)
+		return
+	}
+	proxyReq.Header.Set("Content-Type", "application/json")
+	proxyReq.Header.Set("Authorization", "Bearer "+gatewayToken)
+
+	client := &http.Client{Timeout: 120 * time.Second}
+
+	if req.Stream {
+		// SSE streaming — pipe through directly
+		proxyResp, err := client.Do(proxyReq)
+		if err != nil {
+			http.Error(w, `{"error":"Gateway unavailable"}`, 502)
+			return
+		}
+		defer proxyResp.Body.Close()
+
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Cache-Control", "no-cache")
+		w.Header().Set("Connection", "keep-alive")
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.WriteHeader(proxyResp.StatusCode)
+
+		flusher, ok := w.(http.Flusher)
+		buf := make([]byte, 4096)
+		for {
+			n, readErr := proxyResp.Body.Read(buf)
+			if n > 0 {
+				w.Write(buf[:n])
+				if ok {
+					flusher.Flush()
+				}
+			}
+			if readErr != nil {
+				break
+			}
+		}
+	} else {
+		// Non-streaming — simple proxy
+		proxyResp, err := client.Do(proxyReq)
+		if err != nil {
+			http.Error(w, `{"error":"Gateway unavailable"}`, 502)
+			return
+		}
+		defer proxyResp.Body.Close()
+
+		respBody, _ := io.ReadAll(proxyResp.Body)
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.WriteHeader(proxyResp.StatusCode)
+		w.Write(respBody)
+	}
 }
 
 // ─── POST /v1/lock — EOD Score Lock ─────────────────────────────────────

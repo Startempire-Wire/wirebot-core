@@ -6,6 +6,7 @@
   import Wrapped from './lib/Wrapped.svelte';
   import Nav from './lib/Nav.svelte';
   import Hints from './lib/Hints.svelte';
+  import Chat from './lib/Chat.svelte';
 
   let view = $state('score');
   let data = $state(null);
@@ -18,6 +19,7 @@
   let fabTitle = $state('');
   let fabLane = $state('shipping');
   let showHints = $state(false);
+  let showChat = $state(false);
   let showFirstVisit = $state(false);
   let tokenStatus = $state(null);  // null | 'ok' | 'fail' | 'saving'
   let tokenMsg = $state('');
@@ -922,17 +924,25 @@
       {/if}
     </div>
 
-    <!-- Quick-add FAB -->
+    <!-- FAB cluster: Chat (primary) + Quick Ship (secondary) -->
     {#if view === 'score' || view === 'feed'}
-      <button class="fab" onclick={() => showFab = !showFab}>
-        {showFab ? '✕' : '＋'}
-      </button>
+      <div class="fab-cluster">
+        {#if !showFab}
+          <button class="fab-mini" onclick={() => showFab = true} title="Quick Ship">＋</button>
+        {/if}
+        <button class="fab" onclick={() => { showChat = true; showFab = false; }} title="Ask Wirebot">
+          ⚡
+        </button>
+      </div>
     {/if}
 
-    <!-- FAB panel -->
+    <!-- Quick Ship panel -->
     {#if showFab}
       <div class="fab-panel">
-        <div class="fab-title">Quick Ship</div>
+        <div class="fab-panel-header">
+          <div class="fab-title">Quick Ship</div>
+          <button class="fab-panel-close" onclick={() => showFab = false}>✕</button>
+        </div>
         <input bind:value={fabTitle} placeholder="What did you ship?" class="fab-input"
           onkeydown={(e) => e.key === 'Enter' && submitFabEvent()} />
         <div class="fab-lanes">
@@ -944,6 +954,9 @@
         <button class="fab-submit" onclick={submitFabEvent}>🚀 Ship It</button>
       </div>
     {/if}
+
+    <!-- Wirebot Chat -->
+    <Chat bind:visible={showChat} />
 
     <!-- Pending badge -->
     {#if data.pending_count > 0}
@@ -1021,25 +1034,51 @@
   .loading p { font-size: 14px; opacity: 0.5; }
   .err { color: #f44; }
 
-  /* FAB */
-  .fab {
+  /* FAB Cluster */
+  .fab-cluster {
     position: fixed;
     bottom: 72px;
     right: 16px;
-    width: 48px;
-    height: 48px;
+    z-index: 50;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+  }
+  .fab-mini {
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    background: #1a1a2e;
+    border: 1px solid #2a2a4a;
+    color: #7c7cff;
+    font-size: 18px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+    -webkit-tap-highlight-color: transparent;
+  }
+  .fab {
+    width: 52px;
+    height: 52px;
     border-radius: 50%;
     background: #7c7cff;
     color: white;
-    font-size: 24px;
+    font-size: 22px;
     border: none;
     cursor: pointer;
-    z-index: 50;
-    box-shadow: 0 4px 12px rgba(124,124,255,0.4);
+    box-shadow: 0 4px 16px rgba(124,124,255,0.5);
     display: flex;
     align-items: center;
     justify-content: center;
     -webkit-tap-highlight-color: transparent;
+    animation: fabPulse 3s infinite;
+  }
+  @keyframes fabPulse {
+    0%, 100% { box-shadow: 0 4px 16px rgba(124,124,255,0.5); }
+    50% { box-shadow: 0 4px 24px rgba(124,124,255,0.8); }
   }
 
   .fab-panel {
@@ -1055,6 +1094,12 @@
     display: flex;
     flex-direction: column;
     gap: 10px;
+  }
+  .fab-panel-header { display: flex; justify-content: space-between; align-items: center; }
+  .fab-panel-close {
+    width: 24px; height: 24px; border-radius: 50%; border: none;
+    background: rgba(255,50,50,0.1); color: #ff5050; font-size: 12px;
+    cursor: pointer; display: flex; align-items: center; justify-content: center;
   }
   .fab-title { font-size: 14px; font-weight: 700; color: #7c7cff; }
   .fab-input {
