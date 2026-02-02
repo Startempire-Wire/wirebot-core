@@ -36,37 +36,88 @@
   let connectMsg = $state('');
 
   // Integration registry — extensible catalog of connectable services
+  // Every service connects from the UI. No server-side auto-magic.
+  // OAuth services: click Connect → redirect to provider → callback with token
+  // Credential services: paste API key or URL directly
   const PROVIDERS = [
     // ── Revenue ──
-    { id: 'stripe', name: 'Stripe', icon: '💳', lane: 'revenue', auth: 'webhook',
-      desc: 'Payment & subscription tracking', hint: 'Webhook auto-configured — already connected via server.',
-      autoConnected: true },
-    // ── Distribution ──
-    { id: 'youtube', name: 'YouTube', icon: '📺', lane: 'distribution', auth: 'api_key',
-      desc: 'Video publishing detection', hint: 'YouTube Data API key',
-      fields: [{ key: 'channel_id', label: 'Channel ID', placeholder: 'UC...' }] },
-    { id: 'blog_rss', name: 'Blog RSS', icon: '📝', lane: 'distribution', auth: 'rss_url',
-      desc: 'Blog post detection via RSS/Atom', hint: 'Full RSS feed URL',
-      credLabel: 'Feed URL', credPlaceholder: 'https://yourblog.com/feed' },
-    { id: 'podcast_rss', name: 'Podcast RSS', icon: '🎙️', lane: 'distribution', auth: 'rss_url',
-      desc: 'Podcast episode detection', hint: 'RSS feed URL from your podcast host',
-      credLabel: 'Feed URL', credPlaceholder: 'https://anchor.fm/s/.../podcast/rss' },
+    { id: 'stripe', name: 'Stripe', icon: '💳', lane: 'revenue',
+      auth: 'oauth', desc: 'Payment & subscription tracking',
+      oauthUrl: '/v1/oauth/stripe/authorize',
+      hint: 'Connect your Stripe account to track payments, subscriptions, and payouts',
+      scopes: 'read_write' },
+    { id: 'paypal', name: 'PayPal', icon: '💰', lane: 'revenue',
+      auth: 'oauth', desc: 'Payment & invoice tracking',
+      hint: 'Connect PayPal to track incoming payments',
+      comingSoon: true },
     // ── Shipping ──
-    { id: 'github', name: 'GitHub', icon: '🐙', lane: 'shipping', auth: 'webhook',
-      desc: 'Commit, PR, and release tracking', hint: 'Webhook auto-configured — already connected via server.',
-      autoConnected: true },
+    { id: 'github', name: 'GitHub', icon: '🐙', lane: 'shipping',
+      auth: 'oauth', desc: 'Commits, PRs, releases, and deploy tracking',
+      oauthUrl: '/v1/oauth/github/authorize',
+      hint: 'Connect GitHub to auto-track code shipping across your repos',
+      scopes: 'repo,admin:repo_hook' },
+    { id: 'gitlab', name: 'GitLab', icon: '🦊', lane: 'shipping',
+      auth: 'oauth', desc: 'Commits, MRs, and pipeline tracking',
+      hint: 'Connect GitLab to track shipping activity',
+      comingSoon: true },
+    { id: 'vercel', name: 'Vercel', icon: '▲', lane: 'shipping',
+      auth: 'api_key', desc: 'Deploy tracking',
+      hint: 'Vercel API token from dashboard → Settings → Tokens',
+      credLabel: 'API Token', credPlaceholder: 'vercel_...' },
+    // ── Distribution ──
+    { id: 'youtube', name: 'YouTube', icon: '📺', lane: 'distribution',
+      auth: 'oauth', desc: 'Video publishing detection',
+      oauthUrl: '/v1/oauth/google/authorize?scope=youtube',
+      hint: 'Connect YouTube to detect when you publish new videos',
+      comingSoon: true },
+    { id: 'youtube_key', name: 'YouTube (API Key)', icon: '📺', lane: 'distribution',
+      auth: 'api_key', desc: 'Video publishing via API key',
+      hint: 'YouTube Data API v3 key from Google Cloud Console',
+      credLabel: 'API Key', credPlaceholder: 'AIza...',
+      fields: [{ key: 'channel_id', label: 'Channel ID', placeholder: 'UC...' }] },
+    { id: 'blog_rss', name: 'Blog / RSS', icon: '📝', lane: 'distribution',
+      auth: 'rss_url', desc: 'Blog post detection via RSS or Atom feed',
+      hint: 'Your blog\'s RSS feed URL — we\'ll check for new posts every 15 minutes',
+      credLabel: 'Feed URL', credPlaceholder: 'https://yourblog.com/feed' },
+    { id: 'podcast_rss', name: 'Podcast', icon: '🎙️', lane: 'distribution',
+      auth: 'rss_url', desc: 'Episode detection via podcast RSS',
+      hint: 'RSS feed URL from your podcast host (Anchor, Spotify, Apple)',
+      credLabel: 'Feed URL', credPlaceholder: 'https://anchor.fm/s/.../podcast/rss' },
+    { id: 'twitter', name: 'X (Twitter)', icon: '𝕏', lane: 'distribution',
+      auth: 'oauth', desc: 'Post and engagement tracking',
+      hint: 'Connect X to track business posts',
+      comingSoon: true },
+    { id: 'linkedin', name: 'LinkedIn', icon: '💼', lane: 'distribution',
+      auth: 'oauth', desc: 'Post and article tracking',
+      hint: 'Connect LinkedIn to track professional content',
+      comingSoon: true },
+    { id: 'newsletter', name: 'Newsletter', icon: '📧', lane: 'distribution',
+      auth: 'api_key', desc: 'Email campaign tracking',
+      hint: 'ConvertKit, Mailchimp, or Beehiiv API key',
+      credLabel: 'API Key', credPlaceholder: 'API key from your email platform',
+      comingSoon: true },
     // ── Systems ──
-    { id: 'uptime', name: 'Uptime Monitor', icon: '🟢', lane: 'systems', auth: 'webhook',
-      desc: 'Uptime & downtime events', hint: 'Configure your uptime service to POST to webhook URL' },
-    // ── Wellness (Operator Sustainability) ──
-    { id: 'fitness', name: 'Fitness', icon: '💪', lane: 'systems', auth: 'api_key',
-      desc: 'Workout & activity tracking', hint: 'Coming soon — Apple Health, Garmin, Fitbit',
+    { id: 'analytics', name: 'Google Analytics', icon: '📊', lane: 'systems',
+      auth: 'oauth', desc: 'Traffic and conversion tracking',
+      hint: 'Connect GA4 to monitor site performance',
       comingSoon: true },
-    { id: 'sleep', name: 'Sleep', icon: '😴', lane: 'systems', auth: 'api_key',
-      desc: 'Sleep quality tracking', hint: 'Coming soon — Oura, Whoop, Apple Health',
+    { id: 'uptime', name: 'Uptime Monitor', icon: '🟢', lane: 'systems',
+      auth: 'webhook_url', desc: 'Uptime & downtime alerts',
+      hint: 'Point your uptime service webhook to this URL:',
+      webhookUrl: true,
+      credLabel: 'Service Name', credPlaceholder: 'e.g. UptimeRobot, BetterStack' },
+    // ── Wellness (Operator Sustainability — Pillar 10) ──
+    { id: 'fitness', name: 'Fitness', icon: '💪', lane: 'systems',
+      auth: 'oauth', desc: 'Workout & activity tracking',
+      hint: 'Apple Health, Garmin, Fitbit, Strava',
       comingSoon: true },
-    { id: 'nutrition', name: 'Nutrition', icon: '🥗', lane: 'systems', auth: 'api_key',
-      desc: 'Meal & nutrition tracking', hint: 'Coming soon — MyFitnessPal, Cronometer',
+    { id: 'sleep', name: 'Sleep', icon: '😴', lane: 'systems',
+      auth: 'oauth', desc: 'Sleep quality tracking',
+      hint: 'Oura, Whoop, Apple Health, Fitbit',
+      comingSoon: true },
+    { id: 'nutrition', name: 'Nutrition', icon: '🥗', lane: 'systems',
+      auth: 'oauth', desc: 'Meal & nutrition tracking',
+      hint: 'MyFitnessPal, Cronometer',
       comingSoon: true },
   ];
 
@@ -86,9 +137,21 @@
     return integrations.find(i => i.provider === providerId && i.status === 'active');
   }
 
+  function startOAuth(provider) {
+    // Store return state so callback knows what we're connecting
+    localStorage.setItem('wb_oauth_provider', provider.id);
+    // Redirect to server OAuth initiation endpoint
+    window.location.href = `${API}${provider.oauthUrl}`;
+  }
+
   async function connectProvider(provider) {
     if (provider.comingSoon) return;
-    if (provider.autoConnected) return; // Already wired server-side
+
+    // OAuth providers → redirect flow
+    if (provider.auth === 'oauth' && provider.oauthUrl) {
+      startOAuth(provider);
+      return;
+    }
 
     connectStatus = 'saving';
     connectMsg = 'Connecting...';
@@ -108,9 +171,10 @@
       body.config = JSON.stringify(cfg);
     }
 
-    // For RSS, credential IS the URL
-    if (provider.auth === 'rss_url') {
-      body.credential = connectCred;
+    // For webhook_url type, credential is the service name, we generate the URL
+    if (provider.auth === 'webhook_url') {
+      body.auth_type = 'webhook';
+      body.credential = connectCred || provider.id;
     }
 
     try {
@@ -136,6 +200,29 @@
       connectMsg = 'Network error';
     }
     setTimeout(() => { connectStatus = null; }, 4000);
+  }
+
+  // Handle OAuth callback (page load with ?oauth=provider&status=ok)
+  function handleOAuthCallback() {
+    const params = new URLSearchParams(window.location.search);
+    const oauthProvider = params.get('oauth');
+    const oauthStatus = params.get('oauth_status');
+    if (oauthProvider && oauthStatus) {
+      // Clean URL
+      window.history.replaceState({}, '', '/');
+      if (oauthStatus === 'ok') {
+        connectStatus = 'ok';
+        connectMsg = `✓ ${oauthProvider} connected`;
+        view = 'settings';
+        loadIntegrations();
+      } else {
+        connectStatus = 'fail';
+        connectMsg = `✗ ${oauthProvider}: ${params.get('error') || 'connection failed'}`;
+        view = 'settings';
+      }
+      localStorage.removeItem('wb_oauth_provider');
+      setTimeout(() => { connectStatus = null; }, 5000);
+    }
   }
 
   async function disconnectProvider(integrationId) {
@@ -357,6 +444,7 @@
 
   onMount(() => {
     restoreSession();
+    handleOAuthCallback();
     if (loggedInUser) {
       fetchAll();
       loadIntegrations();
@@ -530,80 +618,112 @@
           <!-- ── Connected Accounts ── -->
           <div class="s-group">
             <label>Connected Accounts</label>
-            <p class="s-hint-text">Data flows into your scoreboard from connected services</p>
+            <p class="s-hint-text">Connect services to flow real data into your scoreboard</p>
 
-            {#each PROVIDERS as provider}
-              {@const connected = getConnectedProvider(provider.id)}
-              {@const isAuto = provider.autoConnected}
-              <div class="int-card" class:int-connected={connected || isAuto} class:int-coming={provider.comingSoon}>
-                <div class="int-row">
-                  <span class="int-icon">{provider.icon}</span>
-                  <div class="int-info">
-                    <div class="int-name">
-                      {provider.name}
-                      <span class="int-lane lane-{provider.lane}">{provider.lane}</span>
-                    </div>
-                    <div class="int-desc">{provider.desc}</div>
-                  </div>
-                  <div class="int-action">
-                    {#if provider.comingSoon}
-                      <span class="int-soon">Soon</span>
-                    {:else if connected}
-                      <button class="int-btn int-disconnect" onclick={() => disconnectProvider(connected.id)}>✕</button>
-                    {:else if isAuto}
-                      <span class="int-auto">✓ Auto</span>
-                    {:else if showConnectForm === provider.id}
-                      <button class="int-btn int-cancel" onclick={() => { showConnectForm = null; connectCred = ''; connectExtra = ''; }}>✕</button>
-                    {:else}
-                      <button class="int-btn int-connect" onclick={() => { showConnectForm = provider.id; connectCred = ''; connectExtra = ''; }}>Connect</button>
-                    {/if}
-                  </div>
+            {#if connectStatus}
+              <div class="token-status" class:ok={connectStatus === 'ok'} class:fail={connectStatus === 'fail'} class:saving={connectStatus === 'saving'}>
+                {connectMsg}
+              </div>
+            {/if}
+
+            <!-- Group by lane -->
+            {#each ['revenue', 'shipping', 'distribution', 'systems'] as lane}
+              {@const laneProviders = PROVIDERS.filter(p => p.lane === lane)}
+              <div class="int-lane-group">
+                <div class="int-lane-header">
+                  <span class="int-lane lane-{lane}">{lane}</span>
+                  {@const laneConnected = laneProviders.filter(p => getConnectedProvider(p.id)).length}
+                  {#if laneConnected > 0}
+                    <span class="int-lane-count">{laneConnected} connected</span>
+                  {/if}
                 </div>
 
-                {#if connected}
-                  <div class="int-status-row">
-                    <span class="int-status-dot active"></span>
-                    <span class="int-status-text">Active</span>
-                    {#if connected.last_used_at}
-                      <span class="int-last-poll">Last data: {new Date(connected.last_used_at).toLocaleDateString()}</span>
+                {#each laneProviders as provider}
+                  {@const connected = getConnectedProvider(provider.id)}
+                  <div class="int-card" class:int-connected={connected} class:int-coming={provider.comingSoon}>
+                    <div class="int-row">
+                      <span class="int-icon">{provider.icon}</span>
+                      <div class="int-info">
+                        <div class="int-name">{provider.name}</div>
+                        <div class="int-desc">{provider.desc}</div>
+                      </div>
+                      <div class="int-action">
+                        {#if provider.comingSoon}
+                          <span class="int-soon">Soon</span>
+                        {:else if connected}
+                          <button class="int-btn int-disconnect" onclick={() => disconnectProvider(connected.id)}>Disconnect</button>
+                        {:else if provider.auth === 'oauth' && provider.oauthUrl}
+                          <button class="int-btn int-connect" onclick={() => connectProvider(provider)}>Connect</button>
+                        {:else if showConnectForm === provider.id}
+                          <button class="int-btn int-cancel" onclick={() => { showConnectForm = null; connectCred = ''; connectExtra = ''; }}>Cancel</button>
+                        {:else}
+                          <button class="int-btn int-connect" onclick={() => { showConnectForm = provider.id; connectCred = ''; connectExtra = ''; }}>
+                            {provider.auth === 'oauth' ? 'Connect' : 'Add'}
+                          </button>
+                        {/if}
+                      </div>
+                    </div>
+
+                    {#if connected}
+                      <div class="int-status-row">
+                        <span class="int-status-dot" class:active={connected.status === 'active'} class:error={connected.status === 'error'}></span>
+                        <span class="int-status-text" class:error-text={connected.status === 'error'}>
+                          {connected.status === 'active' ? 'Connected' : 'Error'}
+                        </span>
+                        {#if connected.last_used_at}
+                          <span class="int-last-poll">Last sync: {new Date(connected.last_used_at).toLocaleDateString()}</span>
+                        {/if}
+                        {#if connected.last_error}
+                          <span class="int-error">⚠ {connected.last_error}</span>
+                        {/if}
+                      </div>
                     {/if}
-                    {#if connected.last_error}
-                      <span class="int-error">⚠ {connected.last_error}</span>
+
+                    <!-- Credential input form (non-OAuth) -->
+                    {#if showConnectForm === provider.id && provider.auth !== 'oauth'}
+                      <div class="int-form">
+                        <p class="int-hint">{provider.hint}</p>
+
+                        {#if provider.webhookUrl}
+                          <div class="int-webhook-url">
+                            <span class="int-wh-label">Your webhook URL:</span>
+                            <code class="int-wh-code">{API}/v1/webhooks/{provider.id}</code>
+                          </div>
+                        {/if}
+
+                        <input type={provider.auth === 'rss_url' ? 'url' : 'password'}
+                          bind:value={connectCred}
+                          placeholder={provider.credPlaceholder || provider.credLabel || 'API key or credential'}
+                          onkeydown={(e) => {
+                            if (e.key === 'Enter' && (!provider.fields?.length || connectExtra)) connectProvider(provider);
+                            else if (e.key === 'Enter') document.getElementById('int-extra')?.focus();
+                          }} />
+
+                        {#if provider.fields?.length}
+                          {#each provider.fields as field}
+                            <input type="text" id="int-extra"
+                              bind:value={connectExtra}
+                              placeholder={field.placeholder || field.label}
+                              onkeydown={(e) => e.key === 'Enter' && connectProvider(provider)} />
+                          {/each}
+                        {/if}
+
+                        <button class="int-save" onclick={() => connectProvider(provider)}
+                          disabled={!connectCred || connectStatus === 'saving'}>
+                          {connectStatus === 'saving' ? 'Connecting...' : `Connect ${provider.name}`}
+                        </button>
+                      </div>
                     {/if}
-                  </div>
-                {/if}
 
-                {#if showConnectForm === provider.id}
-                  <div class="int-form">
-                    <input type={provider.auth === 'rss_url' ? 'url' : 'password'}
-                      bind:value={connectCred}
-                      placeholder={provider.credPlaceholder || provider.hint || 'API key or credential'}
-                      onkeydown={(e) => {
-                        if (e.key === 'Enter' && (!provider.fields?.length || connectExtra)) connectProvider(provider);
-                        else if (e.key === 'Enter') document.getElementById('int-extra')?.focus();
-                      }} />
-
-                    {#if provider.fields?.length}
-                      {#each provider.fields as field}
-                        <input type="text" id="int-extra"
-                          bind:value={connectExtra}
-                          placeholder={field.placeholder || field.label}
-                          onkeydown={(e) => e.key === 'Enter' && connectProvider(provider)} />
-                      {/each}
-                    {/if}
-
-                    <button class="int-save" onclick={() => connectProvider(provider)}
-                      disabled={!connectCred || connectStatus === 'saving'}>
-                      {connectStatus === 'saving' ? 'Connecting...' : `Connect ${provider.name}`}
-                    </button>
-
-                    {#if connectStatus && showConnectForm === provider.id}
-                      <div class="token-status" class:ok={connectStatus === 'ok'} class:fail={connectStatus === 'fail'} class:saving={connectStatus === 'saving'}>
-                        {connectMsg}
+                    <!-- OAuth hint (shown on tap before redirect) -->
+                    {#if showConnectForm === provider.id && provider.auth === 'oauth' && !provider.oauthUrl}
+                      <div class="int-form">
+                        <p class="int-hint">{provider.hint}</p>
+                        <p class="int-hint" style="color: #7c7cff;">OAuth app setup required — coming soon</p>
                       </div>
                     {/if}
                   </div>
-                {/if}
+                {/each}
               </div>
             {/each}
           </div>
@@ -985,20 +1105,25 @@
 
   .s-hint-text { font-size: 11px; color: #555; margin-bottom: 4px; }
 
+  /* Integration lane groups */
+  .int-lane-group { display: flex; flex-direction: column; gap: 6px; }
+  .int-lane-header { display: flex; align-items: center; gap: 8px; margin-top: 4px; }
+  .int-lane-count { font-size: 10px; color: #2ecc71; font-weight: 600; }
+
   /* Integration cards */
   .int-card {
     background: #111118; border: 1px solid #1e1e30; border-radius: 10px;
     padding: 12px; transition: border-color 0.2s;
   }
   .int-card.int-connected { border-color: #1a3a1a; }
-  .int-card.int-coming { opacity: 0.45; }
+  .int-card.int-coming { opacity: 0.4; }
   .int-row { display: flex; align-items: center; gap: 10px; }
-  .int-icon { font-size: 24px; flex-shrink: 0; width: 32px; text-align: center; }
+  .int-icon { font-size: 22px; flex-shrink: 0; width: 28px; text-align: center; }
   .int-info { flex: 1; min-width: 0; }
-  .int-name { font-size: 13px; font-weight: 700; color: #ddd; display: flex; align-items: center; gap: 6px; }
-  .int-desc { font-size: 11px; color: #555; margin-top: 2px; }
+  .int-name { font-size: 13px; font-weight: 700; color: #ddd; }
+  .int-desc { font-size: 11px; color: #555; margin-top: 1px; }
   .int-lane {
-    font-size: 9px; font-weight: 700; padding: 1px 6px; border-radius: 3px;
+    font-size: 9px; font-weight: 700; padding: 2px 8px; border-radius: 3px;
     text-transform: uppercase; letter-spacing: 0.05em;
   }
   .lane-revenue { background: #1a2a1a; color: #2ecc71; }
@@ -1008,33 +1133,38 @@
 
   .int-action { flex-shrink: 0; }
   .int-btn {
-    padding: 4px 12px; border-radius: 6px; font-size: 12px; font-weight: 600;
+    padding: 5px 12px; border-radius: 6px; font-size: 11px; font-weight: 600;
     cursor: pointer; border: none; transition: all 0.15s;
   }
   .int-connect { background: #7c7cff; color: white; }
   .int-connect:active { background: #5c5cdd; }
-  .int-disconnect { background: transparent; color: #666; border: 1px solid #333; padding: 4px 8px; }
+  .int-disconnect {
+    background: transparent; color: #555; border: 1px solid #2a2a3a;
+    font-size: 10px; padding: 4px 8px;
+  }
   .int-disconnect:hover { color: #ff4444; border-color: #ff4444; }
-  .int-cancel { background: #333; color: #888; padding: 4px 8px; }
-  .int-auto { font-size: 11px; color: #2ecc71; font-weight: 600; }
-  .int-soon { font-size: 11px; color: #555; font-style: italic; }
+  .int-cancel { background: #2a2a3a; color: #888; padding: 4px 10px; }
+  .int-soon { font-size: 10px; color: #444; font-style: italic; }
 
   .int-status-row {
     display: flex; align-items: center; gap: 6px; margin-top: 8px;
-    padding-top: 8px; border-top: 1px solid #1a1a2a;
+    padding-top: 8px; border-top: 1px solid #1a1a2a; flex-wrap: wrap;
   }
   .int-status-dot {
     width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0;
   }
   .int-status-dot.active { background: #2ecc71; }
+  .int-status-dot.error { background: #ff4444; }
   .int-status-text { font-size: 11px; color: #2ecc71; font-weight: 600; }
+  .int-status-text.error-text { color: #ff4444; }
   .int-last-poll { font-size: 10px; color: #444; margin-left: auto; }
-  .int-error { font-size: 10px; color: #ff9500; }
+  .int-error { font-size: 10px; color: #ff9500; width: 100%; margin-top: 4px; }
 
   .int-form {
     display: flex; flex-direction: column; gap: 8px; margin-top: 10px;
     padding-top: 10px; border-top: 1px solid #1a1a2a;
   }
+  .int-hint { font-size: 11px; color: #666; line-height: 1.5; margin: 0; }
   .int-form input {
     background: #0a0a15; border: 1px solid #2a2a40; border-radius: 6px;
     padding: 8px 10px; color: #ddd; font-size: 12px; outline: none;
@@ -1046,6 +1176,16 @@
   }
   .int-save:disabled { opacity: 0.4; cursor: default; }
   .int-save:active:not(:disabled) { background: #5c5cdd; }
+
+  .int-webhook-url {
+    background: #0a0a15; border: 1px solid #2a2a40; border-radius: 6px;
+    padding: 8px 10px; display: flex; flex-direction: column; gap: 4px;
+  }
+  .int-wh-label { font-size: 10px; color: #555; }
+  .int-wh-code {
+    font-size: 11px; color: #7c7cff; font-family: monospace;
+    word-break: break-all; user-select: all; cursor: text;
+  }
 
   .s-info { font-size: 13px; opacity: 0.6; line-height: 1.6; }
   .s-links { display: flex; gap: 8px; flex-wrap: wrap; }

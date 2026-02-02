@@ -421,6 +421,12 @@ func main() {
 	mux.HandleFunc("/v1/webhooks/stripe", s.handleStripeWebhook) // Stripe signs its own webhooks
 	mux.HandleFunc("/v1/financial/snapshot", s.auth(s.handleFinancialSnapshot))
 
+	// OAuth flows (provider authorization + callbacks)
+	mux.HandleFunc("/v1/oauth/stripe/authorize", s.auth(s.handleOAuthStart))
+	mux.HandleFunc("/v1/oauth/github/authorize", s.auth(s.handleOAuthStart))
+	mux.HandleFunc("/v1/oauth/google/authorize", s.auth(s.handleOAuthStart))
+	mux.HandleFunc("/v1/oauth/callback", s.handleOAuthCallback) // Provider redirects back here
+
 	// SSO callback — receives JWT from Connect Plugin redirect
 	mux.HandleFunc("/auth/callback", s.handleSSOCallback)
 
@@ -2432,6 +2438,308 @@ func (s *Server) handleFinancialSnapshot(w http.ResponseWriter, r *http.Request)
 // ─── SSO Callback ───────────────────────────────────────────────────────────
 // Receives JWT via URL fragment from Connect Plugin SSO redirect.
 // Serves a tiny HTML page that reads the fragment and stores in localStorage.
+
+// ─── OAuth Flow (Provider Authorization) ────────────────────────────────
+// Handles OAuth initiation and callback for Stripe, GitHub, Google/YouTube.
+// OAuth app credentials stored as env vars:
+//   OAUTH_STRIPE_CLIENT_ID, OAUTH_STRIPE_CLIENT_SECRET
+//   OAUTH_GITHUB_CLIENT_ID, OAUTH_GITHUB_CLIENT_SECRET
+//   OAUTH_GOOGLE_CLIENT_ID, OAUTH_GOOGLE_CLIENT_SECRET
+
+var (
+	oauthStripeClientID     = os.Getenv("OAUTH_STRIPE_CLIENT_ID")
+	oauthStripeClientSecret = os.Getenv("OAUTH_STRIPE_CLIENT_SECRET")
+	oauthGitHubClientID     = os.Getenv("OAUTH_GITHUB_CLIENT_ID")
+	oauthGitHubClientSecret = os.Getenv("OAUTH_GITHUB_CLIENT_SECRET")
+	oauthGoogleClientID     = os.Getenv("OAUTH_GOOGLE_CLIENT_ID")
+	oauthGoogleClientSecret = os.Getenv("OAUTH_GOOGLE_CLIENT_SECRET")
+	oauthCallbackBase       = envOr("OAUTH_CALLBACK_BASE", "https://wins.wirebot.chat")
+)
+
+type oauthProviderConfig struct {
+	ClientID     string
+	ClientSecret string
+	AuthURL      string
+	TokenURL     string
+	Scopes       string
+	Provider     string
+}
+
+func getOAuthConfig(provider string) *oauthProviderConfig {
+	switch provider {
+	case "stripe":
+		if oauthStripeClientID == "" {
+			return nil
+		}
+		return &oauthProviderConfig{
+			ClientID: oauthStripeClientID, ClientSecret: oauthStripeClientSecret,
+			AuthURL: "https://connect.stripe.com/oauth/authorize", TokenURL: "https://connect.stripe.com/oauth/token",
+			Scopes: "read_write", Provider: "stripe",
+		}
+	case "github":
+		if oauthGitHubClientID == "" {
+			return nil
+		}
+		return &oauthProviderConfig{
+			ClientID: oauthGitHubClientID, ClientSecret: oauthGitHubClientSecret,
+			AuthURL: "https://github.com/login/oauth/authorize", TokenURL: "https://github.com/login/oauth/access_token",
+			Scopes: "repo,admin:repo_hook", Provider: "github",
+		}
+	case "google":
+		if oauthGoogleClientID == "" {
+			return nil
+		}
+		return &oauthProviderConfig{
+			ClientID: oauthGoogleClientID, ClientSecret: oauthGoogleClientSecret,
+			AuthURL: "https://accounts.google.com/o/oauth2/v2/auth", TokenURL: "https://oauth2.googleapis.com/token",
+			Scopes: "https://www.googleapis.com/auth/youtube.readonly", Provider: "google",
+		}
+	}
+	return nil
+}
+
+func (s *Server) handleOAuthStart(w http.ResponseWriter, r *http.Request) {
+	// Determine provider from URL path: /v1/oauth/{provider}/authorize
+	parts := strings.Split(r.URL.Path, "/")
+	var provider string
+	for i, p := range parts {
+		if p == "oauth" && i+1 < len(parts) {
+			provider = parts[i+1]
+			break
+		}
+	}
+
+	cfg := getOAuthConfig(provider)
+	if cfg == nil {
+		// OAuth not configured yet — redirect back with helpful error
+		http.Redirect(w, r, fmt.Sprintf("/?oauth=%s&oauth_status=fail&error=OAuth+app+not+configured+yet.+Contact+your+operator.", provider), 302)
+		return
+	}
+
+	// Generate state token for CSRF protection
+	stateBytes := make([]byte, 16)
+	rand.Read(stateBytes)
+	state := hex.EncodeToString(stateBytes)
+
+	// Store state in a short-lived cookie (5 minutes)
+	http.SetCookie(w, &http.Cookie{
+		Name: "oauth_state", Value: state,
+		Path: "/", MaxAge: 300, HttpOnly: true, Secure: true, SameSite: http.SameSiteLaxMode,
+	})
+
+	callbackURL := fmt.Sprintf("%s/v1/oauth/callback", oauthCallbackBase)
+
+	var authURL string
+	if provider == "stripe" {
+		authURL = fmt.Sprintf("%s?response_type=code&client_id=%s&scope=%s&redirect_uri=%s&state=%s",
+			cfg.AuthURL, cfg.ClientID, cfg.Scopes, callbackURL, state)
+	} else if provider == "google" {
+		scope := r.URL.Query().Get("scope")
+		if scope == "youtube" {
+			scope = "https://www.googleapis.com/auth/youtube.readonly"
+		} else {
+			scope = cfg.Scopes
+		}
+		authURL = fmt.Sprintf("%s?response_type=code&client_id=%s&scope=%s&redirect_uri=%s&state=%s&access_type=offline&prompt=consent",
+			cfg.AuthURL, cfg.ClientID, scope, callbackURL, state)
+	} else {
+		authURL = fmt.Sprintf("%s?client_id=%s&scope=%s&redirect_uri=%s&state=%s",
+			cfg.AuthURL, cfg.ClientID, cfg.Scopes, callbackURL, state)
+	}
+
+	// Store provider in state cookie so callback knows which provider
+	http.SetCookie(w, &http.Cookie{
+		Name: "oauth_provider", Value: provider,
+		Path: "/", MaxAge: 300, HttpOnly: true, Secure: true, SameSite: http.SameSiteLaxMode,
+	})
+
+	http.Redirect(w, r, authURL, 302)
+}
+
+func (s *Server) handleOAuthCallback(w http.ResponseWriter, r *http.Request) {
+	code := r.URL.Query().Get("code")
+	state := r.URL.Query().Get("state")
+	errParam := r.URL.Query().Get("error")
+
+	// Get provider from cookie
+	providerCookie, _ := r.Cookie("oauth_provider")
+	provider := ""
+	if providerCookie != nil {
+		provider = providerCookie.Value
+	}
+
+	// Clear cookies
+	http.SetCookie(w, &http.Cookie{Name: "oauth_state", Path: "/", MaxAge: -1})
+	http.SetCookie(w, &http.Cookie{Name: "oauth_provider", Path: "/", MaxAge: -1})
+
+	if errParam != "" {
+		http.Redirect(w, r, fmt.Sprintf("/?oauth=%s&oauth_status=fail&error=%s", provider, errParam), 302)
+		return
+	}
+
+	// Verify state
+	stateCookie, _ := r.Cookie("oauth_state")
+	if stateCookie == nil || stateCookie.Value != state {
+		http.Redirect(w, r, fmt.Sprintf("/?oauth=%s&oauth_status=fail&error=Invalid+state+token", provider), 302)
+		return
+	}
+
+	cfg := getOAuthConfig(provider)
+	if cfg == nil {
+		http.Redirect(w, r, fmt.Sprintf("/?oauth=%s&oauth_status=fail&error=Provider+not+configured", provider), 302)
+		return
+	}
+
+	// Exchange code for token
+	callbackURL := fmt.Sprintf("%s/v1/oauth/callback", oauthCallbackBase)
+	tokenBody := fmt.Sprintf("grant_type=authorization_code&code=%s&redirect_uri=%s&client_id=%s&client_secret=%s",
+		code, callbackURL, cfg.ClientID, cfg.ClientSecret)
+
+	client := &http.Client{Timeout: 15 * time.Second}
+	tokenReq, _ := http.NewRequest("POST", cfg.TokenURL, strings.NewReader(tokenBody))
+	tokenReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	if provider == "github" {
+		tokenReq.Header.Set("Accept", "application/json")
+	}
+
+	tokenResp, err := client.Do(tokenReq)
+	if err != nil {
+		http.Redirect(w, r, fmt.Sprintf("/?oauth=%s&oauth_status=fail&error=Token+exchange+failed", provider), 302)
+		return
+	}
+	defer tokenResp.Body.Close()
+
+	var tokenData map[string]interface{}
+	json.NewDecoder(tokenResp.Body).Decode(&tokenData)
+
+	// Check for errors in token response
+	if tokenData["error"] != nil {
+		errMsg, _ := tokenData["error_description"].(string)
+		if errMsg == "" {
+			errMsg, _ = tokenData["error"].(string)
+		}
+		http.Redirect(w, r, fmt.Sprintf("/?oauth=%s&oauth_status=fail&error=%s", provider, errMsg), 302)
+		return
+	}
+
+	// Store the token as an encrypted integration
+	tokenJSON, _ := json.Marshal(tokenData)
+	encrypted, nonce, err := s.encryptCredential(tokenJSON)
+	if err != nil {
+		http.Redirect(w, r, fmt.Sprintf("/?oauth=%s&oauth_status=fail&error=Encryption+failed", provider), 302)
+		return
+	}
+
+	// Determine display name from token data
+	displayName := provider
+	switch provider {
+	case "stripe":
+		if acct, ok := tokenData["stripe_user_id"].(string); ok {
+			displayName = fmt.Sprintf("Stripe (%s)", acct)
+		}
+	case "github":
+		// Fetch user info
+		if token, ok := tokenData["access_token"].(string); ok {
+			userReq, _ := http.NewRequest("GET", "https://api.github.com/user", nil)
+			userReq.Header.Set("Authorization", "Bearer "+token)
+			if userResp, err := client.Do(userReq); err == nil {
+				var user map[string]interface{}
+				json.NewDecoder(userResp.Body).Decode(&user)
+				userResp.Body.Close()
+				if login, ok := user["login"].(string); ok {
+					displayName = fmt.Sprintf("GitHub (@%s)", login)
+				}
+			}
+		}
+	case "google":
+		displayName = "YouTube"
+	}
+
+	id := fmt.Sprintf("int-%d", time.Now().UnixNano())
+	now := time.Now().UTC().Format(time.RFC3339)
+	nextPoll := time.Now().Add(30 * time.Minute).UTC().Format(time.RFC3339)
+
+	// Map provider to scoreboard provider ID
+	scoreProvider := provider
+	if provider == "google" {
+		scoreProvider = "youtube"
+	}
+
+	s.mu.Lock()
+	s.db.Exec(`INSERT INTO integrations (id, user_id, provider, auth_type, encrypted_data, nonce,
+		display_name, poll_interval_seconds, created_at, updated_at, next_poll_at, scopes)
+		VALUES (?, 'default', ?, 'oauth2', ?, ?, ?, 1800, ?, ?, ?, ?)`,
+		id, scoreProvider, encrypted, nonce, displayName, now, now, nextPoll, cfg.Scopes)
+	s.mu.Unlock()
+
+	// For GitHub: auto-create webhooks on user's repos
+	if provider == "github" {
+		go s.setupGitHubWebhooks(tokenData)
+	}
+
+	log.Printf("OAuth: %s connected as %s (integration %s)", provider, displayName, id)
+	http.Redirect(w, r, fmt.Sprintf("/?oauth=%s&oauth_status=ok", scoreProvider), 302)
+}
+
+// setupGitHubWebhooks creates webhook on connected user's repos after OAuth
+func (s *Server) setupGitHubWebhooks(tokenData map[string]interface{}) {
+	token, ok := tokenData["access_token"].(string)
+	if !ok || token == "" {
+		return
+	}
+
+	client := &http.Client{Timeout: 15 * time.Second}
+	webhookURL := fmt.Sprintf("%s/v1/webhooks/github", oauthCallbackBase)
+
+	// List user's repos
+	req, _ := http.NewRequest("GET", "https://api.github.com/user/repos?per_page=100&sort=pushed", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, err := client.Do(req)
+	if err != nil {
+		log.Printf("GitHub OAuth: failed to list repos: %v", err)
+		return
+	}
+	defer resp.Body.Close()
+
+	var repos []struct {
+		FullName string `json:"full_name"`
+		Private  bool   `json:"private"`
+		Permissions struct{ Admin bool `json:"admin"` } `json:"permissions"`
+	}
+	json.NewDecoder(resp.Body).Decode(&repos)
+
+	created := 0
+	for _, repo := range repos {
+		if !repo.Permissions.Admin {
+			continue // Can't create webhooks without admin
+		}
+
+		// Create webhook
+		hookBody, _ := json.Marshal(map[string]interface{}{
+			"name":   "web",
+			"active": true,
+			"events": []string{"push", "pull_request", "release"},
+			"config": map[string]string{
+				"url":          webhookURL,
+				"content_type": "json",
+			},
+		})
+
+		hookReq, _ := http.NewRequest("POST", fmt.Sprintf("https://api.github.com/repos/%s/hooks", repo.FullName), strings.NewReader(string(hookBody)))
+		hookReq.Header.Set("Authorization", "Bearer "+token)
+		hookReq.Header.Set("Content-Type", "application/json")
+		hookResp, err := client.Do(hookReq)
+		if err != nil {
+			continue
+		}
+		hookResp.Body.Close()
+		if hookResp.StatusCode == 201 {
+			created++
+			log.Printf("GitHub OAuth: webhook created on %s", repo.FullName)
+		}
+	}
+	log.Printf("GitHub OAuth: created webhooks on %d repos", created)
+}
 
 func (s *Server) handleSSOCallback(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
