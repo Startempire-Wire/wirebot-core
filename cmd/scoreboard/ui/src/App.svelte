@@ -133,8 +133,8 @@
     } catch {}
   }
 
-  function getConnectedProvider(providerId) {
-    return integrations.find(i => i.provider === providerId && i.status === 'active');
+  function getConnectedProviders(providerId) {
+    return integrations.filter(i => i.provider === providerId && (i.status === 'active' || i.status === 'error'));
   }
 
   function startOAuth(provider) {
@@ -156,10 +156,20 @@
     connectStatus = 'saving';
     connectMsg = 'Connecting...';
 
+    // Build display name from credential for distinguishability
+    let displayName = provider.name;
+    if (provider.auth === 'rss_url' && connectCred) {
+      try { displayName = new URL(connectCred).hostname; } catch { displayName = connectCred.substring(0, 40); }
+    } else if (provider.auth === 'api_key' && connectExtra) {
+      displayName = `${provider.name} (${connectExtra.substring(0, 20)})`;
+    } else if (provider.auth === 'webhook_url' && connectCred) {
+      displayName = `${provider.name} — ${connectCred}`;
+    }
+
     const body = {
       provider: provider.id,
       auth_type: provider.auth,
-      display_name: provider.name,
+      display_name: displayName,
       credential: connectCred,
       config: '{}',
     };
@@ -632,50 +642,60 @@
               <div class="int-lane-group">
                 <div class="int-lane-header">
                   <span class="int-lane lane-{lane}">{lane}</span>
-                  {@const laneConnected = laneProviders.filter(p => getConnectedProvider(p.id)).length}
+                  {@const laneConnected = laneProviders.reduce((n, p) => n + getConnectedProviders(p.id).length, 0)}
                   {#if laneConnected > 0}
                     <span class="int-lane-count">{laneConnected} connected</span>
                   {/if}
                 </div>
 
                 {#each laneProviders as provider}
-                  {@const connected = getConnectedProvider(provider.id)}
-                  <div class="int-card" class:int-connected={connected} class:int-coming={provider.comingSoon}>
+                  {@const accounts = getConnectedProviders(provider.id)}
+                  {@const hasAccounts = accounts.length > 0}
+                  <div class="int-card" class:int-connected={hasAccounts} class:int-coming={provider.comingSoon}>
                     <div class="int-row">
                       <span class="int-icon">{provider.icon}</span>
                       <div class="int-info">
-                        <div class="int-name">{provider.name}</div>
+                        <div class="int-name">
+                          {provider.name}
+                          {#if hasAccounts}
+                            <span class="int-count">{accounts.length}</span>
+                          {/if}
+                        </div>
                         <div class="int-desc">{provider.desc}</div>
                       </div>
                       <div class="int-action">
                         {#if provider.comingSoon}
                           <span class="int-soon">Soon</span>
-                        {:else if connected}
-                          <button class="int-btn int-disconnect" onclick={() => disconnectProvider(connected.id)}>Disconnect</button>
-                        {:else if provider.auth === 'oauth' && provider.oauthUrl}
-                          <button class="int-btn int-connect" onclick={() => connectProvider(provider)}>Connect</button>
                         {:else if showConnectForm === provider.id}
                           <button class="int-btn int-cancel" onclick={() => { showConnectForm = null; connectCred = ''; connectExtra = ''; }}>Cancel</button>
+                        {:else if provider.auth === 'oauth' && provider.oauthUrl}
+                          <button class="int-btn int-connect" onclick={() => connectProvider(provider)}>
+                            {hasAccounts ? '+ Add' : 'Connect'}
+                          </button>
                         {:else}
                           <button class="int-btn int-connect" onclick={() => { showConnectForm = provider.id; connectCred = ''; connectExtra = ''; }}>
-                            {provider.auth === 'oauth' ? 'Connect' : 'Add'}
+                            {hasAccounts ? '+ Add' : 'Add'}
                           </button>
                         {/if}
                       </div>
                     </div>
 
-                    {#if connected}
-                      <div class="int-status-row">
-                        <span class="int-status-dot" class:active={connected.status === 'active'} class:error={connected.status === 'error'}></span>
-                        <span class="int-status-text" class:error-text={connected.status === 'error'}>
-                          {connected.status === 'active' ? 'Connected' : 'Error'}
-                        </span>
-                        {#if connected.last_used_at}
-                          <span class="int-last-poll">Last sync: {new Date(connected.last_used_at).toLocaleDateString()}</span>
-                        {/if}
-                        {#if connected.last_error}
-                          <span class="int-error">⚠ {connected.last_error}</span>
-                        {/if}
+                    <!-- Connected accounts list -->
+                    {#if hasAccounts}
+                      <div class="int-accounts">
+                        {#each accounts as acct}
+                          <div class="int-acct-row">
+                            <span class="int-status-dot" class:active={acct.status === 'active'} class:error={acct.status === 'error'}></span>
+                            <span class="int-acct-name">{acct.display_name || provider.name}</span>
+                            {#if acct.last_used_at}
+                              <span class="int-last-poll">Synced {new Date(acct.last_used_at).toLocaleDateString()}</span>
+                            {/if}
+                            <button class="int-acct-remove" onclick={() => disconnectProvider(acct.id)} title="Disconnect">✕</button>
+                          </div>
+                          {#if acct.last_error}
+                            <div class="int-error">⚠ {acct.last_error}</div>
+                          {/if}
+                        {/each}
                       </div>
                     {/if}
 
@@ -710,12 +730,12 @@
 
                         <button class="int-save" onclick={() => connectProvider(provider)}
                           disabled={!connectCred || connectStatus === 'saving'}>
-                          {connectStatus === 'saving' ? 'Connecting...' : `Connect ${provider.name}`}
+                          {connectStatus === 'saving' ? 'Connecting...' : `Add ${provider.name}`}
                         </button>
                       </div>
                     {/if}
 
-                    <!-- OAuth hint (shown on tap before redirect) -->
+                    <!-- OAuth hint (not configured yet) -->
                     {#if showConnectForm === provider.id && provider.auth === 'oauth' && !provider.oauthUrl}
                       <div class="int-form">
                         <p class="int-hint">{provider.hint}</p>
@@ -1130,6 +1150,30 @@
   .lane-distribution { background: #1a1a2e; color: #7c7cff; }
   .lane-shipping { background: #2e2a1a; color: #ffaa00; }
   .lane-systems { background: #1a1a1a; color: #888; }
+
+  .int-count {
+    font-size: 10px; font-weight: 700; background: #1a3a1a; color: #2ecc71;
+    width: 16px; height: 16px; border-radius: 50%; display: inline-flex;
+    align-items: center; justify-content: center; margin-left: 2px;
+  }
+
+  .int-accounts {
+    display: flex; flex-direction: column; gap: 4px;
+    margin-top: 8px; padding-top: 8px; border-top: 1px solid #1a1a2a;
+  }
+  .int-acct-row {
+    display: flex; align-items: center; gap: 6px;
+    padding: 4px 8px; background: #0d0d16; border-radius: 6px;
+  }
+  .int-acct-name {
+    font-size: 12px; color: #aaa; flex: 1; min-width: 0;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .int-acct-remove {
+    background: none; border: none; color: #444; font-size: 12px;
+    cursor: pointer; padding: 2px 4px; flex-shrink: 0;
+  }
+  .int-acct-remove:hover { color: #ff4444; }
 
   .int-action { flex-shrink: 0; }
   .int-btn {

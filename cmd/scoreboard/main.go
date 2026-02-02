@@ -2223,10 +2223,19 @@ func (s *Server) handleStripeWebhook(w http.ResponseWriter, r *http.Request) {
 	data, _ := payload["data"].(map[string]interface{})
 	obj, _ := data["object"].(map[string]interface{})
 
+	// Track which Stripe account sent this event (for multi-account support)
+	stripeAccount, _ := payload["account"].(string) // Connect account ID, empty for direct
+	if stripeAccount == "" {
+		// Direct account — use the account from the charge object
+		if acct, ok := obj["account"].(string); ok {
+			stripeAccount = acct
+		}
+	}
+
 	var evtType, lane, title string
 	var amount float64
 	var scoreDelta int
-	metadata := map[string]interface{}{"stripe_event": evtTypeStripe, "currency": "usd"}
+	metadata := map[string]interface{}{"stripe_event": evtTypeStripe, "currency": "usd", "stripe_account": stripeAccount}
 
 	switch evtTypeStripe {
 	case "charge.succeeded":
@@ -2313,14 +2322,22 @@ func (s *Server) handleStripeWebhook(w http.ResponseWriter, r *http.Request) {
 	id := fmt.Sprintf("evt-stripe-%d", time.Now().UnixNano())
 	now := time.Now().UTC().Format(time.RFC3339)
 
+	// Resolve business_id from Stripe account → integration mapping
+	businessID := ""
+	if stripeAccount != "" {
+		s.db.QueryRow(`SELECT json_extract(config, '$.business_id') FROM integrations
+			WHERE provider='stripe' AND status='active' AND
+			json_extract(config, '$.stripe_account_id')=? LIMIT 1`, stripeAccount).Scan(&businessID)
+	}
+
 	s.mu.Lock()
 	s.db.Exec(`INSERT INTO events (id, event_type, lane, source, timestamp,
 		artifact_title, confidence, verifiers, verification_level,
-		score_delta, metadata, created_at, status)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		score_delta, metadata, business_id, created_at, status)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		id, evtType, lane, "stripe-webhook", now,
 		title, 0.99, `["stripe_webhook"]`, "STRONG",
-		scoreDelta, string(metaJSON), now, "approved")
+		scoreDelta, string(metaJSON), businessID, now, "approved")
 	s.mu.Unlock()
 
 	today := operatorToday()
