@@ -1,6 +1,6 @@
 <script>
   import Tooltip from './Tooltip.svelte';
-  let { data, lastUpdate, onHelp } = $props();
+  let { data, lastUpdate, onHelp, user = null } = $props();
 
   function signalClass(s) {
     return s === 'green' ? 'sig-g' : s === 'yellow' ? 'sig-y' : 'sig-r';
@@ -13,6 +13,16 @@
 </script>
 
 <div class="score-view">
+  <!-- User Identity -->
+  {#if user}
+    <div class="user-bar">
+      {#if user.avatar_url}<img class="ub-avatar" src={user.avatar_url} alt="" />{/if}
+      <span class="ub-name">{user.display_name}</span>
+      <span class="ub-tier tier-{user.tier}">{user.tier}</span>
+      {#if user.is_admin}<span class="ub-admin">admin</span>{/if}
+    </div>
+  {/if}
+
   <!-- Stall Alert -->
   {#if data.stall_hours > 24}
     <div class="stall-alert">
@@ -116,6 +126,23 @@
 </div>
 
 <style>
+  /* User bar */
+  .user-bar {
+    display: flex; align-items: center; gap: 8px;
+    padding: 0 0 6px; border-bottom: 1px solid #151522; margin-bottom: -4px;
+  }
+  .ub-avatar { width: 24px; height: 24px; border-radius: 50%; }
+  .ub-name { font-size: 13px; font-weight: 600; color: #888; }
+  .ub-tier {
+    font-size: 9px; font-weight: 700; padding: 1px 6px; border-radius: 3px;
+    text-transform: uppercase; letter-spacing: 0.05em;
+  }
+  .ub-tier.tier-free { background: #222; color: #666; }
+  .ub-tier.tier-freewire { background: #1a2a1a; color: #4caf50; }
+  .ub-tier.tier-wire { background: #1a1a2e; color: #7c7cff; }
+  .ub-tier.tier-extrawire { background: #2e1a2e; color: #ff7cff; }
+  .ub-admin { font-size: 9px; font-weight: 700; color: #ff9500; background: #2e1a0a; padding: 1px 6px; border-radius: 3px; }
+
   .score-view {
     display: flex;
     flex-direction: column;

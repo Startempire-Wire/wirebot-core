@@ -241,7 +241,7 @@
   <div class="app">
     <div class="content">
       {#if view === 'score'}
-        <Score {data} {lastUpdate} onHelp={() => showHints = true} />
+        <Score {data} {lastUpdate} onHelp={() => showHints = true} user={loggedInUser} />
       {:else if view === 'feed'}
         <Feed items={feed} pendingCount={data?.pending_count || 0} onHelp={() => showHints = true} />
       {:else if view === 'season'}
@@ -257,12 +257,54 @@
             <div class="s-group">
               <label>Account</label>
               <div class="session-card">
-                <div class="sc-name">{loggedInUser.display_name}</div>
-                <div class="sc-tier">
-                  <span class="tier-badge tier-{loggedInUser.tier}">{loggedInUser.tier}</span>
-                  <span class="sc-meta">Level {loggedInUser.tier_level}</span>
+                <div class="sc-header">
+                  {#if loggedInUser.avatar_url}
+                    <img class="sc-avatar" src={loggedInUser.avatar_url} alt="" />
+                  {/if}
+                  <div class="sc-identity">
+                    <div class="sc-name">{loggedInUser.display_name}</div>
+                    {#if loggedInUser.username}<div class="sc-username">@{loggedInUser.username}</div>{/if}
+                  </div>
                 </div>
-                {#if loggedInUser.email}<div class="sc-email">{loggedInUser.email}</div>{/if}
+
+                <div class="sc-badges">
+                  <span class="tier-badge tier-{loggedInUser.tier}">{loggedInUser.tier}</span>
+                  {#if loggedInUser.is_admin}<span class="admin-badge">Admin</span>{/if}
+                  {#if loggedInUser.roles?.includes('bbp_keymaster')}<span class="role-badge">Keymaster</span>{/if}
+                </div>
+
+                {#if loggedInUser.membership_ids?.length > 0}
+                  <div class="sc-row">
+                    <span class="sc-label">Membership</span>
+                    <span class="sc-val">ID {loggedInUser.membership_ids.join(', ')}</span>
+                  </div>
+                {/if}
+
+                {#if loggedInUser.email}
+                  <div class="sc-row">
+                    <span class="sc-label">Email</span>
+                    <span class="sc-val">{loggedInUser.email}</span>
+                  </div>
+                {/if}
+
+                {#if loggedInUser.url}
+                  <div class="sc-row">
+                    <span class="sc-label">Website</span>
+                    <a class="sc-link" href={loggedInUser.url} target="_blank" rel="noopener">{loggedInUser.url.replace('https://', '')}</a>
+                  </div>
+                {/if}
+
+                {#if loggedInUser.registered}
+                  <div class="sc-row">
+                    <span class="sc-label">Member since</span>
+                    <span class="sc-val">{new Date(loggedInUser.registered).toLocaleDateString('en-US', { year: 'numeric', month: 'short' })}</span>
+                  </div>
+                {/if}
+
+                {#if loggedInUser.description}
+                  <div class="sc-bio">{loggedInUser.description.substring(0, 200)}{loggedInUser.description.length > 200 ? '...' : ''}</div>
+                {/if}
+
                 <button class="btn-logout" onclick={logout}>Sign out</button>
               </div>
               {#if tokenStatus}
@@ -609,12 +651,33 @@
 
   .session-card {
     background: #111118; border: 1px solid #2a2a40; border-radius: 10px;
-    padding: 14px; display: flex; flex-direction: column; gap: 6px;
+    padding: 14px; display: flex; flex-direction: column; gap: 10px;
   }
-  .sc-name { font-size: 16px; font-weight: 700; color: #eee; }
-  .sc-tier { display: flex; align-items: center; gap: 8px; }
-  .sc-meta { font-size: 11px; color: #555; }
-  .sc-email { font-size: 12px; color: #555; }
+  .sc-header { display: flex; align-items: center; gap: 12px; }
+  .sc-avatar {
+    width: 48px; height: 48px; border-radius: 50%;
+    border: 2px solid #2a2a40; object-fit: cover; flex-shrink: 0;
+  }
+  .sc-identity { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+  .sc-name { font-size: 16px; font-weight: 700; color: #eee; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .sc-username { font-size: 12px; color: #555; }
+
+  .sc-badges { display: flex; gap: 6px; flex-wrap: wrap; }
+  .admin-badge {
+    font-size: 10px; font-weight: 700; padding: 2px 8px; border-radius: 4px;
+    background: #2e1a0a; color: #ff9500; text-transform: uppercase; letter-spacing: 0.05em;
+  }
+  .role-badge {
+    font-size: 10px; font-weight: 600; padding: 2px 8px; border-radius: 4px;
+    background: #1a1a1a; color: #666; text-transform: uppercase; letter-spacing: 0.05em;
+  }
+
+  .sc-row { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+  .sc-label { font-size: 11px; color: #444; flex-shrink: 0; }
+  .sc-val { font-size: 12px; color: #888; text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .sc-link { font-size: 12px; color: #7c7cff; text-decoration: none; text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .sc-link:hover { text-decoration: underline; }
+  .sc-bio { font-size: 11px; color: #555; line-height: 1.5; border-top: 1px solid #1e1e2e; padding-top: 8px; }
 
   .tier-badge {
     font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 4px;
