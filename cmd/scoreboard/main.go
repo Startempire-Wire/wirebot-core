@@ -8734,19 +8734,24 @@ func (s *Server) pollGitHub(integrationID, token, lastPoll string) error {
 
 		switch event.Type {
 		case "PushEvent":
-			// Commits shipped
+			// Commits shipped — events API doesn't always include size/commits
 			numCommits := event.Payload.Size
 			if numCommits == 0 {
 				numCommits = len(event.Payload.Commits)
 			}
 			if numCommits == 0 {
-				continue
+				numCommits = 1 // Assume at least 1 commit per push
 			}
 			eventID = fmt.Sprintf("github-push-%s", event.ID)
 			eventType = "commit"
 			lane = "ship"
-			title = fmt.Sprintf("Pushed %d commit(s) to %s", numCommits, event.Repo.Name)
-			if numCommits == 1 && len(event.Payload.Commits) > 0 {
+			// Build title — use repo name + branch
+			branch := strings.TrimPrefix(event.Payload.Ref, "refs/heads/")
+			if branch == "" {
+				branch = "main"
+			}
+			title = fmt.Sprintf("Pushed to %s (%s)", event.Repo.Name, branch)
+			if len(event.Payload.Commits) > 0 {
 				msg := event.Payload.Commits[0].Message
 				if len(msg) > 60 {
 					msg = msg[:60] + "..."
