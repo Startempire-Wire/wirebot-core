@@ -5032,6 +5032,7 @@ type TaskProposal struct {
 	Draft      string             `json:"draft"`
 	Evidence   []ProposalEvidence `json:"evidence"`
 	Confidence float64            `json:"confidence"`
+	BusinessID string             `json:"business_id"`
 	CreatedAt  string             `json:"created_at"`
 }
 
@@ -5044,10 +5045,13 @@ func (s *Server) ensureProposalsTable() {
 		draft TEXT NOT NULL,
 		evidence TEXT DEFAULT '[]',
 		confidence REAL DEFAULT 0.5,
+		business_id TEXT DEFAULT '',
 		created_at TEXT DEFAULT (datetime('now')),
 		reviewed_at TEXT,
 		UNIQUE(task_id, status)
 	)`)
+	// Add column if table already exists without it
+	s.db.Exec(`ALTER TABLE task_proposals ADD COLUMN business_id TEXT DEFAULT ''`)
 }
 
 // ProposalEvidence is a rich reference shown in the UI
@@ -5085,6 +5089,7 @@ func (s *Server) generateProposals(tasks []interface{}) []TaskProposal {
 
 		taskID, _ := tm["id"].(string)
 		title, _ := tm["title"].(string)
+		businessID, _ := tm["business_id"].(string)
 
 		var existing int
 		s.db.QueryRow("SELECT COUNT(*) FROM task_proposals WHERE task_id=? AND status='proposed'", taskID).Scan(&existing)
@@ -5114,14 +5119,15 @@ func (s *Server) generateProposals(tasks []interface{}) []TaskProposal {
 			Draft:      draft,
 			Evidence:   evidence,
 			Confidence: confidence,
+			BusinessID: businessID,
 			CreatedAt:  time.Now().UTC().Format(time.RFC3339),
 		}
 
 		// Store rich evidence as JSON in draft field (UI parses it)
 		richJSON, _ := json.Marshal(evidence)
-		s.db.Exec(`INSERT OR IGNORE INTO task_proposals (task_id, title, status, draft, evidence, confidence)
-			VALUES (?, ?, 'proposed', ?, ?, ?)`,
-			taskID, title, string(richJSON), string(richJSON), confidence)
+		s.db.Exec(`INSERT OR IGNORE INTO task_proposals (task_id, title, status, draft, evidence, confidence, business_id)
+			VALUES (?, ?, 'proposed', ?, ?, ?, ?)`,
+			taskID, title, string(richJSON), string(richJSON), confidence, businessID)
 
 		proposals = append(proposals, proposal)
 		log.Printf("[proposals] 📝 %s — confidence %.0f%%, %d sources", title, confidence*100, len(evidence))
@@ -5556,7 +5562,7 @@ func (s *Server) handleProposals(w http.ResponseWriter, r *http.Request) {
 		if status == "" {
 			status = "proposed"
 		}
-		rows, err := s.db.Query("SELECT task_id, title, status, draft, evidence, confidence, created_at FROM task_proposals WHERE status=? ORDER BY confidence DESC", status)
+		rows, err := s.db.Query("SELECT task_id, title, status, draft, evidence, confidence, COALESCE(business_id,''), created_at FROM task_proposals WHERE status=? ORDER BY confidence DESC", status)
 		if err != nil {
 			json.NewEncoder(w).Encode(map[string]interface{}{"proposals": []interface{}{}, "error": err.Error()})
 			return
@@ -5566,7 +5572,7 @@ func (s *Server) handleProposals(w http.ResponseWriter, r *http.Request) {
 		for rows.Next() {
 			var p TaskProposal
 			var draftOrJSON, evidenceJSON string
-			rows.Scan(&p.TaskID, &p.Title, &p.Status, &draftOrJSON, &evidenceJSON, &p.Confidence, &p.CreatedAt)
+			rows.Scan(&p.TaskID, &p.Title, &p.Status, &draftOrJSON, &evidenceJSON, &p.Confidence, &p.BusinessID, &p.CreatedAt)
 			// Evidence column contains rich JSON (ProposalEvidence array)
 			if json.Unmarshal([]byte(evidenceJSON), &p.Evidence) != nil {
 				// Fallback: old format was string array

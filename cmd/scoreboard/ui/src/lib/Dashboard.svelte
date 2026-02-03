@@ -453,7 +453,15 @@
                       </span>
                     </button>
                     <div class="task-body">
-                      <span class="task-title">{task.title}</span>
+                      <div class="task-title-row">
+                        <span class="task-title">{task.title}</span>
+                        {#if task.business_id}
+                          {@const tb = ENTITIES.flatMap(e => [e, ...(e.products||[])]).find(b => b.id === task.business_id)}
+                          {#if tb}
+                            <span class="task-biz">{tb.icon}{tb.label}</span>
+                          {/if}
+                        {/if}
+                      </div>
                       {#if expandedTask === task.id}
                         {#if task.description}<p class="tdi-desc">{task.description}</p>{/if}
                         {#if task.aiSuggestion}<div class="task-ai">💡 {task.aiSuggestion}</div>{/if}
@@ -519,10 +527,18 @@
       <div class="section-header"><span>📝 WIREBOT THINKS THESE ARE DONE</span></div>
       <div class="proposals-list">
         {#each proposals as prop}
+          {@const bizInfo = prop.business_id ? ENTITIES.flatMap(e => [e, ...(e.products||[])]).find(b => b.id === prop.business_id) : null}
           <div class="proposal-card">
             <div class="prop-header">
               <span class="prop-title">{prop.title}</span>
-              <span class="prop-conf" title="Confidence">{Math.round(prop.confidence * 100)}%</span>
+              <div class="prop-meta">
+                {#if bizInfo}
+                  <span class="prop-biz">{bizInfo.icon} {bizInfo.label}</span>
+                {:else if prop.business_id === ''}
+                  <span class="prop-biz prop-biz-all">🌐 All</span>
+                {/if}
+                <span class="prop-conf" title="Confidence">{Math.round(prop.confidence * 100)}%</span>
+              </div>
             </div>
             <div class="prop-evidence-list">
               {#each prop.evidence as ev}
@@ -707,7 +723,9 @@
   .check-box { width: 20px; height: 20px; border: 2px solid #333; border-radius: 4px; display: flex; align-items: center; justify-content: center; font-size: 12px; color: #7c7cff; transition: all .15s; }
   .check-box.checked { background: #7c7cff20; border-color: #7c7cff; }
   .task-body { flex: 1; min-width: 0; }
+  .task-title-row { display: flex; align-items: center; gap: 6px; }
   .task-title { font-size: 13px; color: #c0c0c0; }
+  .task-biz { font-size: 9px; padding: 1px 4px; border-radius: 4px; background: rgba(255,255,255,0.05); color: #777; white-space: nowrap; flex-shrink: 0; }
   .task-ai { font-size: 11px; color: #888; margin-top: 6px; line-height: 1.5; padding: 6px 8px; background: #12121a; border-radius: 6px; border-left: 2px solid #7c7cff40; animation: section-slide 250ms ease-out; }
   .task-detail-inline { margin-top: 6px; animation: section-slide 250ms ease-out; }
   .tdi-desc { font-size: 12px; color: #777; margin: 0 0 4px; line-height: 1.5; }
@@ -762,8 +780,11 @@
     border: 1px solid rgba(124,124,255,0.3);
     border-radius: 10px; padding: 12px;
   }
-  .prop-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
-  .prop-title { font-size: 13px; font-weight: 600; color: #e8e8ff; }
+  .prop-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; gap: 8px; }
+  .prop-title { font-size: 13px; font-weight: 600; color: #e8e8ff; flex: 1; }
+  .prop-meta { display: flex; gap: 6px; align-items: center; flex-shrink: 0; }
+  .prop-biz { font-size: 10px; padding: 2px 6px; border-radius: 8px; background: rgba(255,255,255,0.06); color: #aaa; white-space: nowrap; }
+  .prop-biz-all { color: #666; }
   .prop-conf { font-size: 11px; color: #7c7cff; background: rgba(124,124,255,0.1); padding: 2px 6px; border-radius: 8px; }
   .prop-evidence-list { display: flex; flex-direction: column; gap: 8px; margin-bottom: 10px; }
   .prop-ev-item {
