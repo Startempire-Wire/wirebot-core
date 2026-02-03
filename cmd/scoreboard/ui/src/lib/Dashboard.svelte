@@ -18,7 +18,8 @@
   import { createEventDispatcher } from 'svelte';
   const dispatch = createEventDispatcher();
 
-  let { data = null, user = null, token = '', activeBusiness = '' } = $props();
+  let { data = null, user = null, token = '', activeBusiness: parentBiz = '' } = $props();
+  let localBiz = $state(parentBiz || '');  // local business filter state
 
   const BUSINESSES = [
     { id: '', label: 'All', icon: '🌐' },
@@ -113,12 +114,12 @@
     stageLoading = false;
   }
 
-  // Business filter — visual transition + dispatch to parent
+  // Business filter — immediate local update + dispatch to parent
   function switchBusiness(bizId) {
-    if (bizId === activeBusiness) return;
-    dispatch('businessChange', bizId);
-    // Trigger fade transition on content below pills
+    if (bizId === localBiz) return;
+    localBiz = bizId;
     bizKey++;
+    dispatch('businessChange', bizId);
   }
 
   function buildSuggestions() {
@@ -241,14 +242,14 @@
     {#if data?.score}
       <div class="biz-row">
         {#each BUSINESSES as biz}
-          <button class="biz-chip" class:active={activeBusiness === biz.id}
+          <button class="biz-chip" class:active={localBiz === biz.id}
             onclick={() => switchBusiness(biz.id)}>
             {biz.icon} {biz.label}
           </button>
         {/each}
       </div>
-      {#if activeBusiness}
-        <div class="biz-context">Viewing: {BUSINESSES.find(b => b.id === activeBusiness)?.icon} {BUSINESSES.find(b => b.id === activeBusiness)?.label}</div>
+      {#if localBiz}
+        <div class="biz-context">Viewing: {BUSINESSES.find(b => b.id === localBiz)?.icon} {BUSINESSES.find(b => b.id === localBiz)?.label}</div>
       {/if}
     {/if}
 
@@ -259,7 +260,7 @@
     {#if checklist}
       <div class="card setup-card">
         <div class="setup-header">
-          <span class="setup-label">BUSINESS SETUP — {stage.toUpperCase()} STAGE</span>
+          <span class="setup-label">{localBiz ? BUSINESSES.find(b=>b.id===localBiz)?.label?.toUpperCase()+' — ' : ''}BUSINESS SETUP — {stage.toUpperCase()}</span>
           <span class="setup-count">{checklist.completed || 0}/{checklist.total || 0}</span>
         </div>
         <div class="progress-wrap">
