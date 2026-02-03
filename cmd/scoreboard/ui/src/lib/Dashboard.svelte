@@ -18,7 +18,7 @@
   import { createEventDispatcher } from 'svelte';
   const dispatch = createEventDispatcher();
 
-  let { data = null, user = null, token = '', activeBusiness: parentBiz = '', pairingComplete = false, onOpenPairing = null } = $props();
+  let { data = null, user = null, token = '', activeBusiness: parentBiz = '', pairingComplete = false, onOpenPairing = null, onNav = null } = $props();
   let localBiz = $state(parentBiz || '');  // local business filter state
 
   // Business = legal entity, Product = offering within a business
@@ -221,12 +221,12 @@
   }
 
   function handleSuggestion(action) {
-    if (action === 'score' || action === 'intent') dispatch('nav', 'score');
-    else if (action === 'settings') dispatch('nav', 'settings');
-    else if (action === 'ship') dispatch('nav', 'feed');
+    const go = (v) => { if (onNav) onNav(v); else dispatch('nav', v); };
+    if (action === 'score' || action === 'intent') go('score');
+    else if (action === 'settings') go('settings');
+    else if (action === 'ship') go('feed');
     else if (action === 'handshake') doHandshake();
     else if (action === 'checklist') {
-      // Scroll to checklist section
       document.querySelector('.cat-list')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
     }
   }
@@ -357,19 +357,19 @@
     {#if checklist && !onboardingComplete}
       <div class="section-header"><span>FINISH ONBOARDING</span></div>
       <div class="onboard-scroll">
-        <button class="onboard-card" onclick={() => dispatch('openPairing')}>
+        <button class="onboard-card" onclick={() => { if (onOpenPairing) onOpenPairing(); }}>
           <div class="ob-icon">🎯</div>
           <div class="ob-title">Pairing Assessment</div>
           <div class="ob-desc">Help Wirebot understand you</div>
           <span class="ob-btn">Start →</span>
         </button>
-        <button class="onboard-card" onclick={() => dispatch('nav', 'settings')}>
+        <button class="onboard-card" onclick={() => { if (onNav) onNav('settings'); }}>
           <div class="ob-icon">💳</div>
           <div class="ob-title">Connect Revenue</div>
           <div class="ob-desc">Stripe, FreshBooks, or Bank</div>
           <span class="ob-btn">Connect →</span>
         </button>
-        <button class="onboard-card" onclick={() => dispatch('nav', 'feed')}>
+        <button class="onboard-card" onclick={() => { if (onNav) onNav('feed'); }}>
           <div class="ob-icon">🚀</div>
           <div class="ob-title">Check Your Feed</div>
           <div class="ob-desc">See events flowing in automatically</div>
