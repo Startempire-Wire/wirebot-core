@@ -1,6 +1,7 @@
 <script>
   import Tooltip from './Tooltip.svelte';
-  let { data, lastUpdate, onHelp, user = null, onPairing = null } = $props();
+  import AnimatedCounter from './AnimatedCounter.svelte';
+  let { data, lastUpdate, onHelp, user = null, onPairing = null, onShare = null, canShare = false } = $props();
 
   let editingIntent = $state(false);
   let intentDraft = $state('');
@@ -53,15 +54,24 @@
 </script>
 
 <div class="score-view">
-  <!-- User Identity -->
-  {#if user}
-    <div class="user-bar">
-      {#if user.avatar_url}<img class="ub-avatar" src={user.avatar_url} alt="" />{/if}
-      <span class="ub-name">{user.display_name}</span>
-      <span class="ub-tier tier-{user.tier}">{user.tier}</span>
-      {#if user.is_admin}<span class="ub-admin">admin</span>{/if}
-    </div>
-  {/if}
+  <!-- User Identity + Share -->
+  <div class="top-bar">
+    {#if user}
+      <div class="user-bar">
+        {#if user.avatar_url}<img class="ub-avatar" src={user.avatar_url} alt="" />{/if}
+        <span class="ub-name">{user.display_name}</span>
+        <span class="ub-tier tier-{user.tier}">{user.tier}</span>
+        {#if user.is_admin}<span class="ub-admin">admin</span>{/if}
+      </div>
+    {:else}
+      <div></div>
+    {/if}
+    {#if onShare}
+      <button class="share-btn" onclick={onShare} title="Share your score">
+        📤 {canShare ? 'Share' : 'Copy'}
+      </button>
+    {/if}
+  </div>
 
   <!-- Stall Alert -->
   {#if data.stall_hours > 24}
@@ -130,7 +140,7 @@
           class="sc-ring-fill"/>
       </svg>
       <div class="sc-ring-center">
-        <div class="sc-num">{data.score}</div>
+        <div class="sc-num"><AnimatedCounter value={data.score || 0} duration={800} /></div>
         <div class="sc-sub"><Tooltip concept="signal">{signalLabel(data.signal)}</Tooltip></div>
       </div>
     </div>
@@ -156,10 +166,10 @@
 
   <!-- Stats (glass cards) -->
   <div class="stats">
-    <div class="st glass"><span class="st-v">🔥 {data.streak?.current || 0}</span><span class="st-l"><Tooltip concept="streak" position="below">STREAK</Tooltip></span></div>
-    <div class="st glass"><span class="st-v">🏆 {data.streak?.best || 0}</span><span class="st-l">BEST</span></div>
+    <div class="st glass"><span class="st-v">🔥 <AnimatedCounter value={data.streak?.current || 0} duration={500} /></span><span class="st-l"><Tooltip concept="streak" position="below">STREAK</Tooltip></span></div>
+    <div class="st glass"><span class="st-v">🏆 <AnimatedCounter value={data.streak?.best || 0} duration={500} /></span><span class="st-l">BEST</span></div>
     <div class="st glass"><span class="st-v">{data.record || '0-0'}</span><span class="st-l"><Tooltip concept="record" position="below">W-L</Tooltip></span></div>
-    <div class="st glass"><span class="st-v">🚀 {data.ship_today || 0}</span><span class="st-l"><Tooltip concept="ships" position="below">SHIPS</Tooltip></span></div>
+    <div class="st glass"><span class="st-v">🚀 <AnimatedCounter value={data.ship_today || 0} duration={400} /></span><span class="st-l"><Tooltip concept="ships" position="below">SHIPS</Tooltip></span></div>
   </div>
 
   <!-- Possession -->
@@ -178,7 +188,7 @@
         <div class="ln-track">
           <div class="ln-fill" style="width:{lanePct(val, max)}%; background:{color};{val >= max ? `box-shadow: 0 0 12px ${color}40, 0 0 4px ${color}60;` : ''}"></div>
         </div>
-        <span class="ln-v">{val}{#if val >= max}<span class="ln-max-badge">MAX</span>{:else}<span class="ln-max">/{max}</span>{/if}</span>
+        <span class="ln-v"><AnimatedCounter value={val} duration={600} />{#if val >= max}<span class="ln-max-badge">MAX</span>{:else}<span class="ln-max">/{max}</span>{/if}</span>
       </div>
     {/each}
   </div>
@@ -232,10 +242,23 @@
 </div>
 
 <style>
+  /* Top bar with user + share */
+  .top-bar {
+    display: flex; justify-content: space-between; align-items: center;
+    padding-bottom: 6px; border-bottom: 1px solid #151522; margin-bottom: -4px;
+  }
+  .share-btn {
+    background: rgba(124,124,255,0.1); border: 1px solid rgba(124,124,255,0.3);
+    color: #7c7cff; padding: 4px 10px; border-radius: 6px;
+    font-size: 12px; font-weight: 600; cursor: pointer;
+    transition: all 0.2s ease;
+  }
+  .share-btn:hover { background: rgba(124,124,255,0.2); }
+  .share-btn:active { transform: scale(0.95); }
+
   /* User bar */
   .user-bar {
     display: flex; align-items: center; gap: 8px;
-    padding: 0 0 6px; border-bottom: 1px solid #151522; margin-bottom: -4px;
   }
   .ub-avatar { width: 24px; height: 24px; border-radius: 50%; }
   .ub-name { font-size: 13px; font-weight: 600; color: #888; }

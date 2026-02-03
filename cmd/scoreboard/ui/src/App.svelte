@@ -64,6 +64,72 @@
   }
   let tokenStatus = $state(null);  // null | 'ok' | 'fail' | 'saving'
   let tokenMsg = $state('');
+
+  // ── Pull to Refresh ──
+  let pullY = $state(0);
+  let pulling = $state(false);
+  let refreshing = $state(false);
+  const PULL_THRESHOLD = 80;
+
+  function handleTouchStart(e) {
+    if (window.scrollY === 0 && !refreshing) {
+      pulling = true;
+      pullY = 0;
+    }
+  }
+  function handleTouchMove(e) {
+    if (!pulling) return;
+    const touch = e.touches[0];
+    const startY = e.target.dataset.startY || touch.clientY;
+    if (!e.target.dataset.startY) e.target.dataset.startY = touch.clientY;
+    pullY = Math.min(120, Math.max(0, touch.clientY - parseFloat(startY)));
+  }
+  async function handleTouchEnd() {
+    if (!pulling) return;
+    if (pullY >= PULL_THRESHOLD) {
+      refreshing = true;
+      // Haptic feedback
+      if (navigator.vibrate) navigator.vibrate(30);
+      await fetchAll();
+      refreshing = false;
+    }
+    pulling = false;
+    pullY = 0;
+  }
+
+  // ── Native Share ──
+  let canShare = $state(false);
+  async function shareScore() {
+    if (!data) return;
+    const text = `🏆 Business Score: ${data.score}/100
+🔥 ${data.streak?.current || 0}-day streak
+🚀 ${data.ship_today || 0} ships today
+
+Tracked with Wirebot — your AI business operating partner`;
+
+    // Try native share first
+    if (navigator.share) {
+      try {
+        await navigator.share({
+          title: `My Business Score: ${data.score}/100`,
+          text: text,
+          url: 'https://wins.wirebot.chat'
+        });
+        if (navigator.vibrate) navigator.vibrate(50);
+        return;
+      } catch (e) {
+        if (e.name !== 'AbortError') console.log('Share failed:', e);
+      }
+    }
+    // Fallback: copy to clipboard
+    try {
+      await navigator.clipboard.writeText(text);
+      alert('Score copied to clipboard!');
+    } catch {
+      // Last resort: prompt
+      prompt('Copy your score:', text);
+    }
+  }
   let loginUser = $state('');
   let loginPass = $state('');
   let loginLoading = $state(false);
@@ -713,6 +779,7 @@
   onMount(() => {
     restoreSession();
     handleOAuthCallback();
+    canShare = !!navigator.share;
     if (loggedInUser) {
       fetchAll();
       fetchProfile();
@@ -780,7 +847,23 @@
   </div>
 {:else if data}
   <div class="app">
-    <div class="content">
+    <!-- Pull to Refresh Indicator -->
+    {#if pulling || refreshing}
+      <div class="pull-indicator" style="transform: translateY({Math.min(pullY, 80)}px); opacity: {Math.min(pullY / PULL_THRESHOLD, 1)}">
+        {#if refreshing}
+          <span class="pull-spinner">↻</span>
+        {:else if pullY >= PULL_THRESHOLD}
+          <span>↑ Release to refresh</span>
+        {:else}
+          <span>↓ Pull to refresh</span>
+        {/if}
+      </div>
+    {/if}
+    <div class="content"
+      ontouchstart={handleTouchStart}
+      ontouchmove={handleTouchMove}
+      ontouchend={handleTouchEnd}
+      style="transform: translateY({pulling ? pullY * 0.4 : 0}px); transition: {pulling ? 'none' : 'transform 0.2s ease'}">
       {#if view === 'dashboard'}
         <Dashboard {data} user={loggedInUser} token={getToken()} {activeBusiness}
           pairingComplete={selfReportCount > 0}
@@ -791,7 +874,7 @@
           onopenPairing={() => showPairing = true}
           onbusinessChange={(e) => { activeBusiness = e.detail; fetchAll(); }} />
       {:else if view === 'score'}
-        <Score {data} {lastUpdate} onHelp={() => showHints = true} user={loggedInUser} onPairing={selfReportCount === 0 ? () => showPairing = true : null} />
+        <Score {data} {lastUpdate} onHelp={() => showHints = true} user={loggedInUser} onPairing={selfReportCount === 0 ? () => showPairing = true : null} onShare={shareScore} {canShare} />
       {:else if view === 'feed'}
         <Feed items={feed} pendingCount={data?.pending_count || 0} onHelp={() => showHints = true}
           {activeBusiness} onBusinessChange={(biz) => { activeBusiness = biz; fetchAll(); }} />
@@ -1349,7 +1432,20 @@
     -webkit-font-smoothing: antialiased;
   }
 
-  .app { display: flex; flex-direction: column; min-height: 100dvh; }
+  .app { display: flex; flex-direction: column; min-height: 100dvh; position: relative; overflow-x: hidden; }
+
+  /* Pull to Refresh */
+  .pull-indicator {
+    position: absolute; top: 0; left: 0; right: 0; height: 50px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 13px; color: #7c7cff; z-index: 100;
+    pointer-events: none;
+  }
+  .pull-spinner {
+    display: inline-block;
+    animation: spin 0.8s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
   .content { flex: 1; overflow-y: auto; padding-bottom: 56px; view-transition-name: content; }
 
   /* ── View Transitions (native API) ── */

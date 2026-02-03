@@ -265,6 +265,8 @@
   }
 
   async function acceptProposal(taskId) {
+    // Haptic feedback on proposal accept
+    if (navigator.vibrate) navigator.vibrate([30, 20, 50]);
     await fetch(`${API}/v1/proposals?action=accept&id=${taskId}`, { method: 'POST', headers: headers() });
     proposals = proposals.filter(p => p.task_id !== taskId);
     // Reload checklist to show updated progress
@@ -298,6 +300,8 @@
   }
 
   async function completeTask(id) {
+    // Haptic feedback on task complete
+    if (navigator.vibrate) navigator.vibrate([30, 20, 50]);
     await fetch(`${API}/v1/checklist?action=complete&id=${id}`, { method: 'POST', headers: headers() });
     // Reload just checklist
     const grouped = await authFetch(`/v1/checklist?action=grouped&stage=${stage}`);
