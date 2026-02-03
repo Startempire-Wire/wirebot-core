@@ -497,8 +497,12 @@ Tracked with Wirebot — your AI business operating partner`;
       if (oauthStatus === 'ok') {
         connectStatus = 'ok';
         connectMsg = `✓ ${oauthProvider} connected`;
-        navigateTo('settings');
-        loadIntegrations();
+        // Force reload all data after OAuth
+        setTimeout(() => {
+          fetchAll();
+          loadIntegrations();
+          navigateTo('settings');
+        }, 100);
       } else {
         connectStatus = 'fail';
         connectMsg = `✗ ${oauthProvider}: ${params.get('error') || 'connection failed'}`;
