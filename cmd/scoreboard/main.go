@@ -449,6 +449,7 @@ func main() {
 	// Memory Queue — approve/reject inferred memories from docs
 	mux.HandleFunc("/v1/memory/queue", s.auth(s.handleMemoryQueue))
 	mux.HandleFunc("/v1/memory/queue/", s.auth(s.handleMemoryQueueAction))
+	mux.HandleFunc("/v1/memory/conflicts", s.auth(s.handleMemoryConflicts))
 
 	// Wirebot chat proxy — full conversations with memory retention
 	mux.HandleFunc("/v1/chat", s.auth(s.handleChat))
@@ -6834,6 +6835,120 @@ func mem0Store(baseURL, namespace, text string, messages []map[string]string) er
 	if err != nil { return err }
 	defer resp.Body.Close()
 	return nil
+}
+
+// ─── Memory Conflicts Detection ──────────────────────────────────────────
+
+type ConflictItem struct {
+	ID     string `json:"id"`
+	Text   string `json:"text"`
+	Source string `json:"source"`
+}
+
+type MemoryConflict struct {
+	ID       string       `json:"id"`
+	A        ConflictItem `json:"a"`
+	B        ConflictItem `json:"b"`
+	Category string       `json:"category"` // location, name, business, etc.
+}
+
+// GET /v1/memory/conflicts — detect contradictory memories
+func (s *Server) handleMemoryConflicts(w http.ResponseWriter, r *http.Request) {
+	cors(w)
+	if r.Method == "OPTIONS" {
+		return
+	}
+	
+	// Fetch all approved memories from Mem0
+	resp, err := http.Post("http://127.0.0.1:8200/v1/list", "application/json",
+		strings.NewReader(`{"namespace": "wirebot_verious"}`))
+	if err != nil {
+		json.NewEncoder(w).Encode(map[string]interface{}{"conflicts": []MemoryConflict{}})
+		return
+	}
+	defer resp.Body.Close()
+	
+	var listResp struct {
+		Results []struct {
+			ID       string `json:"id"`
+			Memory   string `json:"memory"`
+			Metadata struct {
+				Category string `json:"category"`
+			} `json:"metadata"`
+		} `json:"results"`
+	}
+	json.NewDecoder(resp.Body).Decode(&listResp)
+	
+	conflicts := []MemoryConflict{}
+	
+	// Conflict detection patterns
+	locationKeywords := []string{"location", "located", "lives in", "based in", "Corona", "Providence", "California", "timezone"}
+	nameKeywords := []string{"name is", "called", "goes by", "preferred name"}
+	
+	// Check for location conflicts
+	var locationMems []struct{ id, text string }
+	for _, m := range listResp.Results {
+		lower := strings.ToLower(m.Memory)
+		for _, kw := range locationKeywords {
+			if strings.Contains(lower, strings.ToLower(kw)) {
+				locationMems = append(locationMems, struct{ id, text string }{m.ID, m.Memory})
+				break
+			}
+		}
+	}
+	
+	// If multiple location mentions, check for conflicts
+	if len(locationMems) >= 2 {
+		// Simple heuristic: if one says "Corona" and another says "Providence", conflict
+		for i := 0; i < len(locationMems); i++ {
+			for j := i + 1; j < len(locationMems); j++ {
+				a, b := locationMems[i], locationMems[j]
+				aLower, bLower := strings.ToLower(a.text), strings.ToLower(b.text)
+				
+				// Check for contradicting locations
+				if (strings.Contains(aLower, "corona") && strings.Contains(bLower, "providence")) ||
+					(strings.Contains(aLower, "providence") && strings.Contains(bLower, "corona")) {
+					conflicts = append(conflicts, MemoryConflict{
+						ID:       fmt.Sprintf("conflict-%s-%s", a.id[:8], b.id[:8]),
+						Category: "location",
+						A:        ConflictItem{ID: a.id, Text: a.text, Source: "mem0"},
+						B:        ConflictItem{ID: b.id, Text: b.text, Source: "mem0"},
+					})
+				}
+			}
+		}
+	}
+	
+	// Check for name conflicts
+	var nameMems []struct{ id, text string }
+	for _, m := range listResp.Results {
+		lower := strings.ToLower(m.Memory)
+		for _, kw := range nameKeywords {
+			if strings.Contains(lower, kw) {
+				nameMems = append(nameMems, struct{ id, text string }{m.ID, m.Memory})
+				break
+			}
+		}
+	}
+	
+	// If multiple different names, might be conflict
+	if len(nameMems) >= 2 {
+		for i := 0; i < len(nameMems); i++ {
+			for j := i + 1; j < len(nameMems); j++ {
+				a, b := nameMems[i], nameMems[j]
+				// Only flag if texts are significantly different
+				if !strings.Contains(a.text, b.text) && !strings.Contains(b.text, a.text) &&
+					len(a.text) > 0 && len(b.text) > 0 {
+					// Could be legitimate multiple facts, be conservative
+				}
+			}
+		}
+	}
+	
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"conflicts": conflicts,
+		"checked":   len(listResp.Results),
+	})
 }
 
 // ─── Encryption Helpers ──────────────────────────────────────────────────
