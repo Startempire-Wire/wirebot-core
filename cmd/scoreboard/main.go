@@ -19,8 +19,10 @@ import (
 	"io/fs"
 	"log"
 	"math"
+	"net"
 	"net/http"
 	"os"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strconv"
@@ -4750,6 +4752,272 @@ func (s *Server) handlePairingStatus(w http.ResponseWriter, r *http.Request) {
 
 // ─── POST /v1/lock — EOD Score Lock ─────────────────────────────────────
 
+// ─── Task Auto-Detection Engine ─────────────────────────────────────────
+// Proactively checks real signals to determine if checklist tasks are done.
+// Returns list of newly detected completions.
+func (s *Server) runTaskAutoDetect(tasks []interface{}, cl map[string]interface{}) []map[string]string {
+	var detected []map[string]string
+
+	// Build integration status map (which providers are connected)
+	connectedProviders := map[string]bool{}
+	rows, err := s.db.Query("SELECT provider FROM integrations WHERE status='active'")
+	if err == nil {
+		defer rows.Close()
+		for rows.Next() {
+			var p string
+			rows.Scan(&p)
+			connectedProviders[p] = true
+		}
+	}
+
+	// Check businesses defined
+	businesses, _ := cl["businesses"].([]interface{})
+	hasBusinesses := len(businesses) > 0
+	hasLegalEntity := false
+	for _, b := range businesses {
+		bm, _ := b.(map[string]interface{})
+		if le, _ := bm["legalEntity"].(string); le != "" {
+			hasLegalEntity = true
+			break
+		}
+	}
+	hasProducts := false
+	for _, b := range businesses {
+		bm, _ := b.(map[string]interface{})
+		if bm["type"] == "product" {
+			hasProducts = true
+			break
+		}
+	}
+
+	// Count revenue events
+	var revenueEventCount int
+	s.db.QueryRow("SELECT COUNT(*) FROM events WHERE lane='revenue' AND status='approved'").Scan(&revenueEventCount)
+
+	// Count systems events
+	var systemsEventCount int
+	s.db.QueryRow("SELECT COUNT(*) FROM events WHERE lane='systems' AND status='approved'").Scan(&systemsEventCount)
+
+	// Count growth partners
+	var partnerCount int
+	// From network members endpoint — for now check if any friends exist
+	// This is a placeholder; real check would query BuddyBoss
+
+	// Scoreboard is live (we're running)
+
+	for _, t := range tasks {
+		tm, ok := t.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		status, _ := tm["status"].(string)
+		if status == "completed" || status == "done" || status == "skipped" {
+			continue // already done
+		}
+
+		det, ok := tm["detection"].(map[string]interface{})
+		if !ok {
+			continue
+		}
+
+		detType, _ := det["type"].(string)
+		title, _ := tm["title"].(string)
+		passed := false
+		reason := ""
+
+		switch detType {
+		case "integration_connected":
+			provider, _ := det["provider"].(string)
+			if connectedProviders[provider] {
+				passed = true
+				reason = provider + " integration active"
+			}
+			// Check fallback provider
+			if !passed {
+				if fb, _ := det["fallback"].(string); fb != "" && connectedProviders[fb] {
+					passed = true
+					reason = fb + " integration active (fallback)"
+				}
+			}
+
+		case "dns_resolve":
+			domains, _ := det["domains"].([]interface{})
+			allResolve := len(domains) > 0
+			for _, d := range domains {
+				ds, _ := d.(string)
+				if ds == "" {
+					continue
+				}
+				_, err := net.LookupHost(ds)
+				if err != nil {
+					allResolve = false
+					break
+				}
+			}
+			if allResolve {
+				passed = true
+				reason = "all domains resolve"
+			}
+
+		case "dns_check":
+			check, _ := det["check"].(string)
+			domain, _ := det["domain"].(string)
+			if check == "mx_record" && domain != "" {
+				mxs, err := net.LookupMX(domain)
+				if err == nil && len(mxs) > 0 {
+					passed = true
+					reason = "MX records found for " + domain
+				}
+			}
+
+		case "http_status":
+			urls, _ := det["urls"].([]interface{})
+			allOk := len(urls) > 0
+			client := &http.Client{Timeout: 5 * time.Second}
+			for _, u := range urls {
+				us, _ := u.(string)
+				if us == "" {
+					continue
+				}
+				resp, err := client.Get(us)
+				if err != nil || resp.StatusCode >= 400 {
+					allOk = false
+					break
+				}
+				resp.Body.Close()
+			}
+			if allOk {
+				passed = true
+				reason = "all URLs return 200"
+			}
+
+		case "http_check":
+			check, _ := det["check"].(string)
+			url, _ := det["url"].(string)
+			if url != "" && !strings.HasPrefix(url, "http") {
+				url = "https://" + url
+			}
+			if check == "favicon_exists" && url != "" {
+				client := &http.Client{Timeout: 5 * time.Second}
+				resp, err := client.Get(url + "/favicon.ico")
+				if err == nil && resp.StatusCode == 200 {
+					passed = true
+					reason = "favicon found"
+				}
+				if resp != nil {
+					resp.Body.Close()
+				}
+			}
+			if check == "meta_tags_exist" && url != "" {
+				client := &http.Client{Timeout: 5 * time.Second}
+				resp, err := client.Get(url)
+				if err == nil && resp.StatusCode == 200 {
+					body, _ := io.ReadAll(io.LimitReader(resp.Body, 50000))
+					resp.Body.Close()
+					html := string(body)
+					if strings.Contains(html, "<meta") && (strings.Contains(html, "description") || strings.Contains(html, "og:title")) {
+						passed = true
+						reason = "meta tags found"
+					}
+				}
+			}
+
+		case "config_check":
+			check, _ := det["check"].(string)
+			switch check {
+			case "business_name_set":
+				if hasBusinesses {
+					passed = true
+					reason = "businesses defined in checklist"
+				}
+			case "legal_entity_set":
+				if hasLegalEntity {
+					passed = true
+					reason = "legal entity type set"
+				}
+			case "products_defined":
+				if hasProducts {
+					passed = true
+					reason = "products defined under business"
+				}
+			}
+
+		case "event_exists":
+			check, _ := det["check"].(string)
+			switch check {
+			case "season_active":
+				passed = true // season 1 is active
+				reason = "Season 1 active"
+			case "backup_configured":
+				var cnt int
+				s.db.QueryRow("SELECT COUNT(*) FROM events WHERE event_type LIKE '%BACKUP%' OR event_type LIKE '%backup%'").Scan(&cnt)
+				if cnt > 0 {
+					passed = true
+					reason = "backup events found"
+				}
+			}
+
+		case "event_count":
+			check, _ := det["check"].(string)
+			minF, _ := det["min"].(float64)
+			minCount := int(minF)
+			switch check {
+			case "revenue_events":
+				if revenueEventCount >= minCount {
+					passed = true
+					reason = fmt.Sprintf("%d revenue events (need %d)", revenueEventCount, minCount)
+				}
+			case "systems_events":
+				if systemsEventCount >= minCount {
+					passed = true
+					reason = fmt.Sprintf("%d systems events (need %d)", systemsEventCount, minCount)
+				}
+			case "growth_partners":
+				if partnerCount >= minCount {
+					passed = true
+					reason = fmt.Sprintf("%d growth partners", partnerCount)
+				}
+			}
+
+		case "file_check":
+			// Check workspace identity files for fields
+			check, _ := det["check"].(string)
+			if check == "identity_field" {
+				field, _ := det["field"].(string)
+				idPath := filepath.Join(filepath.Dir(checklistPath), "IDENTITY.md")
+				content, err := os.ReadFile(idPath)
+				if err == nil && field != "" {
+					lower := strings.ToLower(string(content))
+					if strings.Contains(lower, strings.ToLower(field)) {
+						passed = true
+						reason = field + " found in IDENTITY.md"
+					}
+				}
+			}
+
+		case "manual_confirm":
+			// Cannot auto-detect — skip
+			continue
+		}
+
+		if passed {
+			tm["status"] = "completed"
+			tm["completedAt"] = time.Now().UTC().Format(time.RFC3339)
+			tm["completedBy"] = "auto-detect"
+			tm["detectionReason"] = reason
+			detected = append(detected, map[string]string{
+				"id":     fmt.Sprintf("%v", tm["id"]),
+				"title":  title,
+				"reason": reason,
+				"type":   detType,
+			})
+			log.Printf("[autodetect] ✓ %s — %s", title, reason)
+		}
+	}
+
+	return detected
+}
+
 // handleChecklist serves task data for the Dashboard view.
 // Reads from the checklist.json file maintained by the gateway plugin.
 func (s *Server) handleChecklist(w http.ResponseWriter, r *http.Request) {
@@ -4865,6 +5133,28 @@ func (s *Server) handleChecklist(w http.ResponseWriter, r *http.Request) {
 			"id":   taskID,
 			"note": "Task marked complete",
 		})
+	case "autodetect":
+		// Proactively detect which tasks have been completed
+		if r.Method != "POST" {
+			http.Error(w, `{"error":"POST required"}`, 405)
+			return
+		}
+		detected := s.runTaskAutoDetect(tasks, cl)
+		if len(detected) > 0 {
+			cl["tasks"] = tasks
+			updated, _ := json.MarshalIndent(cl, "", "  ")
+			if err := os.WriteFile(checklistPath, updated, 0644); err != nil {
+				log.Printf("[autodetect] ERROR writing checklist: %v", err)
+			} else {
+				log.Printf("[autodetect] Wrote %d bytes to %s", len(updated), checklistPath)
+			}
+		}
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"detected":       detected,
+			"count":          len(detected),
+			"total_tasks":    len(tasks),
+		})
+
 	case "grouped":
 		// Return tasks grouped by category with per-category progress
 		catMap := map[string]map[string]interface{}{}
@@ -5235,6 +5525,38 @@ func (s *Server) startPoller() {
 			s.checkSystemsHealth()
 		}
 	}()
+
+	// Checklist auto-detection: on startup then every 4 hours
+	go func() {
+		time.Sleep(30 * time.Second) // let integrations load first
+		s.runAutoDetectCron()
+		ticker := time.NewTicker(4 * time.Hour)
+		for range ticker.C {
+			s.runAutoDetectCron()
+		}
+	}()
+}
+
+func (s *Server) runAutoDetectCron() {
+	data, err := os.ReadFile(checklistPath)
+	if err != nil {
+		return
+	}
+	var cl map[string]interface{}
+	if json.Unmarshal(data, &cl) != nil {
+		return
+	}
+	tasksRaw, _ := cl["tasks"].([]interface{})
+	if len(tasksRaw) == 0 {
+		return
+	}
+	detected := s.runTaskAutoDetect(tasksRaw, cl)
+	if len(detected) > 0 {
+		cl["tasks"] = tasksRaw
+		updated, _ := json.MarshalIndent(cl, "", "  ")
+		os.WriteFile(checklistPath, updated, 0644)
+		log.Printf("[autodetect] Completed %d tasks automatically", len(detected))
+	}
 }
 
 func (s *Server) checkSystemsHealth() {
