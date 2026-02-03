@@ -21,13 +21,27 @@
   let { data = null, user = null, token = '', activeBusiness: parentBiz = '' } = $props();
   let localBiz = $state(parentBiz || '');  // local business filter state
 
-  const BUSINESSES = [
-    { id: '', label: 'All', icon: '🌐' },
-    { id: 'STA', label: 'Startempire', icon: '⚡' },
-    { id: 'WIR', label: 'Wirebot', icon: '🤖' },
-    { id: 'PHI', label: 'Philoveracity', icon: '📘' },
-    { id: 'SEW', label: 'SEW Network', icon: '🕸' },
+  // Business = legal entity, Product = offering within a business
+  const ENTITIES = [
+    { id: '', label: 'All', icon: '🌐', type: 'all' },
+    { id: 'STA', label: 'Startempire Wire', icon: '⚡', type: 'business', legal: 'LLC',
+      products: [
+        { id: 'WIR', label: 'Wirebot', icon: '🤖', type: 'product' },
+        { id: 'SEW', label: 'Wire Network', icon: '🕸', type: 'product' },
+      ]},
+    { id: 'PHI', label: 'Philoveracity', icon: '📘', type: 'business', legal: 'Sole Prop', products: [] },
   ];
+
+  // Flat list for iteration (with nesting info)
+  const BUSINESSES = [];
+  for (const e of ENTITIES) {
+    BUSINESSES.push(e);
+    if (e.products) {
+      for (const p of e.products) {
+        BUSINESSES.push({ ...p, parent: e.id });
+      }
+    }
+  }
 
   // All checklist data (loaded once per stage)
   let allCategories = $state([]);   // full categories from API
@@ -238,18 +252,32 @@
       </div>
     </div>
 
-    <!-- ═══ BUSINESS FILTER (optional lens) ═══ -->
+    <!-- ═══ BUSINESS FILTER (hierarchical: businesses → products) ═══ -->
     {#if data?.score}
       <div class="biz-row">
         {#each BUSINESSES as biz}
-          <button class="biz-chip" class:active={localBiz === biz.id}
+          <button
+            class="biz-chip {biz.type || ''}"
+            class:active={localBiz === biz.id}
+            class:child={biz.parent}
             onclick={() => switchBusiness(biz.id)}>
-            {biz.icon} {biz.label}
+            {#if biz.parent}<span class="biz-indent">└</span>{/if}
+            <span class="biz-icon">{biz.icon}</span>
+            <span class="biz-name">{biz.label}</span>
+            {#if biz.legal}<span class="biz-legal">{biz.legal}</span>{/if}
           </button>
         {/each}
       </div>
       {#if localBiz}
-        <div class="biz-context">Viewing: {BUSINESSES.find(b => b.id === localBiz)?.icon} {BUSINESSES.find(b => b.id === localBiz)?.label}</div>
+        {@const active = BUSINESSES.find(b => b.id === localBiz)}
+        <div class="biz-context">
+          {active?.icon} {active?.label}
+          {#if active?.type === 'product'}
+            <span class="biz-ctx-type">Product under {ENTITIES.find(e => e.id === active?.parent)?.label || 'Startempire Wire'}</span>
+          {:else if active?.legal}
+            <span class="biz-ctx-type">{active.legal}</span>
+          {/if}
+        </div>
       {/if}
     {/if}
 
@@ -260,7 +288,7 @@
     {#if checklist}
       <div class="card setup-card">
         <div class="setup-header">
-          <span class="setup-label">{localBiz ? BUSINESSES.find(b=>b.id===localBiz)?.label?.toUpperCase()+' — ' : ''}BUSINESS SETUP — {stage.toUpperCase()}</span>
+          <span class="setup-label">{localBiz ? (BUSINESSES.find(b=>b.id===localBiz)?.label || '').toUpperCase()+' — ' : ''}SETUP — {stage.toUpperCase()}</span>
           <span class="setup-count">{checklist.completed || 0}/{checklist.total || 0}</span>
         </div>
         <div class="progress-wrap">
@@ -501,13 +529,22 @@
   .avatar { width: 40px; height: 40px; border-radius: 50%; background: #2a2a3a; display: flex; align-items: center; justify-content: center; font-size: 18px; color: #888; font-weight: 700; }
   .avatar-img { width: 40px; height: 40px; border-radius: 50%; object-fit: cover; border: 2px solid #2a2a3a; }
 
-  /* ─── Business Filter ─── */
-  .biz-row { display: flex; gap: 6px; overflow-x: auto; margin-bottom: 14px; scrollbar-width: none; -webkit-overflow-scrolling: touch; }
+  /* ─── Business Filter (hierarchical) ─── */
+  .biz-row { display: flex; gap: 5px; overflow-x: auto; margin-bottom: 6px; scrollbar-width: none; -webkit-overflow-scrolling: touch; flex-wrap: wrap; }
   .biz-row::-webkit-scrollbar { display: none; }
-  .biz-chip { padding: 5px 12px; border-radius: 20px; font-size: 11px; font-weight: 600; background: #16161e; border: 1px solid #1e1e30; color: #666; cursor: pointer; white-space: nowrap; transition: all .15s; }
+  .biz-chip { display: flex; align-items: center; gap: 3px; padding: 5px 10px; border-radius: 20px; font-size: 11px; font-weight: 600; background: #16161e; border: 1px solid #1e1e30; color: #666; cursor: pointer; white-space: nowrap; transition: all .2s; }
   .biz-chip:hover { border-color: #7c7cff40; color: #aaa; }
   .biz-chip.active { background: #7c7cff15; border-color: #7c7cff; color: #7c7cff; }
-  .biz-context { font-size: 10px; font-weight: 700; letter-spacing: .06em; color: #7c7cff; text-align: center; margin: -6px 0 8px; animation: biz-label-in 350ms ease-out; }
+  .biz-chip.child { padding-left: 6px; font-size: 10px; border-style: dashed; }
+  .biz-chip.child.active { border-style: solid; }
+  .biz-chip.business { font-weight: 700; }
+  .biz-indent { font-size: 9px; color: #444; margin-right: 1px; }
+  .biz-icon { font-size: 12px; }
+  .biz-name { }
+  .biz-legal { font-size: 8px; font-weight: 400; color: #555; background: #1e1e30; padding: 1px 4px; border-radius: 4px; margin-left: 2px; }
+  .biz-chip.active .biz-legal { color: #7c7cff80; background: #7c7cff10; }
+  .biz-context { font-size: 10px; font-weight: 700; letter-spacing: .06em; color: #7c7cff; text-align: center; margin: 4px 0 10px; animation: biz-label-in 350ms ease-out; display: flex; align-items: center; justify-content: center; gap: 6px; }
+  .biz-ctx-type { font-weight: 400; color: #555; font-size: 9px; }
   @keyframes biz-label-in { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: translateY(0); } }
   .biz-content { animation: biz-fade 450ms cubic-bezier(0.25, 0.46, 0.45, 0.94); }
   @keyframes biz-fade {
