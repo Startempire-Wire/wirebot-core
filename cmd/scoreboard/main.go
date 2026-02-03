@@ -446,6 +446,10 @@ func main() {
 	// EOD score lock
 	mux.HandleFunc("/v1/lock", s.auth(s.handleLock))
 
+	// Memory Queue — approve/reject inferred memories from docs
+	mux.HandleFunc("/v1/memory/queue", s.auth(s.handleMemoryQueue))
+	mux.HandleFunc("/v1/memory/queue/", s.auth(s.handleMemoryQueueAction))
+
 	// Wirebot chat proxy — full conversations with memory retention
 	mux.HandleFunc("/v1/chat", s.auth(s.handleChat))
 	mux.HandleFunc("/v1/chat/sessions", s.auth(s.handleChatSessions))
@@ -6652,6 +6656,184 @@ func (s *Server) handleLock(w http.ResponseWriter, r *http.Request) {
 		"ships": daily.ShipsCount, "streak": streak,
 		"record": s.season.Record,
 	})
+}
+
+// ─── Memory Queue — Approve/Reject Inferred Memories ─────────────────────
+
+type MemoryQueueItem struct {
+	ID            string  `json:"id"`
+	MemoryText    string  `json:"memory_text"`
+	SourceType    string  `json:"source_type"`
+	SourceFile    string  `json:"source_file,omitempty"`
+	SourceContext string  `json:"source_context,omitempty"`
+	Confidence    float64 `json:"confidence"`
+	Status        string  `json:"status"`
+	Correction    string  `json:"correction,omitempty"`
+	CreatedAt     string  `json:"created_at"`
+	ReviewedAt    string  `json:"reviewed_at,omitempty"`
+}
+
+// GET /v1/memory/queue — list pending memories
+// POST /v1/memory/queue — add memory to queue (for ingestion)
+func (s *Server) handleMemoryQueue(w http.ResponseWriter, r *http.Request) {
+	cors(w)
+	
+	switch r.Method {
+	case "GET":
+		status := r.URL.Query().Get("status")
+		if status == "" {
+			status = "pending"
+		}
+		limit := 50
+		if l := r.URL.Query().Get("limit"); l != "" {
+			fmt.Sscanf(l, "%d", &limit)
+		}
+		
+		rows, err := s.db.Query(`
+			SELECT id, memory_text, source_type, source_file, source_context, 
+			       confidence, status, correction, created_at, reviewed_at
+			FROM memory_queue 
+			WHERE status = ?
+			ORDER BY created_at DESC
+			LIMIT ?`, status, limit)
+		if err != nil {
+			http.Error(w, `{"error":"db query failed"}`, 500)
+			return
+		}
+		defer rows.Close()
+		
+		items := []MemoryQueueItem{}
+		for rows.Next() {
+			var item MemoryQueueItem
+			var srcFile, srcCtx, correction, reviewedAt sql.NullString
+			rows.Scan(&item.ID, &item.MemoryText, &item.SourceType, &srcFile, &srcCtx,
+				&item.Confidence, &item.Status, &correction, &item.CreatedAt, &reviewedAt)
+			if srcFile.Valid { item.SourceFile = srcFile.String }
+			if srcCtx.Valid { item.SourceContext = srcCtx.String }
+			if correction.Valid { item.Correction = correction.String }
+			if reviewedAt.Valid { item.ReviewedAt = reviewedAt.String }
+			items = append(items, item)
+		}
+		
+		// Also get counts
+		var pending, approved, rejected int
+		s.db.QueryRow("SELECT COUNT(*) FROM memory_queue WHERE status='pending'").Scan(&pending)
+		s.db.QueryRow("SELECT COUNT(*) FROM memory_queue WHERE status='approved'").Scan(&approved)
+		s.db.QueryRow("SELECT COUNT(*) FROM memory_queue WHERE status='rejected'").Scan(&rejected)
+		
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"items": items,
+			"counts": map[string]int{
+				"pending": pending, "approved": approved, "rejected": rejected,
+			},
+		})
+		
+	case "POST":
+		// Add new memory to queue (used by ingestion)
+		var body struct {
+			MemoryText    string  `json:"memory_text"`
+			SourceType    string  `json:"source_type"`
+			SourceFile    string  `json:"source_file"`
+			SourceContext string  `json:"source_context"`
+			Confidence    float64 `json:"confidence"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			http.Error(w, `{"error":"invalid body"}`, 400)
+			return
+		}
+		
+		id := fmt.Sprintf("mem-%d", time.Now().UnixNano())
+		_, err := s.db.Exec(`
+			INSERT INTO memory_queue (id, memory_text, source_type, source_file, source_context, confidence)
+			VALUES (?, ?, ?, ?, ?, ?)`,
+			id, body.MemoryText, body.SourceType, body.SourceFile, body.SourceContext, body.Confidence)
+		if err != nil {
+			http.Error(w, `{"error":"insert failed"}`, 500)
+			return
+		}
+		
+		json.NewEncoder(w).Encode(map[string]interface{}{"ok": true, "id": id})
+		
+	default:
+		http.Error(w, `{"error":"method not allowed"}`, 405)
+	}
+}
+
+// POST /v1/memory/queue/{id}/approve — approve memory
+// POST /v1/memory/queue/{id}/reject — reject memory
+// POST /v1/memory/queue/{id}/correct — correct and approve
+func (s *Server) handleMemoryQueueAction(w http.ResponseWriter, r *http.Request) {
+	cors(w)
+	if r.Method != "POST" {
+		http.Error(w, `{"error":"POST only"}`, 405)
+		return
+	}
+	
+	// Parse path: /v1/memory/queue/{id}/{action}
+	path := strings.TrimPrefix(r.URL.Path, "/v1/memory/queue/")
+	parts := strings.Split(path, "/")
+	if len(parts) != 2 {
+		http.Error(w, `{"error":"invalid path, expected /v1/memory/queue/{id}/{action}"}`, 400)
+		return
+	}
+	id, action := parts[0], parts[1]
+	
+	// Get the memory item
+	var item MemoryQueueItem
+	err := s.db.QueryRow(`SELECT id, memory_text, source_type FROM memory_queue WHERE id=?`, id).
+		Scan(&item.ID, &item.MemoryText, &item.SourceType)
+	if err != nil {
+		http.Error(w, `{"error":"memory not found"}`, 404)
+		return
+	}
+	
+	switch action {
+	case "approve":
+		// Store to Mem0 and mark approved
+		go func() {
+			mem0Store("http://127.0.0.1:8200", "wirebot_verious", item.MemoryText, nil)
+		}()
+		s.db.Exec(`UPDATE memory_queue SET status='approved', reviewed_at=CURRENT_TIMESTAMP WHERE id=?`, id)
+		json.NewEncoder(w).Encode(map[string]interface{}{"ok": true, "action": "approved", "memory": item.MemoryText})
+		
+	case "reject":
+		s.db.Exec(`UPDATE memory_queue SET status='rejected', reviewed_at=CURRENT_TIMESTAMP WHERE id=?`, id)
+		json.NewEncoder(w).Encode(map[string]interface{}{"ok": true, "action": "rejected"})
+		
+	case "correct":
+		var body struct {
+			Correction string `json:"correction"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Correction == "" {
+			http.Error(w, `{"error":"correction required"}`, 400)
+			return
+		}
+		// Store corrected version to Mem0
+		go func() {
+			mem0Store("http://127.0.0.1:8200", "wirebot_verious", body.Correction, nil)
+		}()
+		s.db.Exec(`UPDATE memory_queue SET status='corrected', correction=?, reviewed_at=CURRENT_TIMESTAMP WHERE id=?`, 
+			body.Correction, id)
+		json.NewEncoder(w).Encode(map[string]interface{}{"ok": true, "action": "corrected", "memory": body.Correction})
+		
+	default:
+		http.Error(w, `{"error":"invalid action, use approve/reject/correct"}`, 400)
+	}
+}
+
+// mem0Store helper (duplicated for this context, uses existing pattern)
+func mem0Store(baseURL, namespace, text string, messages []map[string]string) error {
+	body := map[string]interface{}{"namespace": namespace, "category": "approved"}
+	if messages != nil && len(messages) > 0 {
+		body["messages"] = messages
+	} else {
+		body["text"] = text
+	}
+	bodyBytes, _ := json.Marshal(body)
+	resp, err := http.Post(baseURL+"/v1/store", "application/json", bytes.NewReader(bodyBytes))
+	if err != nil { return err }
+	defer resp.Body.Close()
+	return nil
 }
 
 // ─── Encryption Helpers ──────────────────────────────────────────────────

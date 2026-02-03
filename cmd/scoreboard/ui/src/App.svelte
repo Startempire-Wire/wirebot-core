@@ -11,6 +11,7 @@
   import Profile from './lib/Profile.svelte';
   import PairingFlow from './lib/PairingFlow.svelte';
   import Audit from './lib/Audit.svelte';
+  import MemoryReview from './lib/MemoryReview.svelte';
 
   let view = $state('dashboard');
   let viewHistory = $state(['dashboard']); // SPA navigation stack
@@ -903,6 +904,8 @@ Tracked with Wirebot — your AI business operating partner`;
         <Wrapped {wrapped} />
       {:else if view === 'audit'}
         <Audit />
+      {:else if view === 'memory-review'}
+        <MemoryReview />
       {:else if view === 'settings'}
         <div class="settings-view">
           <div class="s-hdr"><h2>⚙️ Settings</h2></div>
@@ -996,6 +999,12 @@ Tracked with Wirebot — your AI business operating partner`;
                 <button class="btn-discord-audit" onclick={() => navigateTo('audit')}>
                   🎯 Discord Training
                   <span class="btn-sub">Review & train Wirebot's responses</span>
+                </button>
+
+                <!-- Memory Review -->
+                <button class="btn-memory-review" onclick={() => navigateTo('memory-review')}>
+                  🧠 Memory Review
+                  <span class="btn-sub">Approve or correct inferred facts</span>
                 </button>
 
                 <button class="btn-logout" onclick={logout}>Sign out</button>
@@ -1750,6 +1759,14 @@ Tracked with Wirebot — your AI business operating partner`;
   }
   .btn-discord-audit:hover { filter: brightness(1.1); }
   .btn-discord-audit .btn-sub { font-size: 10px; opacity: 0.8; }
+
+  .btn-memory-review {
+    background: linear-gradient(135deg, #7c3aed, #a855f7); color: #fff; border: none; border-radius: 8px;
+    padding: 10px 16px; font-size: 13px; cursor: pointer; display: flex; flex-direction: column;
+    align-items: flex-start; gap: 2px; width: 100%; text-align: left; margin-top: 8px;
+  }
+  .btn-memory-review:hover { filter: brightness(1.1); }
+  .btn-memory-review .btn-sub { font-size: 10px; opacity: 0.8; }
 
   .btn-logout {
     background: transparent; border: 1px solid #333; color: #666; border-radius: 6px;
