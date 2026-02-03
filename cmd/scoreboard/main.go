@@ -21,6 +21,7 @@ import (
 	"math"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -47,11 +48,11 @@ var (
 	authToken      = envOr("SCOREBOARD_TOKEN", "65b918ba-baf5-4996-8b53-6fb0f662a0c3")
 	masterKeyHex   = envOr("SCOREBOARD_MASTER_KEY", "") // 64-char hex = 32-byte AES-256 key
 	rlJWTSecret    = envOr("RL_JWT_SECRET", "")         // Ring Leader JWT secret (HMAC-SHA256)
-	stripeKey      = envOr("STRIPE_SECRET_KEY", "")    // Stripe live secret key
+	stripeKey      = envOr("STRIPE_SECRET_KEY", "")     // Stripe live secret key
 	stripeWHSecret = envOr("STRIPE_WEBHOOK_SECRET", "") // Stripe webhook signing secret
 	plaidClientID  = envOr("PLAID_CLIENT_ID", "")       // Plaid client_id
-	plaidSecret    = envOr("PLAID_SECRET", "")           // Plaid secret (sandbox/development/production)
-	plaidEnv       = envOr("PLAID_ENV", "sandbox")       // sandbox | development | production
+	plaidSecret    = envOr("PLAID_SECRET", "")          // Plaid secret (sandbox/development/production)
+	plaidEnv       = envOr("PLAID_ENV", "sandbox")      // sandbox | development | production
 )
 
 func envOr(key, def string) string {
@@ -74,7 +75,7 @@ type Event struct {
 	ArtifactTitle     string  `json:"artifact_title,omitempty"`
 	Detail            string  `json:"detail,omitempty"`
 	Confidence        float64 `json:"confidence"`
-	Verification      string  `json:"verification,omitempty"`     // PROVIDER_API, WEBHOOK, SELF_REPORTED, etc.
+	Verification      string  `json:"verification,omitempty"` // PROVIDER_API, WEBHOOK, SELF_REPORTED, etc.
 	Verifiers         string  `json:"verifiers,omitempty"`
 	VerificationLevel string  `json:"verification_level,omitempty"` // STRONG, MEDIUM, WEAK, SELF_REPORTED, UNVERIFIED
 	ScoreDelta        int     `json:"score_delta"`
@@ -88,22 +89,22 @@ type Event struct {
 // ─── Integration Types ──────────────────────────────────────────────────────
 
 type Integration struct {
-	ID               string `json:"id"`
-	UserID           string `json:"user_id"`
-	Provider         string `json:"provider"`
-	AuthType         string `json:"auth_type"` // oauth2, api_key, webhook_secret, rss_url
-	DisplayName      string `json:"display_name"`
-	Scopes           string `json:"scopes"`
-	Status           string `json:"status"` // active, expired, revoked, error
-	Sensitivity      string `json:"sensitivity"` // public, standard, sensitive, financial
-	WirebotVisible   bool   `json:"wirebot_visible"`
-	WirebotDetail    string `json:"wirebot_detail_level"` // full, summary, binary, none
-	ShareLevel       string `json:"share_level"` // private, anonymized, shared, public
-	PollInterval     int    `json:"poll_interval_seconds"`
-	LastUsedAt       string `json:"last_used_at,omitempty"`
-	LastError        string `json:"last_error,omitempty"`
-	BusinessID       string `json:"business_id,omitempty"`
-	CreatedAt        string `json:"created_at"`
+	ID             string `json:"id"`
+	UserID         string `json:"user_id"`
+	Provider       string `json:"provider"`
+	AuthType       string `json:"auth_type"` // oauth2, api_key, webhook_secret, rss_url
+	DisplayName    string `json:"display_name"`
+	Scopes         string `json:"scopes"`
+	Status         string `json:"status"`      // active, expired, revoked, error
+	Sensitivity    string `json:"sensitivity"` // public, standard, sensitive, financial
+	WirebotVisible bool   `json:"wirebot_visible"`
+	WirebotDetail  string `json:"wirebot_detail_level"` // full, summary, binary, none
+	ShareLevel     string `json:"share_level"`          // private, anonymized, shared, public
+	PollInterval   int    `json:"poll_interval_seconds"`
+	LastUsedAt     string `json:"last_used_at,omitempty"`
+	LastError      string `json:"last_error,omitempty"`
+	BusinessID     string `json:"business_id,omitempty"`
+	CreatedAt      string `json:"created_at"`
 }
 
 type RSSItem struct {
@@ -121,8 +122,10 @@ type RSSFeed struct {
 
 type AtomFeed struct {
 	Entries []struct {
-		Title   string `xml:"title"`
-		Link    struct{ Href string `xml:"href,attr"` } `xml:"link"`
+		Title string `xml:"title"`
+		Link  struct {
+			Href string `xml:"href,attr"`
+		} `xml:"link"`
 		Updated string `xml:"updated"`
 		ID      string `xml:"id"`
 	} `xml:"entry"`
@@ -165,23 +168,23 @@ type Streak struct {
 }
 
 type ScoreboardView struct {
-	Mode        string    `json:"mode"`
-	Score       int       `json:"score"`
-	Possession  string    `json:"possession"`
-	ShipToday   int       `json:"ship_today"`
-	Streak      Streak    `json:"streak"`
-	Record      string    `json:"record"`
-	SeasonDay   string    `json:"season_day"`
-	LastShip    string    `json:"last_ship"`
-	Clock       ClockView `json:"clock"`
-	Lanes       LanesView `json:"lanes"`
-	Signal      string    `json:"signal"`
-	Season      Season    `json:"season"`
-	Intent      string    `json:"intent,omitempty"`
-	StallHours  float64   `json:"stall_hours,omitempty"`
-	Penalties   int       `json:"penalties"`
-	StreakBonus int       `json:"streak_bonus"`
-	PendingCount int     `json:"pending_count"`
+	Mode         string    `json:"mode"`
+	Score        int       `json:"score"`
+	Possession   string    `json:"possession"`
+	ShipToday    int       `json:"ship_today"`
+	Streak       Streak    `json:"streak"`
+	Record       string    `json:"record"`
+	SeasonDay    string    `json:"season_day"`
+	LastShip     string    `json:"last_ship"`
+	Clock        ClockView `json:"clock"`
+	Lanes        LanesView `json:"lanes"`
+	Signal       string    `json:"signal"`
+	Season       Season    `json:"season"`
+	Intent       string    `json:"intent,omitempty"`
+	StallHours   float64   `json:"stall_hours,omitempty"`
+	Penalties    int       `json:"penalties"`
+	StreakBonus  int       `json:"streak_bonus"`
+	PendingCount int       `json:"pending_count"`
 }
 
 type ClockView struct {
@@ -245,7 +248,7 @@ type Server struct {
 	db       *sql.DB
 	mu       sync.RWMutex
 	season   Season
-	tenantID string // empty = operator (default), otherwise randID
+	tenantID string         // empty = operator (default), otherwise randID
 	pairing  *PairingEngine // Living profile engine (pairing.go)
 }
 
@@ -402,8 +405,8 @@ func main() {
 	// Initialize and start the Pairing Engine
 	os.MkdirAll("/data/wirebot/pairing", 0750)
 	s.pairing = NewPairingEngine("/data/wirebot/pairing/profile.json", s.db, PairingConfig{
-		LettaAgentID: envOr("LETTA_AGENT_ID", "agent-82610d14-ec65-4d10-9ec2-8c479848cea9"),
-		LettaURL:     envOr("LETTA_URL", "http://localhost:8283"),
+		LettaAgentID:  envOr("LETTA_AGENT_ID", "agent-82610d14-ec65-4d10-9ec2-8c479848cea9"),
+		LettaURL:      envOr("LETTA_URL", "http://localhost:8283"),
 		Mem0Namespace: envOr("MEM0_NAMESPACE", "wirebot_verious"),
 		Mem0URL:       envOr("MEM0_URL", "http://localhost:8200"),
 		GatewayToken:  envOr("GATEWAY_TOKEN", authToken),
@@ -462,9 +465,9 @@ func main() {
 	// Integrations management
 	mux.HandleFunc("/v1/integrations", s.authMember(s.handleIntegrations))
 	mux.HandleFunc("/v1/integrations/", s.authMember(s.handleIntegrationConfig))
-	mux.HandleFunc("/v1/network/members", s.auth(s.handleNetworkMembers)) // Real members from startempirewire.com
-	mux.HandleFunc("/v1/oauth/config", s.authMember(s.handleOAuthConfig))       // GET=status, POST=store credentials
-	mux.HandleFunc("/v1/oauth/setup/github", s.authMember(s.handleGitHubSetup)) // Manifest flow: redirect to GitHub
+	mux.HandleFunc("/v1/network/members", s.auth(s.handleNetworkMembers))          // Real members from startempirewire.com
+	mux.HandleFunc("/v1/oauth/config", s.authMember(s.handleOAuthConfig))          // GET=status, POST=store credentials
+	mux.HandleFunc("/v1/oauth/setup/github", s.authMember(s.handleGitHubSetup))    // Manifest flow: redirect to GitHub
 	mux.HandleFunc("/v1/oauth/setup/github/callback", s.handleGitHubSetupCallback) // GitHub returns here with code
 	mux.HandleFunc("/v1/oauth/setup/stripe", s.authMember(s.handleStripeSetup))
 	mux.HandleFunc("/v1/oauth/setup/freshbooks", s.authMember(s.handleFreshBooksSetup))
@@ -539,9 +542,9 @@ func main() {
 		switch r.Method {
 		case "POST":
 			var req struct {
-				TenantID  string `json:"tenant_id"`
-				UserID    int    `json:"user_id"`
-				Tier      string `json:"tier"`
+				TenantID string `json:"tenant_id"`
+				UserID   int    `json:"user_id"`
+				Tier     string `json:"tier"`
 			}
 			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 				http.Error(w, `{"error":"invalid json"}`, 400)
@@ -1036,7 +1039,9 @@ func hmacEqual(a, b string) bool {
 func (s *Server) auth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		cors(w)
-		if r.Method == "OPTIONS" { return } // CORS preflight passthrough
+		if r.Method == "OPTIONS" {
+			return
+		} // CORS preflight passthrough
 		ac := resolveAuth(r)
 		if !ac.Authenticated || ac.TierLevel < 3 {
 			http.Error(w, `{"error":"unauthorized","hint":"Requires operator token or ExtraWire+ Ring Leader JWT"}`, 401)
@@ -1050,7 +1055,9 @@ func (s *Server) auth(next http.HandlerFunc) http.HandlerFunc {
 func (s *Server) authMember(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		cors(w)
-		if r.Method == "OPTIONS" { return } // CORS preflight passthrough
+		if r.Method == "OPTIONS" {
+			return
+		} // CORS preflight passthrough
 		ac := resolveAuth(r)
 		if !ac.Authenticated {
 			http.Error(w, `{"error":"unauthorized","hint":"Login via startempirewire.com or provide Ring Leader JWT"}`, 401)
@@ -1435,14 +1442,14 @@ func (s *Server) handleScoreRange(w http.ResponseWriter, rangeQ string) {
 	defer rows.Close()
 
 	type DayEntry struct {
-		Date    string `json:"date"`
-		Score   int    `json:"score"`
-		Ship    int    `json:"shipping"`
-		Dist    int    `json:"distribution"`
-		Rev     int    `json:"revenue"`
-		Sys     int    `json:"systems"`
-		Ships   int    `json:"ships_count"`
-		Won     bool   `json:"won"`
+		Date  string `json:"date"`
+		Score int    `json:"score"`
+		Ship  int    `json:"shipping"`
+		Dist  int    `json:"distribution"`
+		Rev   int    `json:"revenue"`
+		Sys   int    `json:"systems"`
+		Ships int    `json:"ships_count"`
+		Won   bool   `json:"won"`
 	}
 	var days []DayEntry
 	var totalScore, wins, losses int
@@ -2122,14 +2129,14 @@ func inferProject(metadata, title, artifactURL, source string) string {
 func inferGitHubShortName(org, repo string) string {
 	// Known mappings
 	knownRepos := map[string]string{
-		"wirebot-core":                              "wirebot-core",
-		"focusa":                                    "focusa",
-		"Startempire-Wire-Network":                  "chrome-extension",
-		"Startempire-Wire-Network-Ring-Leader":      "ring-leader",
-		"Startempire-Wire-Network-Connect":          "connect-plugin",
-		"Startempire-Wire-Network-Parent-Core":      "parent-core",
-		"Startempire-Wire-Network-Websockets":       "websockets",
-		"Startempire-Wire-Network-Screenshots":      "screenshots",
+		"wirebot-core":                         "wirebot-core",
+		"focusa":                               "focusa",
+		"Startempire-Wire-Network":             "chrome-extension",
+		"Startempire-Wire-Network-Ring-Leader": "ring-leader",
+		"Startempire-Wire-Network-Connect":     "connect-plugin",
+		"Startempire-Wire-Network-Parent-Core": "parent-core",
+		"Startempire-Wire-Network-Websockets":  "websockets",
+		"Startempire-Wire-Network-Screenshots": "screenshots",
 	}
 	if short, ok := knownRepos[repo]; ok {
 		return short
@@ -2364,14 +2371,14 @@ func (s *Server) handleProjectAction(w http.ResponseWriter, r *http.Request) {
 		FROM events WHERE json_extract(metadata, '$.repo')=?`, projectName).Scan(&total, &pending, &approved, &rejected)
 
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"ok":            true,
-		"project":       projectName,
-		"action":        action,
+		"ok":              true,
+		"project":         projectName,
+		"action":          action,
 		"events_affected": affected,
-		"total":         total,
-		"pending":       pending,
-		"approved":      approved,
-		"rejected":      rejected,
+		"total":           total,
+		"pending":         pending,
+		"approved":        approved,
+		"rejected":        rejected,
 	})
 
 	log.Printf("Project %s: %s (%d events affected)", projectName, action, affected)
@@ -2732,14 +2739,14 @@ func (s *Server) handlePlaidLinkToken(w http.ResponseWriter, r *http.Request) {
 	}
 
 	result, err := plaidRequest("/link/token/create", map[string]interface{}{
-		"client_id":    plaidClientID,
-		"secret":       plaidSecret,
-		"user":         map[string]string{"client_user_id": userID},
-		"client_name":  "Wirebot Scoreboard",
-		"products":     products,
+		"client_id":     plaidClientID,
+		"secret":        plaidSecret,
+		"user":          map[string]string{"client_user_id": userID},
+		"client_name":   "Wirebot Scoreboard",
+		"products":      products,
 		"country_codes": []string{"US"},
-		"language":     "en",
-		"redirect_uri": fmt.Sprintf("%s/v1/plaid/oauth-redirect", oauthCallbackBase),
+		"language":      "en",
+		"redirect_uri":  fmt.Sprintf("%s/v1/plaid/oauth-redirect", oauthCallbackBase),
 	})
 	if err != nil {
 		log.Printf("Plaid link token error: %v", err)
@@ -3011,12 +3018,12 @@ func (s *Server) pollPlaid(integrationID, accessToken, configJSON, lastPoll stri
 		}
 
 		meta, _ := json.Marshal(map[string]interface{}{
-			"amount":        absAmount,
-			"is_income":     isIncome,
-			"merchant":      merchantName,
-			"category":      catStr,
+			"amount":         absAmount,
+			"is_income":      isIncome,
+			"merchant":       merchantName,
+			"category":       catStr,
 			"transaction_id": txnID,
-			"plaid_source":  true,
+			"plaid_source":   true,
 		})
 
 		now := time.Now().UTC().Format(time.RFC3339)
@@ -3212,7 +3219,7 @@ func (s *Server) handleOAuthConfig(w http.ResponseWriter, r *http.Request) {
 			"dropbox":    oauthDropboxClientID != "",
 		}
 		json.NewEncoder(w).Encode(map[string]interface{}{
-			"providers": providers,
+			"providers":    providers,
 			"callback_url": oauthCallbackBase + "/v1/oauth/callback",
 		})
 		return
@@ -3310,15 +3317,15 @@ func (s *Server) handleGitHubSetup(w http.ResponseWriter, r *http.Request) {
 	_ = oauthCallbackBase + "/v1/oauth/setup/github/callback" // available for future use
 
 	manifest := map[string]interface{}{
-		"name":               "Wirebot Scoreboard",
-		"url":                oauthCallbackBase,
-		"redirect_url":       callbackURL,
-		"callback_urls":      []string{callbackURL},
-		"setup_url":          oauthCallbackBase,
-		"hook_attributes":    map[string]interface{}{"url": oauthCallbackBase + "/v1/webhooks/github", "active": true},
-		"public":             true,
+		"name":                "Wirebot Scoreboard",
+		"url":                 oauthCallbackBase,
+		"redirect_url":        callbackURL,
+		"callback_urls":       []string{callbackURL},
+		"setup_url":           oauthCallbackBase,
+		"hook_attributes":     map[string]interface{}{"url": oauthCallbackBase + "/v1/webhooks/github", "active": true},
+		"public":              true,
 		"default_permissions": map[string]string{"contents": "read", "metadata": "read", "pull_requests": "read"},
-		"default_events":     []string{"push", "pull_request", "release"},
+		"default_events":      []string{"push", "pull_request", "release"},
 	}
 
 	manifestJSON, _ := json.Marshal(manifest)
@@ -3446,7 +3453,6 @@ a:hover{background:#7c7cff20}</style></head>
 <p style="font-size:12px;margin-top:24px;color:#555">After enabling Connect, your account's client_id will appear in the Connect settings. Come back here to finish setup.</p>
 </div></body></html>`)
 }
-
 
 func (s *Server) handleFreshBooksSetup(w http.ResponseWriter, r *http.Request) {
 	if oauthFreshBooksClientID != "" {
@@ -3589,16 +3595,39 @@ func (s *Server) handleOAuthStart(w http.ResponseWriter, r *http.Request) {
 		authURL = fmt.Sprintf("%s?response_type=code&client_id=%s&scope=%s&redirect_uri=%s&state=%s",
 			cfg.AuthURL, cfg.ClientID, cfg.Scopes, callbackURL, state)
 	} else if provider == "google" {
-		scope := r.URL.Query().Get("scope")
-		if scope == "youtube" {
-			scope = "https://www.googleapis.com/auth/youtube.readonly"
-		} else if scope == "drive" {
+		requested := r.URL.Query().Get("scope")
+		googleKind := ""
+		scope := cfg.Scopes
+		switch requested {
+		case "youtube":
+			googleKind = "youtube"
+			// Include userinfo.email so we can label the connected account reliably.
+			scope = "https://www.googleapis.com/auth/youtube.readonly https://www.googleapis.com/auth/userinfo.email"
+		case "drive":
+			googleKind = "drive"
 			scope = "https://www.googleapis.com/auth/drive.readonly https://www.googleapis.com/auth/userinfo.email"
-		} else {
-			scope = cfg.Scopes
 		}
-		authURL = fmt.Sprintf("%s?response_type=code&client_id=%s&scope=%s&redirect_uri=%s&state=%s&access_type=offline&prompt=consent",
-			cfg.AuthURL, cfg.ClientID, scope, callbackURL, state)
+		if googleKind != "" {
+			http.SetCookie(w, &http.Cookie{
+				Name: "oauth_google_kind", Value: googleKind,
+				Path: "/", MaxAge: 300, HttpOnly: true, Secure: true, SameSite: http.SameSiteLaxMode,
+			})
+		}
+
+		loginHint := ""
+		if auth.Email != "" {
+			loginHint = "&login_hint=" + url.QueryEscape(auth.Email)
+		}
+
+		authURL = fmt.Sprintf("%s?response_type=code&client_id=%s&scope=%s&redirect_uri=%s&state=%s&access_type=offline&prompt=%s%s",
+			cfg.AuthURL,
+			url.QueryEscape(cfg.ClientID),
+			url.QueryEscape(scope),
+			url.QueryEscape(callbackURL),
+			url.QueryEscape(state),
+			url.QueryEscape("consent select_account"),
+			loginHint,
+		)
 	} else if provider == "dropbox" {
 		authURL = fmt.Sprintf("%s?response_type=code&client_id=%s&redirect_uri=%s&state=%s&token_access_type=offline",
 			cfg.AuthURL, cfg.ClientID, callbackURL, state)
@@ -3632,11 +3661,16 @@ func (s *Server) handleOAuthCallback(w http.ResponseWriter, r *http.Request) {
 	if userIDCookie != nil && userIDCookie.Value != "" {
 		userID = userIDCookie.Value
 	}
+	googleKind := ""
+	if ck, _ := r.Cookie("oauth_google_kind"); ck != nil {
+		googleKind = ck.Value
+	}
 
 	// Clear cookies
 	http.SetCookie(w, &http.Cookie{Name: "oauth_state", Path: "/", MaxAge: -1})
 	http.SetCookie(w, &http.Cookie{Name: "oauth_provider", Path: "/", MaxAge: -1})
 	http.SetCookie(w, &http.Cookie{Name: "oauth_user_id", Path: "/", MaxAge: -1})
+	http.SetCookie(w, &http.Cookie{Name: "oauth_google_kind", Path: "/", MaxAge: -1})
 
 	if errParam != "" {
 		http.Redirect(w, r, fmt.Sprintf("/?oauth=%s&oauth_status=fail&error=%s", provider, errParam), 302)
@@ -3743,7 +3777,28 @@ func (s *Server) handleOAuthCallback(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	case "google":
-		displayName = "YouTube"
+		base := "Google"
+		if googleKind == "drive" {
+			base = "Google Drive"
+		} else if googleKind == "youtube" {
+			base = "YouTube"
+		}
+		displayName = base
+		// Fetch email for labeling so user can confirm which Google account was connected.
+		if token, ok := tokenData["access_token"].(string); ok && token != "" {
+			req, _ := http.NewRequest("GET", "https://openidconnect.googleapis.com/v1/userinfo", nil)
+			req.Header.Set("Authorization", "Bearer "+token)
+			if resp, err := client.Do(req); err == nil {
+				var info struct {
+					Email string `json:"email"`
+				}
+				json.NewDecoder(resp.Body).Decode(&info)
+				resp.Body.Close()
+				if info.Email != "" {
+					displayName = fmt.Sprintf("%s (%s)", base, info.Email)
+				}
+			}
+		}
 	case "freshbooks":
 		if token, ok := tokenData["access_token"].(string); ok {
 			req, _ := http.NewRequest("GET", "https://api.freshbooks.com/auth/api/v1/users/me", nil)
@@ -3781,14 +3836,24 @@ func (s *Server) handleOAuthCallback(w http.ResponseWriter, r *http.Request) {
 	// Map provider to scoreboard provider ID
 	scoreProvider := provider
 	if provider == "google" {
-		scoreProvider = "youtube"
+		if googleKind == "drive" {
+			scoreProvider = "gdrive"
+		} else {
+			// Default for Google OAuth if not explicitly Drive
+			scoreProvider = "youtube"
+		}
+	}
+
+	scopesToStore := cfg.Scopes
+	if s, ok := tokenData["scope"].(string); ok && s != "" {
+		scopesToStore = s
 	}
 
 	s.mu.Lock()
 	s.db.Exec(`INSERT INTO integrations (id, user_id, provider, auth_type, encrypted_data, nonce,
 		display_name, poll_interval_seconds, created_at, updated_at, next_poll_at, scopes)
 		VALUES (?, ?, ?, 'oauth2', ?, ?, ?, 1800, ?, ?, ?, ?)`,
-		id, userID, scoreProvider, encrypted, nonce, displayName, now, now, nextPoll, cfg.Scopes)
+		id, userID, scoreProvider, encrypted, nonce, displayName, now, now, nextPoll, scopesToStore)
 	s.mu.Unlock()
 
 	// For GitHub: auto-create webhooks on user's repos
@@ -3821,9 +3886,11 @@ func (s *Server) setupGitHubWebhooks(tokenData map[string]interface{}) {
 	defer resp.Body.Close()
 
 	var repos []struct {
-		FullName string `json:"full_name"`
-		Private  bool   `json:"private"`
-		Permissions struct{ Admin bool `json:"admin"` } `json:"permissions"`
+		FullName    string `json:"full_name"`
+		Private     bool   `json:"private"`
+		Permissions struct {
+			Admin bool `json:"admin"`
+		} `json:"permissions"`
 	}
 	json.NewDecoder(resp.Body).Decode(&repos)
 
@@ -4471,7 +4538,9 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		flusher, ok := w.(http.Flusher)
 		// Send session_id as custom event
 		fmt.Fprintf(w, "event: session\ndata: %s\n\n", sessionID)
-		if ok { flusher.Flush() }
+		if ok {
+			flusher.Flush()
+		}
 
 		var fullResponse strings.Builder
 		buf := make([]byte, 4096)
@@ -4480,16 +4549,24 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 			if n > 0 {
 				chunk := string(buf[:n])
 				w.Write(buf[:n])
-				if ok { flusher.Flush() }
+				if ok {
+					flusher.Flush()
+				}
 
 				// Extract content deltas for persistence
 				for _, line := range strings.Split(chunk, "\n") {
-					if !strings.HasPrefix(line, "data: ") { continue }
+					if !strings.HasPrefix(line, "data: ") {
+						continue
+					}
 					payload := strings.TrimPrefix(line, "data: ")
-					if payload == "[DONE]" { continue }
+					if payload == "[DONE]" {
+						continue
+					}
 					var sse struct {
 						Choices []struct {
-							Delta struct { Content string `json:"content"` } `json:"delta"`
+							Delta struct {
+								Content string `json:"content"`
+							} `json:"delta"`
 						} `json:"choices"`
 					}
 					if json.Unmarshal([]byte(payload), &sse) == nil && len(sse.Choices) > 0 {
@@ -4497,7 +4574,9 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 					}
 				}
 			}
-			if readErr != nil { break }
+			if readErr != nil {
+				break
+			}
 		}
 
 		// Save assistant response
@@ -4518,7 +4597,9 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		// Save assistant response
 		var result struct {
 			Choices []struct {
-				Message struct { Content string `json:"content"` } `json:"message"`
+				Message struct {
+					Content string `json:"content"`
+				} `json:"message"`
 			} `json:"choices"`
 		}
 		if json.Unmarshal(respBody, &result) == nil && len(result.Choices) > 0 {
@@ -4629,7 +4710,9 @@ func generateSessionID() string {
 // GET /v1/chat/sessions — list sessions, POST — create
 func (s *Server) handleChatSessions(w http.ResponseWriter, r *http.Request) {
 	cors(w)
-	if r.Method == "OPTIONS" { return }
+	if r.Method == "OPTIONS" {
+		return
+	}
 
 	ac := resolveAuth(r)
 	userID := "operator"
@@ -4682,7 +4765,9 @@ func (s *Server) handleChatSessions(w http.ResponseWriter, r *http.Request) {
 // GET /v1/chat/sessions/{id} — load messages, DELETE — remove
 func (s *Server) handleChatSession(w http.ResponseWriter, r *http.Request) {
 	cors(w)
-	if r.Method == "OPTIONS" { return }
+	if r.Method == "OPTIONS" {
+		return
+	}
 
 	// Extract session ID from path
 	parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/v1/chat/sessions/"), "/")
@@ -4798,7 +4883,9 @@ func (s *Server) getOrCreateSession(userID, sessionID string) string {
 
 func (s *Server) handlePairingStatus(w http.ResponseWriter, r *http.Request) {
 	cors(w)
-	if r.Method == "OPTIONS" { return }
+	if r.Method == "OPTIONS" {
+		return
+	}
 	if r.Method != "GET" {
 		http.Error(w, `{"error":"GET only"}`, 405)
 		return
@@ -5138,10 +5225,10 @@ func (s *Server) ensureProposalsTable() {
 
 // ProposalEvidence is a rich reference shown in the UI
 type ProposalEvidence struct {
-	Source  string `json:"source"`  // "vault", "gdrive", "dropbox", "chat", "events"
-	File    string `json:"file"`    // filename or path
-	Section string `json:"section"` // § heading
-	Snippet string `json:"snippet"` // actual text from document
+	Source   string `json:"source"`   // "vault", "gdrive", "dropbox", "chat", "events"
+	File     string `json:"file"`     // filename or path
+	Section  string `json:"section"`  // § heading
+	Snippet  string `json:"snippet"`  // actual text from document
 	Keywords string `json:"keywords"` // which keywords matched
 }
 
@@ -5513,66 +5600,66 @@ func (s *Server) buildProposalDraft(taskTitle string, evidence []ProposalEvidenc
 
 // Task-to-keyword mapping for vault/drive scanning
 var taskKeywords = map[string][]string{
-	"Identify Target Customer":              {"target customer", "target audience", "ideal customer", "ICP", "persona", "customer profile", "demographics"},
-	"Analyze Competitors":                   {"competitor", "competition", "market analysis", "competitive landscape", "SWOT"},
-	"Validate Problem-Solution Fit":         {"problem solution", "validation", "customer interview", "beta test", "MVP feedback", "product-market fit"},
-	"Estimate Market Size (TAM/SAM/SOM)":    {"TAM", "SAM", "SOM", "market size", "addressable market", "total market"},
-	"Write One-Page Business Plan":          {"business plan", "executive summary", "business model canvas"},
-	"Identify Key Milestones":               {"milestone", "roadmap", "timeline", "key dates", "quarterly goals"},
-	"Define Revenue Model":                  {"revenue model", "monetization", "pricing model", "subscription", "SaaS", "freemium"},
-	"Estimate Startup Costs":                {"startup cost", "initial investment", "capital requirement", "funding"},
-	"Calculate Startup Costs":               {"startup cost", "initial investment", "capital requirement"},
-	"Set Financial Goals (Year 1)":          {"financial goal", "revenue target", "year one", "annual revenue", "ARR", "MRR"},
-	"Set Pricing Strategy":                  {"pricing strategy", "pricing tier", "price point", "pricing model"},
-	"Get EIN (Tax ID)":                      {"EIN", "tax ID", "employer identification", "IRS"},
-	"Apply for EIN":                         {"EIN", "tax ID", "employer identification"},
-	"Research Required Licenses/Permits":    {"license", "permit", "business license", "regulatory", "compliance"},
-	"Create Brand Style Guide":              {"brand guide", "style guide", "brand colors", "typography", "brand identity"},
-	"Write Brand Story":                     {"brand story", "origin story", "founder story", "why we started", "mission"},
-	"Create Social Media Profiles":          {"social media", "twitter", "instagram", "linkedin", "facebook", "tiktok"},
-	"Write Brand Voice Guidelines":          {"brand voice", "tone of voice", "communication style", "messaging"},
-	"Plan Launch Marketing Campaign":        {"launch plan", "marketing campaign", "go to market", "GTM", "launch strategy"},
-	"Set Up Social Media Accounts":          {"social media", "social accounts", "twitter", "instagram", "linkedin"},
-	"Set Up Google Business Profile":        {"google business", "google my business", "GMB", "local SEO"},
-	"Define Standard Operating Procedures":  {"SOP", "standard operating", "process document", "playbook", "workflow"},
-	"Create Standard Operating Procedures":  {"SOP", "standard operating", "process document"},
-	"Set Up Customer Communication Tools":   {"customer communication", "helpdesk", "intercom", "zendesk", "support tool"},
-	"Choose Project Management Tool":        {"project management", "trello", "asana", "notion", "jira", "linear"},
-	"Create Customer Support Channel":       {"customer support", "support channel", "helpdesk", "ticketing"},
-	"Create Pricing Strategy":               {"pricing", "price point", "pricing tier", "pricing page"},
-	"Set Up Fulfillment Process":            {"fulfillment", "shipping", "delivery", "order processing"},
-	"Build Sales Pitch Deck":                {"pitch deck", "sales deck", "investor deck", "presentation"},
-	"Create Sales Materials":                {"sales material", "brochure", "one-pager", "sales sheet"},
-	"Define Sales Process":                  {"sales process", "sales funnel", "pipeline", "CRM workflow"},
-	"Create Lead Generation Strategy":       {"lead generation", "lead gen", "inbound", "outbound", "lead magnet"},
-	"Document All Key Processes":            {"process documentation", "SOP", "playbook", "knowledge base"},
-	"Identify Bottlenecks":                  {"bottleneck", "constraint", "slow point", "efficiency"},
-	"Plan for 10x Volume":                   {"scale", "10x", "scaling plan", "infrastructure", "capacity"},
-	"Expand Product Line":                   {"product line", "new product", "expansion", "product roadmap"},
-	"Enter New Markets":                     {"new market", "market expansion", "geographic expansion"},
-	"Scale Marketing Channels":              {"marketing scale", "paid ads", "content marketing", "SEO strategy"},
-	"Define First Hire Role":                {"first hire", "job description", "hiring", "role definition"},
-	"Create Hiring Process":                 {"hiring process", "interview", "recruitment", "onboarding"},
-	"Build Company Culture Doc":             {"company culture", "values", "culture document", "team values"},
-	"Create Onboarding Process":             {"onboarding", "new hire", "orientation", "training"},
-	"Set Up Onboarding Playbook":            {"onboarding playbook", "new hire", "orientation"},
-	"Build Referral Program":                {"referral program", "affiliate", "refer a friend", "word of mouth"},
-	"Implement Upsell Strategy":             {"upsell", "cross-sell", "upgrade", "premium tier"},
-	"Analyze Unit Economics":                {"unit economics", "LTV", "CAC", "ARPU", "churn rate", "lifetime value"},
-	"Identify Upsell/Cross-sell Paths":      {"upsell", "cross-sell", "upgrade path"},
-	"Build Retention Strategy":              {"retention", "churn", "loyalty", "engagement", "customer success"},
-	"Optimize Conversion Funnel":            {"conversion funnel", "conversion rate", "CRO", "A/B test"},
-	"Set Revenue Targets (Monthly)":         {"revenue target", "monthly revenue", "MRR target", "sales target"},
-	"Implement Customer Feedback Loop":      {"feedback loop", "NPS", "customer feedback", "survey", "voice of customer"},
-	"Plan Tech Stack for Scale":             {"tech stack", "infrastructure", "architecture", "scalability"},
-	"Create Feedback Loops":                 {"feedback", "NPS", "customer feedback"},
-	"Document Processes for Delegation":     {"delegation", "process document", "SOPs", "handoff"},
-	"Attend Industry Events":                {"industry event", "conference", "meetup", "networking event"},
-	"Attend/Host 1 Industry Event":          {"industry event", "conference", "meetup"},
-	"Build Strategic Partnerships":          {"strategic partner", "partnership", "collaboration", "alliance"},
-	"Identify Strategic Partners":           {"strategic partner", "partnership opportunity"},
-	"Join Professional Communities":         {"professional community", "slack group", "discord server", "forum"},
-	"Join Industry Communities":             {"industry community", "professional network"},
+	"Identify Target Customer":             {"target customer", "target audience", "ideal customer", "ICP", "persona", "customer profile", "demographics"},
+	"Analyze Competitors":                  {"competitor", "competition", "market analysis", "competitive landscape", "SWOT"},
+	"Validate Problem-Solution Fit":        {"problem solution", "validation", "customer interview", "beta test", "MVP feedback", "product-market fit"},
+	"Estimate Market Size (TAM/SAM/SOM)":   {"TAM", "SAM", "SOM", "market size", "addressable market", "total market"},
+	"Write One-Page Business Plan":         {"business plan", "executive summary", "business model canvas"},
+	"Identify Key Milestones":              {"milestone", "roadmap", "timeline", "key dates", "quarterly goals"},
+	"Define Revenue Model":                 {"revenue model", "monetization", "pricing model", "subscription", "SaaS", "freemium"},
+	"Estimate Startup Costs":               {"startup cost", "initial investment", "capital requirement", "funding"},
+	"Calculate Startup Costs":              {"startup cost", "initial investment", "capital requirement"},
+	"Set Financial Goals (Year 1)":         {"financial goal", "revenue target", "year one", "annual revenue", "ARR", "MRR"},
+	"Set Pricing Strategy":                 {"pricing strategy", "pricing tier", "price point", "pricing model"},
+	"Get EIN (Tax ID)":                     {"EIN", "tax ID", "employer identification", "IRS"},
+	"Apply for EIN":                        {"EIN", "tax ID", "employer identification"},
+	"Research Required Licenses/Permits":   {"license", "permit", "business license", "regulatory", "compliance"},
+	"Create Brand Style Guide":             {"brand guide", "style guide", "brand colors", "typography", "brand identity"},
+	"Write Brand Story":                    {"brand story", "origin story", "founder story", "why we started", "mission"},
+	"Create Social Media Profiles":         {"social media", "twitter", "instagram", "linkedin", "facebook", "tiktok"},
+	"Write Brand Voice Guidelines":         {"brand voice", "tone of voice", "communication style", "messaging"},
+	"Plan Launch Marketing Campaign":       {"launch plan", "marketing campaign", "go to market", "GTM", "launch strategy"},
+	"Set Up Social Media Accounts":         {"social media", "social accounts", "twitter", "instagram", "linkedin"},
+	"Set Up Google Business Profile":       {"google business", "google my business", "GMB", "local SEO"},
+	"Define Standard Operating Procedures": {"SOP", "standard operating", "process document", "playbook", "workflow"},
+	"Create Standard Operating Procedures": {"SOP", "standard operating", "process document"},
+	"Set Up Customer Communication Tools":  {"customer communication", "helpdesk", "intercom", "zendesk", "support tool"},
+	"Choose Project Management Tool":       {"project management", "trello", "asana", "notion", "jira", "linear"},
+	"Create Customer Support Channel":      {"customer support", "support channel", "helpdesk", "ticketing"},
+	"Create Pricing Strategy":              {"pricing", "price point", "pricing tier", "pricing page"},
+	"Set Up Fulfillment Process":           {"fulfillment", "shipping", "delivery", "order processing"},
+	"Build Sales Pitch Deck":               {"pitch deck", "sales deck", "investor deck", "presentation"},
+	"Create Sales Materials":               {"sales material", "brochure", "one-pager", "sales sheet"},
+	"Define Sales Process":                 {"sales process", "sales funnel", "pipeline", "CRM workflow"},
+	"Create Lead Generation Strategy":      {"lead generation", "lead gen", "inbound", "outbound", "lead magnet"},
+	"Document All Key Processes":           {"process documentation", "SOP", "playbook", "knowledge base"},
+	"Identify Bottlenecks":                 {"bottleneck", "constraint", "slow point", "efficiency"},
+	"Plan for 10x Volume":                  {"scale", "10x", "scaling plan", "infrastructure", "capacity"},
+	"Expand Product Line":                  {"product line", "new product", "expansion", "product roadmap"},
+	"Enter New Markets":                    {"new market", "market expansion", "geographic expansion"},
+	"Scale Marketing Channels":             {"marketing scale", "paid ads", "content marketing", "SEO strategy"},
+	"Define First Hire Role":               {"first hire", "job description", "hiring", "role definition"},
+	"Create Hiring Process":                {"hiring process", "interview", "recruitment", "onboarding"},
+	"Build Company Culture Doc":            {"company culture", "values", "culture document", "team values"},
+	"Create Onboarding Process":            {"onboarding", "new hire", "orientation", "training"},
+	"Set Up Onboarding Playbook":           {"onboarding playbook", "new hire", "orientation"},
+	"Build Referral Program":               {"referral program", "affiliate", "refer a friend", "word of mouth"},
+	"Implement Upsell Strategy":            {"upsell", "cross-sell", "upgrade", "premium tier"},
+	"Analyze Unit Economics":               {"unit economics", "LTV", "CAC", "ARPU", "churn rate", "lifetime value"},
+	"Identify Upsell/Cross-sell Paths":     {"upsell", "cross-sell", "upgrade path"},
+	"Build Retention Strategy":             {"retention", "churn", "loyalty", "engagement", "customer success"},
+	"Optimize Conversion Funnel":           {"conversion funnel", "conversion rate", "CRO", "A/B test"},
+	"Set Revenue Targets (Monthly)":        {"revenue target", "monthly revenue", "MRR target", "sales target"},
+	"Implement Customer Feedback Loop":     {"feedback loop", "NPS", "customer feedback", "survey", "voice of customer"},
+	"Plan Tech Stack for Scale":            {"tech stack", "infrastructure", "architecture", "scalability"},
+	"Create Feedback Loops":                {"feedback", "NPS", "customer feedback"},
+	"Document Processes for Delegation":    {"delegation", "process document", "SOPs", "handoff"},
+	"Attend Industry Events":               {"industry event", "conference", "meetup", "networking event"},
+	"Attend/Host 1 Industry Event":         {"industry event", "conference", "meetup"},
+	"Build Strategic Partnerships":         {"strategic partner", "partnership", "collaboration", "alliance"},
+	"Identify Strategic Partners":          {"strategic partner", "partnership opportunity"},
+	"Join Professional Communities":        {"professional community", "slack group", "discord server", "forum"},
+	"Join Industry Communities":            {"industry community", "professional network"},
 }
 
 // VaultEvidence holds a rich reference: file, section, snippet, matched keywords
@@ -6038,49 +6125,49 @@ func (s *Server) handleProposals(w http.ResponseWriter, r *http.Request) {
 // ─── Defer Action Engine ────────────────────────────────────────────────
 // When a deferred task's condition is met, Wirebot doesn't just un-defer.
 // It tries to TAKE ACTION:
-//   1. Can Wirebot auto-complete it? (run detection checks)
-//   2. Can Wirebot DO the task? (actionable tasks with automations)
-//   3. Otherwise: surface with a nudge + what changed since deferral
+//  1. Can Wirebot auto-complete it? (run detection checks)
+//  2. Can Wirebot DO the task? (actionable tasks with automations)
+//  3. Otherwise: surface with a nudge + what changed since deferral
 //
 // Task capabilities — things Wirebot can actually execute:
 var taskActions = map[string]string{
-	"Set Up Google Business Profile":    "draft_google_profile",
-	"Write Elevator Pitch":              "draft_content",
-	"Write One-Page Business Plan":      "draft_content",
-	"Write Brand Story":                 "draft_content",
-	"Write Brand Voice Guidelines":      "draft_content",
-	"Create Brand Style Guide":          "draft_content",
-	"Create Mission Statement":          "draft_content",
-	"Define Vision Statement":           "draft_content",
-	"Build Sales Pitch Deck":            "draft_content",
-	"Create Sales Materials":            "draft_content",
-	"Build Company Culture Doc":         "draft_content",
-	"Create Onboarding Process":         "draft_content",
-	"Set Up Onboarding Playbook":        "draft_content",
+	"Set Up Google Business Profile":       "draft_google_profile",
+	"Write Elevator Pitch":                 "draft_content",
+	"Write One-Page Business Plan":         "draft_content",
+	"Write Brand Story":                    "draft_content",
+	"Write Brand Voice Guidelines":         "draft_content",
+	"Create Brand Style Guide":             "draft_content",
+	"Create Mission Statement":             "draft_content",
+	"Define Vision Statement":              "draft_content",
+	"Build Sales Pitch Deck":               "draft_content",
+	"Create Sales Materials":               "draft_content",
+	"Build Company Culture Doc":            "draft_content",
+	"Create Onboarding Process":            "draft_content",
+	"Set Up Onboarding Playbook":           "draft_content",
 	"Create Standard Operating Procedures": "draft_content",
-	"Document All Key Processes":        "draft_content",
-	"Document Processes for Delegation": "draft_content",
-	"Plan Launch Marketing Campaign":    "draft_content",
-	"Build Referral Program":            "draft_content",
-	"Create Lead Generation Strategy":   "draft_content",
-	"Define Sales Process":              "draft_content",
-	"Build Retention Strategy":          "draft_content",
-	"Plan for 10x Volume":              "draft_content",
-	"Plan Tech Stack for Scale":         "draft_content",
-	"Set 90-Day Goals":                  "draft_content",
-	"Identify Key Milestones":           "draft_content",
-	"Define Revenue Model":              "draft_content",
-	"Set Pricing Strategy":              "draft_content",
-	"Set Financial Goals (Year 1)":      "draft_content",
-	"Set Revenue Targets (Monthly)":     "draft_content",
-	"Configure SEO Basics":              "run_seo_check",
-	"Implement Basic SEO":               "run_seo_check",
-	"Set Up Analytics":                  "check_integration",
-	"Set Up CRM":                        "check_integration",
-	"Set Up Payment Processing":         "check_integration",
-	"Set Up Accounting Software":        "check_integration",
-	"Set Up Monitoring & Alerts":        "check_integration",
-	"Set Up Email Marketing":            "check_integration",
+	"Document All Key Processes":           "draft_content",
+	"Document Processes for Delegation":    "draft_content",
+	"Plan Launch Marketing Campaign":       "draft_content",
+	"Build Referral Program":               "draft_content",
+	"Create Lead Generation Strategy":      "draft_content",
+	"Define Sales Process":                 "draft_content",
+	"Build Retention Strategy":             "draft_content",
+	"Plan for 10x Volume":                  "draft_content",
+	"Plan Tech Stack for Scale":            "draft_content",
+	"Set 90-Day Goals":                     "draft_content",
+	"Identify Key Milestones":              "draft_content",
+	"Define Revenue Model":                 "draft_content",
+	"Set Pricing Strategy":                 "draft_content",
+	"Set Financial Goals (Year 1)":         "draft_content",
+	"Set Revenue Targets (Monthly)":        "draft_content",
+	"Configure SEO Basics":                 "run_seo_check",
+	"Implement Basic SEO":                  "run_seo_check",
+	"Set Up Analytics":                     "check_integration",
+	"Set Up CRM":                           "check_integration",
+	"Set Up Payment Processing":            "check_integration",
+	"Set Up Accounting Software":           "check_integration",
+	"Set Up Monitoring & Alerts":           "check_integration",
+	"Set Up Email Marketing":               "check_integration",
 }
 
 func (s *Server) checkDeferredTasks(tasks []interface{}, cl map[string]interface{}) {
@@ -6234,10 +6321,10 @@ func (s *Server) emitDeferAction(taskID, title, eventType, businessID string) {
 func (s *Server) generateDraftForTask(title, businessID string) string {
 	// Build context-aware prompt
 	bizName := map[string]string{
-		"SEW": "Startempire Wire (LLC, entrepreneur networking platform)",
+		"SEW":  "Startempire Wire (LLC, entrepreneur networking platform)",
 		"SEWN": "Startempire Wire Network (webring/network product)",
-		"WB": "Wirebot (AI operating partner product)",
-		"PVD": "Philoveracity Design (design sole proprietorship)",
+		"WB":   "Wirebot (AI operating partner product)",
+		"PVD":  "Philoveracity Design (design sole proprietorship)",
 	}[businessID]
 	if bizName == "" {
 		bizName = "the business"
@@ -6561,9 +6648,9 @@ func (s *Server) handleChecklist(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		json.NewEncoder(w).Encode(map[string]interface{}{
-			"detected":       detected,
-			"count":          len(detected),
-			"total_tasks":    len(tasks),
+			"detected":    detected,
+			"count":       len(detected),
+			"total_tasks": len(tasks),
 		})
 
 	case "grouped":
@@ -6722,7 +6809,7 @@ type MemoryQueueItem struct {
 // POST /v1/memory/queue — add memory to queue (for ingestion)
 func (s *Server) handleMemoryQueue(w http.ResponseWriter, r *http.Request) {
 	cors(w)
-	
+
 	switch r.Method {
 	case "GET":
 		status := r.URL.Query().Get("status")
@@ -6733,7 +6820,7 @@ func (s *Server) handleMemoryQueue(w http.ResponseWriter, r *http.Request) {
 		if l := r.URL.Query().Get("limit"); l != "" {
 			fmt.Sscanf(l, "%d", &limit)
 		}
-		
+
 		rows, err := s.db.Query(`
 			SELECT id, memory_text, source_type, source_file, source_context, 
 			       confidence, status, correction, created_at, reviewed_at
@@ -6746,33 +6833,41 @@ func (s *Server) handleMemoryQueue(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		defer rows.Close()
-		
+
 		items := []MemoryQueueItem{}
 		for rows.Next() {
 			var item MemoryQueueItem
 			var srcFile, srcCtx, correction, reviewedAt sql.NullString
 			rows.Scan(&item.ID, &item.MemoryText, &item.SourceType, &srcFile, &srcCtx,
 				&item.Confidence, &item.Status, &correction, &item.CreatedAt, &reviewedAt)
-			if srcFile.Valid { item.SourceFile = srcFile.String }
-			if srcCtx.Valid { item.SourceContext = srcCtx.String }
-			if correction.Valid { item.Correction = correction.String }
-			if reviewedAt.Valid { item.ReviewedAt = reviewedAt.String }
+			if srcFile.Valid {
+				item.SourceFile = srcFile.String
+			}
+			if srcCtx.Valid {
+				item.SourceContext = srcCtx.String
+			}
+			if correction.Valid {
+				item.Correction = correction.String
+			}
+			if reviewedAt.Valid {
+				item.ReviewedAt = reviewedAt.String
+			}
 			items = append(items, item)
 		}
-		
+
 		// Also get counts
 		var pending, approved, rejected int
 		s.db.QueryRow("SELECT COUNT(*) FROM memory_queue WHERE status='pending'").Scan(&pending)
 		s.db.QueryRow("SELECT COUNT(*) FROM memory_queue WHERE status='approved'").Scan(&approved)
 		s.db.QueryRow("SELECT COUNT(*) FROM memory_queue WHERE status='rejected'").Scan(&rejected)
-		
+
 		json.NewEncoder(w).Encode(map[string]interface{}{
 			"items": items,
 			"counts": map[string]int{
 				"pending": pending, "approved": approved, "rejected": rejected,
 			},
 		})
-		
+
 	case "POST":
 		// Add new memory to queue (used by ingestion)
 		var body struct {
@@ -6786,7 +6881,7 @@ func (s *Server) handleMemoryQueue(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, `{"error":"invalid body"}`, 400)
 			return
 		}
-		
+
 		id := fmt.Sprintf("mem-%d", time.Now().UnixNano())
 		_, err := s.db.Exec(`
 			INSERT INTO memory_queue (id, memory_text, source_type, source_file, source_context, confidence)
@@ -6796,9 +6891,9 @@ func (s *Server) handleMemoryQueue(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, `{"error":"insert failed"}`, 500)
 			return
 		}
-		
+
 		json.NewEncoder(w).Encode(map[string]interface{}{"ok": true, "id": id})
-		
+
 	default:
 		http.Error(w, `{"error":"method not allowed"}`, 405)
 	}
@@ -6813,7 +6908,7 @@ func (s *Server) handleMemoryQueueAction(w http.ResponseWriter, r *http.Request)
 		http.Error(w, `{"error":"POST only"}`, 405)
 		return
 	}
-	
+
 	// Parse path: /v1/memory/queue/{id}/{action}
 	path := strings.TrimPrefix(r.URL.Path, "/v1/memory/queue/")
 	parts := strings.Split(path, "/")
@@ -6822,7 +6917,7 @@ func (s *Server) handleMemoryQueueAction(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	id, action := parts[0], parts[1]
-	
+
 	// Get the memory item
 	var item MemoryQueueItem
 	err := s.db.QueryRow(`SELECT id, memory_text, source_type FROM memory_queue WHERE id=?`, id).
@@ -6831,7 +6926,7 @@ func (s *Server) handleMemoryQueueAction(w http.ResponseWriter, r *http.Request)
 		http.Error(w, `{"error":"memory not found"}`, 404)
 		return
 	}
-	
+
 	switch action {
 	case "approve":
 		// Store to Mem0 and mark approved
@@ -6840,11 +6935,11 @@ func (s *Server) handleMemoryQueueAction(w http.ResponseWriter, r *http.Request)
 		}()
 		s.db.Exec(`UPDATE memory_queue SET status='approved', reviewed_at=CURRENT_TIMESTAMP WHERE id=?`, id)
 		json.NewEncoder(w).Encode(map[string]interface{}{"ok": true, "action": "approved", "memory": item.MemoryText})
-		
+
 	case "reject":
 		s.db.Exec(`UPDATE memory_queue SET status='rejected', reviewed_at=CURRENT_TIMESTAMP WHERE id=?`, id)
 		json.NewEncoder(w).Encode(map[string]interface{}{"ok": true, "action": "rejected"})
-		
+
 	case "correct":
 		var body struct {
 			Correction string `json:"correction"`
@@ -6857,10 +6952,10 @@ func (s *Server) handleMemoryQueueAction(w http.ResponseWriter, r *http.Request)
 		go func() {
 			mem0Store("http://127.0.0.1:8200", "wirebot_verious", body.Correction, nil)
 		}()
-		s.db.Exec(`UPDATE memory_queue SET status='corrected', correction=?, reviewed_at=CURRENT_TIMESTAMP WHERE id=?`, 
+		s.db.Exec(`UPDATE memory_queue SET status='corrected', correction=?, reviewed_at=CURRENT_TIMESTAMP WHERE id=?`,
 			body.Correction, id)
 		json.NewEncoder(w).Encode(map[string]interface{}{"ok": true, "action": "corrected", "memory": body.Correction})
-		
+
 	default:
 		http.Error(w, `{"error":"invalid action, use approve/reject/correct"}`, 400)
 	}
@@ -6876,7 +6971,9 @@ func mem0Store(baseURL, namespace, text string, messages []map[string]string) er
 	}
 	bodyBytes, _ := json.Marshal(body)
 	resp, err := http.Post(baseURL+"/v1/store", "application/json", bytes.NewReader(bodyBytes))
-	if err != nil { return err }
+	if err != nil {
+		return err
+	}
 	defer resp.Body.Close()
 	return nil
 }
@@ -6902,7 +6999,7 @@ func (s *Server) handleMemoryConflicts(w http.ResponseWriter, r *http.Request) {
 	if r.Method == "OPTIONS" {
 		return
 	}
-	
+
 	// Fetch all approved memories from Mem0
 	resp, err := http.Post("http://127.0.0.1:8200/v1/list", "application/json",
 		strings.NewReader(`{"namespace": "wirebot_verious"}`))
@@ -6911,7 +7008,7 @@ func (s *Server) handleMemoryConflicts(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer resp.Body.Close()
-	
+
 	var listResp struct {
 		Results []struct {
 			ID       string `json:"id"`
@@ -6922,13 +7019,13 @@ func (s *Server) handleMemoryConflicts(w http.ResponseWriter, r *http.Request) {
 		} `json:"results"`
 	}
 	json.NewDecoder(resp.Body).Decode(&listResp)
-	
+
 	conflicts := []MemoryConflict{}
-	
+
 	// Conflict detection patterns
 	locationKeywords := []string{"location", "located", "lives in", "based in", "Corona", "Providence", "California", "timezone"}
 	nameKeywords := []string{"name is", "called", "goes by", "preferred name"}
-	
+
 	// Check for location conflicts
 	var locationMems []struct{ id, text string }
 	for _, m := range listResp.Results {
@@ -6940,7 +7037,7 @@ func (s *Server) handleMemoryConflicts(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	
+
 	// If multiple location mentions, check for conflicts
 	if len(locationMems) >= 2 {
 		// Simple heuristic: if one says "Corona" and another says "Providence", conflict
@@ -6948,7 +7045,7 @@ func (s *Server) handleMemoryConflicts(w http.ResponseWriter, r *http.Request) {
 			for j := i + 1; j < len(locationMems); j++ {
 				a, b := locationMems[i], locationMems[j]
 				aLower, bLower := strings.ToLower(a.text), strings.ToLower(b.text)
-				
+
 				// Check for contradicting locations
 				if (strings.Contains(aLower, "corona") && strings.Contains(bLower, "providence")) ||
 					(strings.Contains(aLower, "providence") && strings.Contains(bLower, "corona")) {
@@ -6962,7 +7059,7 @@ func (s *Server) handleMemoryConflicts(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	
+
 	// Check for name conflicts
 	var nameMems []struct{ id, text string }
 	for _, m := range listResp.Results {
@@ -6974,7 +7071,7 @@ func (s *Server) handleMemoryConflicts(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	
+
 	// If multiple different names, might be conflict
 	if len(nameMems) >= 2 {
 		for i := 0; i < len(nameMems); i++ {
@@ -6988,7 +7085,7 @@ func (s *Server) handleMemoryConflicts(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	
+
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"conflicts": conflicts,
 		"checked":   len(listResp.Results),
@@ -7098,14 +7195,14 @@ func (s *Server) handleIntegrations(w http.ResponseWriter, r *http.Request) {
 	case "POST":
 		// Add a new integration
 		var body struct {
-			Provider    string `json:"provider"`
-			AuthType    string `json:"auth_type"`
-			DisplayName string `json:"display_name"`
-			Credential  string `json:"credential"` // API key, URL, or OAuth token JSON
-			Sensitivity string `json:"sensitivity"`
-			PollInterval int   `json:"poll_interval_seconds"`
-			Config      string `json:"config"` // provider-specific config JSON
-			BusinessID  string `json:"business_id"` // optional: which business this account belongs to
+			Provider     string `json:"provider"`
+			AuthType     string `json:"auth_type"`
+			DisplayName  string `json:"display_name"`
+			Credential   string `json:"credential"` // API key, URL, or OAuth token JSON
+			Sensitivity  string `json:"sensitivity"`
+			PollInterval int    `json:"poll_interval_seconds"`
+			Config       string `json:"config"`      // provider-specific config JSON
+			BusinessID   string `json:"business_id"` // optional: which business this account belongs to
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			http.Error(w, `{"error":"invalid json"}`, 400)
@@ -7593,13 +7690,17 @@ func (s *Server) pollYouTube(integrationID, apiKey, configJSON, lastPoll string)
 
 	var result struct {
 		Items []struct {
-			ID      struct{ VideoId string `json:"videoId"` } `json:"id"`
+			ID struct {
+				VideoId string `json:"videoId"`
+			} `json:"id"`
 			Snippet struct {
 				Title       string `json:"title"`
 				PublishedAt string `json:"publishedAt"`
 			} `json:"snippet"`
 		} `json:"items"`
-		Error struct{ Message string `json:"message"` } `json:"error"`
+		Error struct {
+			Message string `json:"message"`
+		} `json:"error"`
 	}
 	json.NewDecoder(resp.Body).Decode(&result)
 	if result.Error.Message != "" {
@@ -7825,15 +7926,15 @@ func (s *Server) pollRescueTime(integrationID, apiKey, lastPoll string) error {
 	defer resp.Body.Close()
 
 	var days []struct {
-		Date                string  `json:"date"`
-		ProductivityPulse   float64 `json:"productivity_pulse"`
-		TotalHours          float64 `json:"total_hours"`
-		VeryProductiveHours float64 `json:"very_productive_hours"`
-		ProductiveHours     float64 `json:"productive_hours"`
-		NeutralHours        float64 `json:"neutral_hours"`
-		DistractingHours    float64 `json:"distracting_hours"`
-		VeryDistractingHours float64 `json:"very_distracting_hours"`
-		TotalDurationFormatted string `json:"total_duration_formatted"`
+		Date                   string  `json:"date"`
+		ProductivityPulse      float64 `json:"productivity_pulse"`
+		TotalHours             float64 `json:"total_hours"`
+		VeryProductiveHours    float64 `json:"very_productive_hours"`
+		ProductiveHours        float64 `json:"productive_hours"`
+		NeutralHours           float64 `json:"neutral_hours"`
+		DistractingHours       float64 `json:"distracting_hours"`
+		VeryDistractingHours   float64 `json:"very_distracting_hours"`
+		TotalDurationFormatted string  `json:"total_duration_formatted"`
 	}
 	json.NewDecoder(resp.Body).Decode(&days)
 
@@ -7865,10 +7966,10 @@ func (s *Server) pollRescueTime(integrationID, apiKey, lastPoll string) error {
 		focusHours := day.VeryProductiveHours + day.ProductiveHours
 		meta, _ := json.Marshal(map[string]interface{}{
 			"productivity_pulse": day.ProductivityPulse,
-			"total_hours":       day.TotalHours,
-			"focus_hours":       focusHours,
-			"distracting_hours": day.DistractingHours + day.VeryDistractingHours,
-			"date":              day.Date,
+			"total_hours":        day.TotalHours,
+			"focus_hours":        focusHours,
+			"distracting_hours":  day.DistractingHours + day.VeryDistractingHours,
+			"date":               day.Date,
 		})
 
 		// Score based on focus hours
@@ -7971,12 +8072,12 @@ func (s *Server) pollWooCommerce(integrationID, consumerKey, configJSON, lastPol
 		}
 
 		meta, _ := json.Marshal(map[string]interface{}{
-			"order_id":  order.ID,
-			"status":    order.Status,
-			"total":     totalF,
-			"currency":  order.Currency,
-			"items":     strings.Join(items, ", "),
-			"customer":  order.Billing.FirstName,
+			"order_id": order.ID,
+			"status":   order.Status,
+			"total":    totalF,
+			"currency": order.Currency,
+			"items":    strings.Join(items, ", "),
+			"customer": order.Billing.FirstName,
 		})
 
 		scoreDelta := 5
@@ -8120,10 +8221,10 @@ func (s *Server) pollHubSpot(integrationID, apiToken, lastPoll string) error {
 		Results []struct {
 			ID         string `json:"id"`
 			Properties struct {
-				DealName  string `json:"dealname"`
-				Amount    string `json:"amount"`
-				DealStage string `json:"dealstage"`
-				CloseDate string `json:"closedate"`
+				DealName   string `json:"dealname"`
+				Amount     string `json:"amount"`
+				DealStage  string `json:"dealstage"`
+				CloseDate  string `json:"closedate"`
 				CreateDate string `json:"createdate"`
 			} `json:"properties"`
 		} `json:"results"`
@@ -8314,9 +8415,9 @@ func (s *Server) pollSendy(integrationID, apiKey, configJSON, lastPoll string) e
 
 		// Sendy campaigns may be {"campaign1":{...},"campaign2":{...}} or an array
 		var campaignsMap map[string]struct {
-			ID     string `json:"id"`
-			Title  string `json:"title"`
-			SentAt string `json:"sent_at"`
+			ID     string      `json:"id"`
+			Title  string      `json:"title"`
+			SentAt string      `json:"sent_at"`
 			Sent   interface{} `json:"sent"` // Could be timestamp int or string
 			Opens  interface{} `json:"opens"`
 			Clicks interface{} `json:"clicks"`
@@ -8340,12 +8441,16 @@ func (s *Server) pollSendy(integrationID, apiKey, configJSON, lastPoll string) e
 				opens := 0
 				clicks := 0
 				switch v := c.Opens.(type) {
-				case float64: opens = int(v)
-				case string:  fmt.Sscanf(v, "%d", &opens)
+				case float64:
+					opens = int(v)
+				case string:
+					fmt.Sscanf(v, "%d", &opens)
 				}
 				switch v := c.Clicks.(type) {
-				case float64: clicks = int(v)
-				case string:  fmt.Sscanf(v, "%d", &clicks)
+				case float64:
+					clicks = int(v)
+				case string:
+					fmt.Sscanf(v, "%d", &clicks)
 				}
 
 				// Determine timestamp
@@ -8362,7 +8467,9 @@ func (s *Server) pollSendy(integrationID, apiKey, configJSON, lastPoll string) e
 
 				campTitle := fmt.Sprintf("📧 Campaign: %s", c.Title)
 				scoreDelta := 5
-				if opens > 100 { scoreDelta = 7 }
+				if opens > 100 {
+					scoreDelta = 7
+				}
 
 				s.mu.Lock()
 				s.db.Exec(`INSERT INTO events (id, event_type, lane, source, timestamp,
@@ -8475,9 +8582,9 @@ func (s *Server) insertEventIfNew(evt Event) {
 	// Signal pairing engine
 	if s.pairing != nil {
 		s.pairing.Ingest(Signal{
-			Type:    SignalEvent,
-			Source:  evt.Source,
-			Content: evt.ArtifactTitle,
+			Type:     SignalEvent,
+			Source:   evt.Source,
+			Content:  evt.ArtifactTitle,
 			Features: map[string]float64{"score_delta": float64(evt.ScoreDelta)},
 			Metadata: map[string]interface{}{
 				"event_type": evt.EventType,
@@ -8693,16 +8800,16 @@ func (s *Server) pollFreshBooks(integrationID, token, configJSON, lastPoll strin
 
 // ReconciliationResult represents a cluster of related transactions
 type ReconciliationResult struct {
-	ClusterID     string   `json:"cluster_id"`
-	Amount        float64  `json:"amount"`
-	DateRange     string   `json:"date_range"`
-	Sources       []string `json:"sources"`       // e.g., ["stripe", "freshbooks", "woocommerce"]
-	EventIDs      []string `json:"event_ids"`     // event IDs in cluster
-	PrimaryID     string   `json:"primary_id"`    // highest-confidence event kept
-	DuplicateIDs  []string `json:"duplicate_ids"`  // events marked as duplicates
-	TestEvents    []string `json:"test_events"`    // events identified as test/fake
-	Confidence    float64  `json:"confidence"`     // 0-1 how confident this is a real match
-	Status        string   `json:"status"`         // "auto", "manual_confirmed", "manual_rejected"
+	ClusterID    string   `json:"cluster_id"`
+	Amount       float64  `json:"amount"`
+	DateRange    string   `json:"date_range"`
+	Sources      []string `json:"sources"`       // e.g., ["stripe", "freshbooks", "woocommerce"]
+	EventIDs     []string `json:"event_ids"`     // event IDs in cluster
+	PrimaryID    string   `json:"primary_id"`    // highest-confidence event kept
+	DuplicateIDs []string `json:"duplicate_ids"` // events marked as duplicates
+	TestEvents   []string `json:"test_events"`   // events identified as test/fake
+	Confidence   float64  `json:"confidence"`    // 0-1 how confident this is a real match
+	Status       string   `json:"status"`        // "auto", "manual_confirmed", "manual_rejected"
 }
 
 // emitIntegrationEvent is a simple helper to log an event from a poller
@@ -8802,12 +8909,12 @@ func (s *Server) pollDropbox(integrationID, credential, configJSON, lastPoll str
 
 	// List all files via /2/files/list_folder
 	payload := map[string]interface{}{
-		"path":                       "",
-		"recursive":                  true,
-		"include_media_info":         false,
-		"include_deleted":            false,
+		"path":                                "",
+		"recursive":                           true,
+		"include_media_info":                  false,
+		"include_deleted":                     false,
 		"include_has_explicit_shared_members": false,
-		"limit":                      2000,
+		"limit":                               2000,
 	}
 	body, _ := json.Marshal(payload)
 
@@ -8829,10 +8936,10 @@ func (s *Server) pollDropbox(integrationID, credential, configJSON, lastPoll str
 
 	var result struct {
 		Entries []struct {
-			Tag          string `json:".tag"`
-			Name         string `json:"name"`
-			PathLower    string `json:"path_lower"`
-			PathDisplay  string `json:"path_display"`
+			Tag            string `json:".tag"`
+			Name           string `json:"name"`
+			PathLower      string `json:"path_lower"`
+			PathDisplay    string `json:"path_display"`
 			ServerModified string `json:"server_modified"`
 		} `json:"entries"`
 		HasMore bool   `json:"has_more"`
@@ -8925,14 +9032,14 @@ func (s *Server) pollStripe(integrationID, apiKey, lastPoll string) error {
 
 	var chargesResp struct {
 		Data []struct {
-			ID       string `json:"id"`
-			Amount   int64  `json:"amount"`
-			Currency string `json:"currency"`
-			Status   string `json:"status"`
-			Created  int64  `json:"created"`
-			Customer string `json:"customer"`
-			Metadata map[string]string `json:"metadata"`
-			Description string `json:"description"`
+			ID          string            `json:"id"`
+			Amount      int64             `json:"amount"`
+			Currency    string            `json:"currency"`
+			Status      string            `json:"status"`
+			Created     int64             `json:"created"`
+			Customer    string            `json:"customer"`
+			Metadata    map[string]string `json:"metadata"`
+			Description string            `json:"description"`
 		} `json:"data"`
 	}
 	json.NewDecoder(resp.Body).Decode(&chargesResp)
@@ -8977,12 +9084,12 @@ func (s *Server) pollStripe(integrationID, apiKey, lastPoll string) error {
 	if err == nil && resp2.StatusCode == 200 {
 		var payoutsResp struct {
 			Data []struct {
-				ID       string `json:"id"`
-				Amount   int64  `json:"amount"`
-				Currency string `json:"currency"`
-				Status   string `json:"status"`
-				Created  int64  `json:"created"`
-				ArrivalDate int64 `json:"arrival_date"`
+				ID          string `json:"id"`
+				Amount      int64  `json:"amount"`
+				Currency    string `json:"currency"`
+				Status      string `json:"status"`
+				Created     int64  `json:"created"`
+				ArrivalDate int64  `json:"arrival_date"`
 			} `json:"data"`
 		}
 		json.NewDecoder(resp2.Body).Decode(&payoutsResp)
@@ -9062,7 +9169,7 @@ func (s *Server) pollGitHub(integrationID, token, lastPoll string) error {
 		} `json:"repo"`
 		Payload struct {
 			Ref     string `json:"ref"`
-			Size    int    `json:"size"`    // Number of commits in push
+			Size    int    `json:"size"` // Number of commits in push
 			Commits []struct {
 				SHA     string `json:"sha"`
 				Message string `json:"message"`
@@ -9358,7 +9465,13 @@ func (s *Server) ReconcileRevenue() []ReconciliationResult {
 	if len(results) > 0 || len(testIDs) > 0 {
 		log.Printf("[reconcile] processed %d clusters, %d duplicates zeroed, %d test transactions flagged",
 			len(results),
-			func() int { c := 0; for _, r := range results { c += len(r.DuplicateIDs) }; return c }(),
+			func() int {
+				c := 0
+				for _, r := range results {
+					c += len(r.DuplicateIDs)
+				}
+				return c
+			}(),
 			len(testIDs))
 	}
 
@@ -9542,23 +9655,23 @@ func (s *Server) handleTestTransactions(w http.ResponseWriter, r *http.Request) 
 // ─── DISCORD AUDIT & TRAINING ─────────────────────────────────────────────────
 
 type DiscordInteraction struct {
-	ID             int64               `json:"id"`
-	InteractionID  string              `json:"interaction_id"`
-	GuildID        string              `json:"guild_id"`
-	GuildName      string              `json:"guild_name"`
-	ChannelID      string              `json:"channel_id"`
-	ChannelName    string              `json:"channel_name"`
-	UserID         string              `json:"user_id"`
-	UserName       string              `json:"user_name"`
-	UserMessage    string              `json:"user_message"`
-	BotResponse    string              `json:"bot_response"`
-	ResponseTimeMs int                 `json:"response_time_ms"`
-	Mode           string              `json:"mode"`
-	ToolsUsed      []string            `json:"tools_used"`
-	Model          string              `json:"model"`
-	TokensIn       int                 `json:"tokens_in"`
-	TokensOut      int                 `json:"tokens_out"`
-	CreatedAt      string              `json:"created_at"`
+	ID             int64                 `json:"id"`
+	InteractionID  string                `json:"interaction_id"`
+	GuildID        string                `json:"guild_id"`
+	GuildName      string                `json:"guild_name"`
+	ChannelID      string                `json:"channel_id"`
+	ChannelName    string                `json:"channel_name"`
+	UserID         string                `json:"user_id"`
+	UserName       string                `json:"user_name"`
+	UserMessage    string                `json:"user_message"`
+	BotResponse    string                `json:"bot_response"`
+	ResponseTimeMs int                   `json:"response_time_ms"`
+	Mode           string                `json:"mode"`
+	ToolsUsed      []string              `json:"tools_used"`
+	Model          string                `json:"model"`
+	TokensIn       int                   `json:"tokens_in"`
+	TokensOut      int                   `json:"tokens_out"`
+	CreatedAt      string                `json:"created_at"`
 	Feedback       []InteractionFeedback `json:"feedback,omitempty"`
 }
 
