@@ -494,6 +494,7 @@ func main() {
 	mux.HandleFunc("/v1/oauth/google/authorize", s.authMember(s.handleOAuthStart))
 	mux.HandleFunc("/v1/oauth/freshbooks/authorize", s.authMember(s.handleOAuthStart))
 	mux.HandleFunc("/v1/oauth/hubspot/authorize", s.authMember(s.handleOAuthStart))
+	mux.HandleFunc("/v1/oauth/dropbox/authorize", s.authMember(s.handleOAuthStart))
 	mux.HandleFunc("/v1/oauth/callback", s.handleOAuthCallback) // Provider redirects back here
 
 	// Checklist data for Dashboard view
@@ -3062,6 +3063,8 @@ var (
 	oauthFreshBooksClientSecret = os.Getenv("OAUTH_FRESHBOOKS_CLIENT_SECRET")
 	oauthHubSpotClientID        = os.Getenv("OAUTH_HUBSPOT_CLIENT_ID")
 	oauthHubSpotClientSecret    = os.Getenv("OAUTH_HUBSPOT_CLIENT_SECRET")
+	oauthDropboxClientID        = os.Getenv("OAUTH_DROPBOX_CLIENT_ID")
+	oauthDropboxClientSecret    = os.Getenv("OAUTH_DROPBOX_CLIENT_SECRET")
 	oauthCallbackBase           = envOr("OAUTH_CALLBACK_BASE", "https://wins.wirebot.chat")
 )
 
@@ -3120,6 +3123,15 @@ func getOAuthConfig(provider string) *oauthProviderConfig {
 			ClientID: oauthHubSpotClientID, ClientSecret: oauthHubSpotClientSecret,
 			AuthURL: "https://app.hubspot.com/oauth/authorize", TokenURL: "https://api.hubapi.com/oauth/v1/token",
 			Scopes: "crm.objects.deals.read crm.objects.contacts.read", Provider: "hubspot",
+		}
+	case "dropbox":
+		if oauthDropboxClientID == "" {
+			return nil
+		}
+		return &oauthProviderConfig{
+			ClientID: oauthDropboxClientID, ClientSecret: oauthDropboxClientSecret,
+			AuthURL: "https://www.dropbox.com/oauth2/authorize", TokenURL: "https://api.dropboxapi.com/oauth2/token",
+			Scopes: "", Provider: "dropbox", // Dropbox uses token_access_type instead of scopes
 		}
 	}
 	return nil
@@ -3197,6 +3209,7 @@ func (s *Server) handleOAuthConfig(w http.ResponseWriter, r *http.Request) {
 			"google":     oauthGoogleClientID != "",
 			"freshbooks": oauthFreshBooksClientID != "",
 			"hubspot":    oauthHubSpotClientID != "",
+			"dropbox":    oauthDropboxClientID != "",
 		}
 		json.NewEncoder(w).Encode(map[string]interface{}{
 			"providers": providers,
@@ -3579,11 +3592,16 @@ func (s *Server) handleOAuthStart(w http.ResponseWriter, r *http.Request) {
 		scope := r.URL.Query().Get("scope")
 		if scope == "youtube" {
 			scope = "https://www.googleapis.com/auth/youtube.readonly"
+		} else if scope == "drive" {
+			scope = "https://www.googleapis.com/auth/drive.readonly https://www.googleapis.com/auth/userinfo.email"
 		} else {
 			scope = cfg.Scopes
 		}
 		authURL = fmt.Sprintf("%s?response_type=code&client_id=%s&scope=%s&redirect_uri=%s&state=%s&access_type=offline&prompt=consent",
 			cfg.AuthURL, cfg.ClientID, scope, callbackURL, state)
+	} else if provider == "dropbox" {
+		authURL = fmt.Sprintf("%s?response_type=code&client_id=%s&redirect_uri=%s&state=%s&token_access_type=offline",
+			cfg.AuthURL, cfg.ClientID, callbackURL, state)
 	} else {
 		authURL = fmt.Sprintf("%s?client_id=%s&scope=%s&redirect_uri=%s&state=%s",
 			cfg.AuthURL, cfg.ClientID, cfg.Scopes, callbackURL, state)
