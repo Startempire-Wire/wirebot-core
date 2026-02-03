@@ -2754,6 +2754,15 @@ func (s *Server) handlePlaidExchange(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Get user identity from auth context
+	auth := resolveAuth(r)
+	userID := "default"
+	if auth.Authenticated && auth.Username != "" {
+		userID = auth.Username
+	} else if auth.Authenticated && auth.UserID != 0 {
+		userID = fmt.Sprintf("user-%d", auth.UserID)
+	}
+
 	var body struct {
 		PublicToken string `json:"public_token"`
 		Institution struct {
@@ -2841,8 +2850,8 @@ func (s *Server) handlePlaidExchange(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	s.db.Exec(`INSERT INTO integrations (id, user_id, provider, auth_type, encrypted_data, nonce,
 		display_name, poll_interval_seconds, config, created_at, updated_at, next_poll_at, sensitivity)
-		VALUES (?, 'default', 'plaid', 'plaid', ?, ?, ?, 1800, ?, ?, ?, ?, 'sensitive')`,
-		id, encrypted, nonce, displayName, string(configJSON), now, now, nextPoll)
+		VALUES (?, ?, 'plaid', 'plaid', ?, ?, ?, 1800, ?, ?, ?, ?, 'sensitive')`,
+		id, userID, encrypted, nonce, displayName, string(configJSON), now, now, nextPoll)
 	s.mu.Unlock()
 
 	log.Printf("Plaid: connected %s (%s), %d accounts, integration %s", body.Institution.Name, itemID, len(body.Accounts), id)
@@ -3518,6 +3527,15 @@ func (s *Server) handleOAuthStart(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Get user identity from auth context — this is who's connecting their account
+	auth := resolveAuth(r)
+	userID := "default"
+	if auth.Authenticated && auth.Username != "" {
+		userID = auth.Username
+	} else if auth.Authenticated && auth.UserID != 0 {
+		userID = fmt.Sprintf("user-%d", auth.UserID)
+	}
+
 	cfg := getOAuthConfig(provider)
 	if cfg == nil {
 		// OAuth not configured yet — redirect back with helpful error
@@ -3530,9 +3548,13 @@ func (s *Server) handleOAuthStart(w http.ResponseWriter, r *http.Request) {
 	rand.Read(stateBytes)
 	state := hex.EncodeToString(stateBytes)
 
-	// Store state in a short-lived cookie (5 minutes)
+	// Store state and user_id in short-lived cookies (5 minutes)
 	http.SetCookie(w, &http.Cookie{
 		Name: "oauth_state", Value: state,
+		Path: "/", MaxAge: 300, HttpOnly: true, Secure: true, SameSite: http.SameSiteLaxMode,
+	})
+	http.SetCookie(w, &http.Cookie{
+		Name: "oauth_user_id", Value: userID,
 		Path: "/", MaxAge: 300, HttpOnly: true, Secure: true, SameSite: http.SameSiteLaxMode,
 	})
 
@@ -3570,16 +3592,22 @@ func (s *Server) handleOAuthCallback(w http.ResponseWriter, r *http.Request) {
 	state := r.URL.Query().Get("state")
 	errParam := r.URL.Query().Get("error")
 
-	// Get provider from cookie
+	// Get provider and user_id from cookies
 	providerCookie, _ := r.Cookie("oauth_provider")
 	provider := ""
 	if providerCookie != nil {
 		provider = providerCookie.Value
 	}
+	userIDCookie, _ := r.Cookie("oauth_user_id")
+	userID := "default"
+	if userIDCookie != nil && userIDCookie.Value != "" {
+		userID = userIDCookie.Value
+	}
 
 	// Clear cookies
 	http.SetCookie(w, &http.Cookie{Name: "oauth_state", Path: "/", MaxAge: -1})
 	http.SetCookie(w, &http.Cookie{Name: "oauth_provider", Path: "/", MaxAge: -1})
+	http.SetCookie(w, &http.Cookie{Name: "oauth_user_id", Path: "/", MaxAge: -1})
 
 	if errParam != "" {
 		http.Redirect(w, r, fmt.Sprintf("/?oauth=%s&oauth_status=fail&error=%s", provider, errParam), 302)
@@ -3705,8 +3733,8 @@ func (s *Server) handleOAuthCallback(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	s.db.Exec(`INSERT INTO integrations (id, user_id, provider, auth_type, encrypted_data, nonce,
 		display_name, poll_interval_seconds, created_at, updated_at, next_poll_at, scopes)
-		VALUES (?, 'default', ?, 'oauth2', ?, ?, ?, 1800, ?, ?, ?, ?)`,
-		id, scoreProvider, encrypted, nonce, displayName, now, now, nextPoll, cfg.Scopes)
+		VALUES (?, ?, ?, 'oauth2', ?, ?, ?, 1800, ?, ?, ?, ?)`,
+		id, userID, scoreProvider, encrypted, nonce, displayName, now, now, nextPoll, cfg.Scopes)
 	s.mu.Unlock()
 
 	// For GitHub: auto-create webhooks on user's repos
@@ -6677,12 +6705,32 @@ func (s *Server) decryptCredential(encrypted []byte, nonce []byte) ([]byte, erro
 
 func (s *Server) handleIntegrations(w http.ResponseWriter, r *http.Request) {
 	cors(w)
+
+	// Get user identity from auth context
+	auth := resolveAuth(r)
+	userID := "default"
+	if auth.Authenticated && auth.Username != "" {
+		userID = auth.Username
+	} else if auth.Authenticated && auth.UserID != 0 {
+		userID = fmt.Sprintf("user-%d", auth.UserID)
+	}
+
 	switch r.Method {
 	case "GET":
-		// List all integrations (metadata only, no secrets)
-		rows, err := s.db.Query(`SELECT id, user_id, provider, auth_type, display_name, scopes,
-			status, sensitivity, wirebot_visible, wirebot_detail_level, share_level,
-			poll_interval_seconds, last_used_at, last_error, business_id, created_at FROM integrations ORDER BY created_at`)
+		// List integrations for this user (admin sees all)
+		var rows *sql.Rows
+		var err error
+		if auth.TierLevel >= 99 {
+			// Admin — see all integrations
+			rows, err = s.db.Query(`SELECT id, user_id, provider, auth_type, display_name, scopes,
+				status, sensitivity, wirebot_visible, wirebot_detail_level, share_level,
+				poll_interval_seconds, last_used_at, last_error, business_id, created_at FROM integrations ORDER BY created_at`)
+		} else {
+			// Regular user — see only their own
+			rows, err = s.db.Query(`SELECT id, user_id, provider, auth_type, display_name, scopes,
+				status, sensitivity, wirebot_visible, wirebot_detail_level, share_level,
+				poll_interval_seconds, last_used_at, last_error, business_id, created_at FROM integrations WHERE user_id = ? ORDER BY created_at`, userID)
+		}
 		if err != nil {
 			http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err), 500)
 			return
@@ -6748,8 +6796,8 @@ func (s *Server) handleIntegrations(w http.ResponseWriter, r *http.Request) {
 		s.mu.Lock()
 		_, err = s.db.Exec(`INSERT INTO integrations (id, user_id, provider, auth_type, encrypted_data, nonce,
 			display_name, sensitivity, poll_interval_seconds, config, business_id, created_at, updated_at, next_poll_at)
-			VALUES (?, 'default', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			id, body.Provider, body.AuthType, encrypted, nonce,
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			id, userID, body.Provider, body.AuthType, encrypted, nonce,
 			body.DisplayName, sensitivity, pollInterval, config, body.BusinessID, now, now, nextPoll)
 		s.mu.Unlock()
 		if err != nil {
