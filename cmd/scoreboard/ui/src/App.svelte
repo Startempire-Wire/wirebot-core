@@ -18,6 +18,16 @@
   let wrapped = $state(null);
   let error = $state(null);
   let lastUpdate = $state('');
+
+  // ── Multi-Business Context ──
+  const BUSINESSES = [
+    { id: '', label: 'All Businesses', icon: '🌐', color: '#7c7cff' },
+    { id: 'STA', label: 'Startempire Wire', icon: '⚡', color: '#ffaa00' },
+    { id: 'WIR', label: 'Wirebot', icon: '🤖', color: '#7c7cff' },
+    { id: 'PHI', label: 'Philoveracity', icon: '📘', color: '#2ecc71' },
+    { id: 'SEW', label: 'SEW Network', icon: '🕸', color: '#ff7c7c' },
+  ];
+  let activeBusiness = $state(''); // '' = all businesses
   let showFab = $state(false);
   let fabTitle = $state('');
   let fabLane = $state('shipping');
@@ -547,10 +557,11 @@
   async function fetchAll() {
     if (!getToken()) return; // Don't fetch without auth
     const hdrs = authHeaders();
+    const biz = activeBusiness ? `&business=${activeBusiness}` : '';
     try {
       const [sbRes, feedRes, histRes] = await Promise.all([
         fetch(`${API}/v1/scoreboard?mode=dashboard`, { headers: hdrs }),
-        fetch(`${API}/v1/feed?limit=50`, { headers: hdrs }),
+        fetch(`${API}/v1/feed?limit=50${biz}`, { headers: hdrs }),
         fetch(`${API}/v1/history?range=season`, { headers: hdrs }),
       ]);
 
@@ -725,7 +736,8 @@
       {:else if view === 'score'}
         <Score {data} {lastUpdate} onHelp={() => showHints = true} user={loggedInUser} onPairing={() => showPairing = true} />
       {:else if view === 'feed'}
-        <Feed items={feed} pendingCount={data?.pending_count || 0} onHelp={() => showHints = true} />
+        <Feed items={feed} pendingCount={data?.pending_count || 0} onHelp={() => showHints = true}
+          {activeBusiness} onBusinessChange={(biz) => { activeBusiness = biz; fetchAll(); }} />
       {:else if view === 'season'}
         <Season season={data.season} {history} streak={data.streak} onHelp={() => showHints = true} onnav={(e) => view = e.detail} />
       {:else if view === 'wrapped'}
@@ -872,7 +884,12 @@
                     <span class="int-active-dot" class:active={acct.status === 'active'} class:error={acct.status === 'error'}></span>
                     <span class="int-active-icon">{prov.icon}</span>
                     <div class="int-active-info">
-                      <div class="int-active-name">{acct.display_name || prov.name}</div>
+                      <div class="int-active-name">
+                        {acct.display_name || prov.name}
+                        {#if acct.business_id}
+                          <span class="int-biz-badge">{acct.business_id}</span>
+                        {/if}
+                      </div>
                       <div class="int-active-meta">
                         {#if acct.status === 'active'}
                           ✓ Connected
@@ -1638,7 +1655,11 @@
   .int-active-dot.error { background: #ff4444; }
   .int-active-icon { font-size: 20px; flex-shrink: 0; }
   .int-active-info { flex: 1; min-width: 0; }
-  .int-active-name { font-size: 13px; font-weight: 600; color: #ddd; }
+  .int-active-name { font-size: 13px; font-weight: 600; color: #ddd; display: flex; align-items: center; gap: 6px; }
+  .int-biz-badge {
+    font-size: 9px; font-weight: 700; background: rgba(124,124,255,0.1);
+    color: #7c7cff; padding: 1px 6px; border-radius: 3px; letter-spacing: 0.05em;
+  }
   .int-active-meta { font-size: 11px; color: #555; margin-top: 1px; }
   .int-active-remove {
     background: none; border: none; color: #333; font-size: 14px;

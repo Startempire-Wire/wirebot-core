@@ -1,5 +1,7 @@
 <script>
-  let { items, pendingCount = 0, onHelp } = $props();
+  let { items, pendingCount = 0, onHelp, activeBusiness = '', onBusinessChange } = $props();
+
+  const BIZ_LABELS = { STA: '⚡', WIR: '🤖', PHI: '📘', SEW: '🕸' };
 
   let tab = $state('all');
   let projects = $state([]);         // project summaries
@@ -435,6 +437,18 @@
 
   <!-- ═══════════ ALL / SCORED TAB ═══════════ -->
   {:else}
+    <!-- Business filter pills -->
+    {#if items.some(i => i.business_id)}
+      <div class="biz-pills">
+        <button class="biz-pill" class:active={!activeBusiness} onclick={() => onBusinessChange?.('')}>All</button>
+        {#each [...new Set(items.map(i => i.business_id).filter(Boolean))] as biz}
+          <button class="biz-pill" class:active={activeBusiness === biz} onclick={() => onBusinessChange?.(biz)}>
+            {BIZ_LABELS[biz] || '🏢'} {biz}
+          </button>
+        {/each}
+      </div>
+    {/if}
+
     {#if items.length === 0}
       <div class="empty">
         <div class="empty-icon">📋</div>
@@ -454,6 +468,10 @@
                 <span>{sourceLabel(item.source)}</span>
                 <span class="fi-sep">·</span>
                 <span>{timeAgo(item.timestamp)}</span>
+                {#if item.business_id}
+                  <span class="fi-sep">·</span>
+                  <span class="fi-biz-tag">{BIZ_LABELS[item.business_id] || ''} {item.business_id}</span>
+                {/if}
                 {#if item.status === 'pending'}
                   <span class="fi-sep">·</span>
                   <span class="fi-pending-badge">PENDING</span>
@@ -660,6 +678,24 @@
     font-size: 9px; font-weight: 700; background: rgba(255,170,0,0.15);
     color: #ffaa00; padding: 1px 5px; border-radius: 3px;
   }
+  .fi-biz-tag {
+    font-size: 9px; font-weight: 600; background: rgba(124,124,255,0.1);
+    color: #7c7cff; padding: 1px 5px; border-radius: 3px;
+  }
   .fi-delta { font-size: 14px; font-weight: 700; font-variant-numeric: tabular-nums; color: #555; flex-shrink: 0; }
   .fi-delta.positive { color: #2ecc71; }
+
+  /* Business filter pills */
+  .biz-pills {
+    display: flex; gap: 6px; overflow-x: auto; padding: 4px 0 10px;
+    -webkit-overflow-scrolling: touch; scrollbar-width: none;
+  }
+  .biz-pills::-webkit-scrollbar { display: none; }
+  .biz-pill {
+    padding: 5px 12px; border-radius: 20px; font-size: 11px; font-weight: 600;
+    background: #111118; border: 1px solid #1e1e30; color: #666;
+    cursor: pointer; white-space: nowrap; transition: all 0.15s;
+  }
+  .biz-pill:hover { border-color: #7c7cff40; color: #aaa; }
+  .biz-pill.active { background: #7c7cff15; border-color: #7c7cff; color: #7c7cff; }
 </style>
