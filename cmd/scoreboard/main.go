@@ -3702,6 +3702,31 @@ func (s *Server) handleOAuthCallback(w http.ResponseWriter, r *http.Request) {
 	case "stripe":
 		if acct, ok := tokenData["stripe_user_id"].(string); ok {
 			displayName = fmt.Sprintf("Stripe (%s)", acct)
+			// Fetch account details to get business name
+			if accessToken, ok := tokenData["access_token"].(string); ok {
+				acctReq, _ := http.NewRequest("GET", "https://api.stripe.com/v1/account", nil)
+				acctReq.Header.Set("Authorization", "Bearer "+accessToken)
+				if acctResp, err := client.Do(acctReq); err == nil {
+					var acctData map[string]interface{}
+					json.NewDecoder(acctResp.Body).Decode(&acctData)
+					acctResp.Body.Close()
+					// Try business_profile.name first, then settings.dashboard.display_name
+					if bp, ok := acctData["business_profile"].(map[string]interface{}); ok {
+						if name, ok := bp["name"].(string); ok && name != "" {
+							displayName = fmt.Sprintf("Stripe (%s)", name)
+						}
+					}
+					if displayName == fmt.Sprintf("Stripe (%s)", acct) {
+						if settings, ok := acctData["settings"].(map[string]interface{}); ok {
+							if dash, ok := settings["dashboard"].(map[string]interface{}); ok {
+								if name, ok := dash["display_name"].(string); ok && name != "" {
+									displayName = fmt.Sprintf("Stripe (%s)", name)
+								}
+							}
+						}
+					}
+				}
+			}
 		}
 	case "github":
 		// Fetch user info
