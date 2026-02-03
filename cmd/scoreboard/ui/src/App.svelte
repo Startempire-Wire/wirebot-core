@@ -28,9 +28,7 @@
     { id: 'SEW', label: 'SEW Network', icon: '🕸', color: '#ff7c7c' },
   ];
   let activeBusiness = $state(''); // '' = all businesses
-  let showFab = $state(false);
-  let fabTitle = $state('');
-  let fabLane = $state('shipping');
+  let showFab = $state(false); // kept for backward compat with Dashboard dispatch
   let showHints = $state(false);
   let showChat = $state(false);
   let showPairing = $state(false);
@@ -637,30 +635,6 @@
     } catch {}
   }
 
-  async function submitFabEvent() {
-    if (!fabTitle.trim()) return;
-    const token = getToken();
-    if (!token) { alert('Set your token in Settings first'); return; }
-    try {
-      const res = await fetch(`${API}/v1/events`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-        body: JSON.stringify({
-          event_type: 'FEATURE_SHIPPED',
-          lane: fabLane,
-          source: 'pwa',
-          artifact_title: fabTitle,
-          confidence: 0.85,
-        }),
-      });
-      if (res.ok) {
-        fabTitle = '';
-        showFab = false;
-        fetchAll();
-      }
-    } catch {}
-  }
-
   // Tab index order for slide direction
   const TAB_ORDER = ['dashboard', 'score', 'feed', 'season', 'settings', 'wrapped'];
   let prevView = $state('dashboard');
@@ -764,7 +738,7 @@
       {#if view === 'dashboard'}
         <Dashboard {data} user={loggedInUser} token={getToken()} {activeBusiness}
           onnav={(e) => view = e.detail}
-          onopenFab={() => showFab = true}
+          onopenFab={() => showChat = true}
           onopenPairing={() => showPairing = true}
           onbusinessChange={(e) => { activeBusiness = e.detail; fetchAll(); }} />
       {:else if view === 'score'}
@@ -1136,35 +1110,9 @@
       {/if}
     </div>
 
-    <!-- FAB cluster: Chat (primary) + Quick Ship (secondary) -->
+    <!-- Chat FAB -->
     {#if view === 'dashboard' || view === 'score' || view === 'feed'}
-      <div class="fab-cluster">
-        {#if !showFab}
-          <button class="fab-mini" onclick={() => showFab = true} title="Quick Ship">＋</button>
-        {/if}
-        <button class="fab" onclick={() => { showChat = true; showFab = false; }} title="Ask Wirebot">
-          ⚡
-        </button>
-      </div>
-    {/if}
-
-    <!-- Quick Ship panel -->
-    {#if showFab}
-      <div class="fab-panel">
-        <div class="fab-panel-header">
-          <div class="fab-title">Quick Ship</div>
-          <button class="fab-panel-close" onclick={() => showFab = false}>✕</button>
-        </div>
-        <input bind:value={fabTitle} placeholder="What did you ship?" class="fab-input"
-          onkeydown={(e) => e.key === 'Enter' && submitFabEvent()} />
-        <div class="fab-lanes">
-          {#each ['shipping', 'distribution', 'revenue', 'systems'] as lane}
-            <button class="fab-lane {fabLane === lane ? 'active' : ''}"
-              onclick={() => fabLane = lane}>{lane.slice(0,4).toUpperCase()}</button>
-          {/each}
-        </div>
-        <button class="fab-submit" onclick={submitFabEvent}>🚀 Ship It</button>
-      </div>
+      <button class="fab" onclick={() => showChat = true} title="Ask Wirebot">⚡</button>
     {/if}
 
     <!-- Wirebot Chat -->
@@ -1374,32 +1322,11 @@
   .err { color: #f44; }
 
   /* FAB Cluster */
-  .fab-cluster {
+  .fab {
     position: fixed;
     bottom: 72px;
     right: 16px;
     z-index: 50;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 10px;
-  }
-  .fab-mini {
-    width: 36px;
-    height: 36px;
-    border-radius: 50%;
-    background: #1a1a2e;
-    border: 1px solid #2a2a4a;
-    color: #7c7cff;
-    font-size: 18px;
-    cursor: pointer;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    box-shadow: 0 2px 8px rgba(0,0,0,0.3);
-    -webkit-tap-highlight-color: transparent;
-  }
-  .fab {
     width: 52px;
     height: 52px;
     border-radius: 50%;
@@ -1414,71 +1341,14 @@
     justify-content: center;
     -webkit-tap-highlight-color: transparent;
     animation: fabPulse 3s infinite;
+    view-transition-name: fab;
   }
   @keyframes fabPulse {
     0%, 100% { box-shadow: 0 4px 16px rgba(124,124,255,0.5); }
     50% { box-shadow: 0 4px 24px rgba(124,124,255,0.8); }
   }
 
-  .fab-panel {
-    position: fixed;
-    bottom: 130px;
-    right: 16px;
-    left: 16px;
-    background: #151520;
-    border: 1px solid #2a2a40;
-    border-radius: 12px;
-    padding: 14px;
-    z-index: 50;
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-    animation: panel-slide-up 200ms cubic-bezier(0.32, 0.72, 0, 1);
-  }
-  @keyframes panel-slide-up {
-    from { opacity: 0; transform: translateY(20px) scale(0.97); }
-    to { opacity: 1; transform: translateY(0) scale(1); }
-  }
-  .fab-panel-header { display: flex; justify-content: space-between; align-items: center; }
-  .fab-panel-close {
-    width: 24px; height: 24px; border-radius: 50%; border: none;
-    background: rgba(255,50,50,0.1); color: #ff5050; font-size: 12px;
-    cursor: pointer; display: flex; align-items: center; justify-content: center;
-  }
-  .fab-title { font-size: 14px; font-weight: 700; color: #7c7cff; }
-  .fab-input {
-    background: #0a0a15;
-    border: 1px solid #2a2a40;
-    border-radius: 8px;
-    padding: 10px;
-    color: #ddd;
-    font-size: 14px;
-    outline: none;
-  }
-  .fab-input:focus { border-color: #7c7cff; }
-  .fab-lanes { display: flex; gap: 6px; }
-  .fab-lane {
-    flex: 1;
-    padding: 6px;
-    border-radius: 6px;
-    background: #0a0a15;
-    border: 1px solid #2a2a40;
-    color: #888;
-    font-size: 11px;
-    cursor: pointer;
-    text-align: center;
-  }
-  .fab-lane.active { border-color: #7c7cff; color: #7c7cff; background: rgba(124,124,255,0.1); }
-  .fab-submit {
-    background: #7c7cff;
-    color: white;
-    border: none;
-    border-radius: 8px;
-    padding: 10px;
-    font-size: 14px;
-    font-weight: 600;
-    cursor: pointer;
-  }
+  /* Quick Ship panel removed — events come in automatically */
 
   /* Pending badge */
   .pending-badge {

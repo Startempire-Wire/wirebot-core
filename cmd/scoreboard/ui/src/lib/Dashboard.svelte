@@ -202,7 +202,7 @@
   function handleSuggestion(action) {
     if (action === 'score' || action === 'intent') dispatch('nav', 'score');
     else if (action === 'settings') dispatch('nav', 'settings');
-    else if (action === 'ship') dispatch('openFab');
+    else if (action === 'ship') dispatch('nav', 'feed');
     else if (action === 'handshake') doHandshake();
     else if (action === 'checklist') {
       // Scroll to checklist section
@@ -334,11 +334,11 @@
           <div class="ob-desc">Stripe, FreshBooks, or Bank</div>
           <span class="ob-btn">Connect →</span>
         </button>
-        <button class="onboard-card" onclick={() => dispatch('openFab')}>
+        <button class="onboard-card" onclick={() => dispatch('nav', 'feed')}>
           <div class="ob-icon">🚀</div>
-          <div class="ob-title">Ship First Thing</div>
-          <div class="ob-desc">Log your first ship event</div>
-          <span class="ob-btn">Ship →</span>
+          <div class="ob-title">Check Your Feed</div>
+          <div class="ob-desc">See events flowing in automatically</div>
+          <span class="ob-btn">View →</span>
         </button>
       </div>
     {/if}
