@@ -41,6 +41,7 @@
     border-top: 1px solid #1e1e30;
     padding-bottom: env(safe-area-inset-bottom, 0);
     z-index: 100;
+    view-transition-name: nav;
   }
 
   .tab {

@@ -1343,30 +1343,36 @@
   }
 
   .app { display: flex; flex-direction: column; min-height: 100dvh; }
-  .content { flex: 1; overflow-y: auto; padding-bottom: 56px; }
+  .content { flex: 1; overflow-y: auto; padding-bottom: 56px; view-transition-name: content; }
 
   /* ── View Transitions (native API) ── */
   @view-transition { navigation: auto; }
 
-  /* Slide + fade for page content */
-  ::view-transition-old(root) {
+  /* Nav stays frozen during transitions */
+  ::view-transition-old(nav),
+  ::view-transition-new(nav) {
+    animation: none;
+  }
+
+  /* Slide + fade for page content only */
+  ::view-transition-old(content) {
     animation: 300ms cubic-bezier(0.25, 0.46, 0.45, 0.94) both vt-slide-out;
   }
-  ::view-transition-new(root) {
+  ::view-transition-new(content) {
     animation: 300ms cubic-bezier(0.25, 0.46, 0.45, 0.94) both vt-slide-in;
   }
 
   /* Direction-aware: forward = slide left, back = slide right */
-  :root[data-direction="forward"]::view-transition-old(root) {
+  :root[data-direction="forward"]::view-transition-old(content) {
     animation-name: vt-slide-out-left;
   }
-  :root[data-direction="forward"]::view-transition-new(root) {
+  :root[data-direction="forward"]::view-transition-new(content) {
     animation-name: vt-slide-in-right;
   }
-  :root[data-direction="back"]::view-transition-old(root) {
+  :root[data-direction="back"]::view-transition-old(content) {
     animation-name: vt-slide-out-right;
   }
-  :root[data-direction="back"]::view-transition-new(root) {
+  :root[data-direction="back"]::view-transition-new(content) {
     animation-name: vt-slide-in-left;
   }
 
