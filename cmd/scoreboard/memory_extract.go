@@ -233,7 +233,7 @@ func (s *Server) QueueMemoryForApproval(m MemoryExtraction) error {
 func (s *Server) callLLMForExtraction(prompt string) (string, error) {
 	gatewayURL := os.Getenv("GATEWAY_URL")
 	if gatewayURL == "" {
-		gatewayURL = "http://127.0.0.1:5005"
+		gatewayURL = "http://127.0.0.1:18789"
 	}
 	gatewayToken := os.Getenv("GATEWAY_TOKEN")
 
