@@ -661,9 +661,39 @@
     } catch {}
   }
 
+  // Tab index order for slide direction
+  const TAB_ORDER = ['dashboard', 'score', 'feed', 'season', 'settings', 'wrapped'];
+  let prevView = $state('dashboard');
+
   function handleNav(e) {
-    view = e.detail;
-    if (e.detail === 'wrapped' && !wrapped) fetchWrapped();
+    const next = e.detail;
+    if (next === view) return;
+
+    const from = TAB_ORDER.indexOf(view);
+    const to = TAB_ORDER.indexOf(next);
+    const direction = to > from ? 'forward' : 'back';
+
+    // Use View Transitions API if available (Chrome 111+, Safari 18+)
+    if (document.startViewTransition) {
+      document.documentElement.dataset.direction = direction;
+      document.startViewTransition(() => {
+        prevView = view;
+        view = next;
+        if (next === 'wrapped' && !wrapped) fetchWrapped();
+      });
+    } else {
+      // Fallback: CSS class-based animation
+      const el = document.querySelector('.content');
+      if (el) {
+        el.classList.add(`slide-${direction}`);
+        el.addEventListener('animationend', () => {
+          el.classList.remove(`slide-${direction}`);
+        }, { once: true });
+      }
+      prevView = view;
+      view = next;
+      if (next === 'wrapped' && !wrapped) fetchWrapped();
+    }
   }
 
   onMount(() => {
@@ -1314,6 +1344,64 @@
   .app { display: flex; flex-direction: column; min-height: 100dvh; }
   .content { flex: 1; overflow-y: auto; padding-bottom: 56px; }
 
+  /* ── View Transitions (native API) ── */
+  @view-transition { navigation: auto; }
+
+  /* Slide + fade for page content */
+  ::view-transition-old(root) {
+    animation: 180ms ease-out both vt-slide-out;
+  }
+  ::view-transition-new(root) {
+    animation: 180ms ease-out both vt-slide-in;
+  }
+
+  /* Direction-aware: forward = slide left, back = slide right */
+  :root[data-direction="forward"]::view-transition-old(root) {
+    animation-name: vt-slide-out-left;
+  }
+  :root[data-direction="forward"]::view-transition-new(root) {
+    animation-name: vt-slide-in-right;
+  }
+  :root[data-direction="back"]::view-transition-old(root) {
+    animation-name: vt-slide-out-right;
+  }
+  :root[data-direction="back"]::view-transition-new(root) {
+    animation-name: vt-slide-in-left;
+  }
+
+  @keyframes vt-slide-out-left {
+    from { opacity: 1; transform: translateX(0); }
+    to { opacity: 0; transform: translateX(-60px); }
+  }
+  @keyframes vt-slide-in-right {
+    from { opacity: 0; transform: translateX(60px); }
+    to { opacity: 1; transform: translateX(0); }
+  }
+  @keyframes vt-slide-out-right {
+    from { opacity: 1; transform: translateX(0); }
+    to { opacity: 0; transform: translateX(60px); }
+  }
+  @keyframes vt-slide-in-left {
+    from { opacity: 0; transform: translateX(-60px); }
+    to { opacity: 1; transform: translateX(0); }
+  }
+
+  /* Fallback for browsers without View Transitions API */
+  .content.slide-forward {
+    animation: fallback-slide-left 200ms ease-out;
+  }
+  .content.slide-back {
+    animation: fallback-slide-right 200ms ease-out;
+  }
+  @keyframes fallback-slide-left {
+    0% { opacity: 0.3; transform: translateX(40px); }
+    100% { opacity: 1; transform: translateX(0); }
+  }
+  @keyframes fallback-slide-right {
+    0% { opacity: 0.3; transform: translateX(-40px); }
+    100% { opacity: 1; transform: translateX(0); }
+  }
+
   .loading { min-height: 100dvh; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; }
   .ld-icon { font-size: 48px; }
   .loading p { font-size: 14px; opacity: 0.5; }
@@ -1379,6 +1467,11 @@
     display: flex;
     flex-direction: column;
     gap: 10px;
+    animation: panel-slide-up 200ms cubic-bezier(0.32, 0.72, 0, 1);
+  }
+  @keyframes panel-slide-up {
+    from { opacity: 0; transform: translateY(20px) scale(0.97); }
+    to { opacity: 1; transform: translateY(0) scale(1); }
   }
   .fab-panel-header { display: flex; justify-content: space-between; align-items: center; }
   .fab-panel-close {
@@ -1851,6 +1944,11 @@
   .pairing-backdrop {
     position: absolute; inset: 0;
     background: rgba(0,0,0,0.6); backdrop-filter: blur(4px);
+    animation: backdrop-fade 200ms ease-out;
+  }
+  @keyframes backdrop-fade {
+    from { opacity: 0; backdrop-filter: blur(0); }
+    to { opacity: 1; backdrop-filter: blur(4px); }
   }
   .pairing-sheet {
     position: absolute; inset: 0;

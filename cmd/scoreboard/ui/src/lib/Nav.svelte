@@ -56,10 +56,28 @@
     cursor: pointer;
     -webkit-tap-highlight-color: transparent;
     transition: color 0.2s;
+    position: relative;
   }
 
   .tab.active { color: #7c7cff; }
-  .tab-icon { font-size: 18px; position: relative; }
+  .tab.active::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 24px;
+    height: 2px;
+    background: #7c7cff;
+    border-radius: 0 0 2px 2px;
+    animation: indicator-in 200ms cubic-bezier(0.32, 0.72, 0, 1);
+  }
+  @keyframes indicator-in {
+    from { width: 0; opacity: 0; }
+    to { width: 24px; opacity: 1; }
+  }
+  .tab-icon { font-size: 18px; position: relative; transition: transform 0.15s; }
+  .tab.active .tab-icon { transform: scale(1.1); }
   .tab-label { font-size: 9px; letter-spacing: 0.05em; }
 
   .nav-badge {
