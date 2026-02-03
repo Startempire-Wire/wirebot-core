@@ -198,6 +198,21 @@
       {/if}
     </div>
 
+    <!-- First-time welcome for new users -->
+    {#if !data?.score && !checklist}
+      <div class="card welcome-card">
+        <div class="wc-icon">🚀</div>
+        <h2 class="wc-title">Your Business Dashboard</h2>
+        <p class="wc-desc">Wirebot is your AI operating partner. Track execution, ship work, and build your business — all from right here.</p>
+        <div class="wc-steps">
+          <div class="wc-step"><span class="wc-num">1</span> Complete your pairing assessment</div>
+          <div class="wc-step"><span class="wc-num">2</span> Set your first shipping intent</div>
+          <div class="wc-step"><span class="wc-num">3</span> Ship something and log it</div>
+        </div>
+        <button class="wc-btn" onclick={() => dispatch('nav', 'score')}>Get Started →</button>
+      </div>
+    {/if}
+
     <!-- Business Setup Progress -->
     {#if checklist}
       <div class="card setup-card">
@@ -570,4 +585,39 @@
   }
   .ask-input-wrap button:hover { background: #7c7cff30; }
   .ask-input-wrap button:disabled { opacity: 0.3; cursor: default; }
+
+  /* Welcome Card (new users) */
+  .welcome-card {
+    text-align: center;
+    padding: 24px 20px;
+    background: linear-gradient(135deg, #16161e, #1a1a30);
+    border-color: #7c7cff30;
+  }
+  .wc-icon { font-size: 36px; margin-bottom: 8px; }
+  .wc-title { font-size: 18px; font-weight: 700; color: #e8e8ff; margin: 0 0 8px; }
+  .wc-desc { font-size: 13px; color: #888; line-height: 1.5; margin: 0 0 16px; }
+  .wc-steps { display: flex; flex-direction: column; gap: 8px; margin-bottom: 16px; text-align: left; }
+  .wc-step {
+    display: flex; align-items: center; gap: 10px;
+    font-size: 13px; color: #bbb;
+  }
+  .wc-num {
+    width: 24px; height: 24px; border-radius: 50%;
+    background: #7c7cff20; color: #7c7cff;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 11px; font-weight: 700; flex-shrink: 0;
+  }
+  .wc-btn {
+    width: 100%;
+    padding: 12px;
+    background: #7c7cff;
+    border: none;
+    border-radius: 10px;
+    color: white;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: opacity 0.2s;
+  }
+  .wc-btn:hover { opacity: 0.9; }
 </style>
