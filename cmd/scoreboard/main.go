@@ -469,6 +469,11 @@ func main() {
 	mux.HandleFunc("/v1/webhooks/stripe", s.handleStripeWebhook) // Stripe signs its own webhooks
 	mux.HandleFunc("/v1/financial/snapshot", s.auth(s.handleFinancialSnapshot))
 
+	// Discord audit & training
+	mux.HandleFunc("/v1/discord/interaction", s.auth(s.handleDiscordInteraction))
+	mux.HandleFunc("/v1/discord/interactions", s.auth(s.handleDiscordInteractions))
+	mux.HandleFunc("/v1/discord/feedback", s.auth(s.handleDiscordFeedback))
+
 	// Transaction reconciliation
 	mux.HandleFunc("/v1/reconcile", s.auth(s.handleReconcile))
 	mux.HandleFunc("/v1/reconcile/test-transactions", s.auth(s.handleTestTransactions))
@@ -9179,4 +9184,226 @@ func (s *Server) handleTestTransactions(w http.ResponseWriter, r *http.Request) 
 		})
 	}
 	writeJSON(w, map[string]interface{}{"test_transactions": tests})
+}
+
+// ─── DISCORD AUDIT & TRAINING ─────────────────────────────────────────────────
+
+type DiscordInteraction struct {
+	ID             int64               `json:"id"`
+	InteractionID  string              `json:"interaction_id"`
+	GuildID        string              `json:"guild_id"`
+	GuildName      string              `json:"guild_name"`
+	ChannelID      string              `json:"channel_id"`
+	ChannelName    string              `json:"channel_name"`
+	UserID         string              `json:"user_id"`
+	UserName       string              `json:"user_name"`
+	UserMessage    string              `json:"user_message"`
+	BotResponse    string              `json:"bot_response"`
+	ResponseTimeMs int                 `json:"response_time_ms"`
+	Mode           string              `json:"mode"`
+	ToolsUsed      []string            `json:"tools_used"`
+	Model          string              `json:"model"`
+	TokensIn       int                 `json:"tokens_in"`
+	TokensOut      int                 `json:"tokens_out"`
+	CreatedAt      string              `json:"created_at"`
+	Feedback       []InteractionFeedback `json:"feedback,omitempty"`
+}
+
+type InteractionFeedback struct {
+	ID           int64  `json:"id"`
+	FeedbackType string `json:"feedback_type"`
+	FeedbackText string `json:"feedback_text"`
+	MemoryAction string `json:"memory_action,omitempty"`
+	CreatedAt    string `json:"created_at"`
+}
+
+// POST /v1/discord/interaction - Log a Discord interaction
+func (s *Server) handleDiscordInteraction(w http.ResponseWriter, r *http.Request) {
+	cors(w)
+	if r.Method == "OPTIONS" {
+		return
+	}
+	if r.Method != "POST" {
+		http.Error(w, `{"error":"POST only"}`, 405)
+		return
+	}
+	var req struct {
+		InteractionID  string   `json:"interaction_id"`
+		GuildID        string   `json:"guild_id"`
+		GuildName      string   `json:"guild_name"`
+		ChannelID      string   `json:"channel_id"`
+		ChannelName    string   `json:"channel_name"`
+		UserID         string   `json:"user_id"`
+		UserName       string   `json:"user_name"`
+		UserMessage    string   `json:"user_message"`
+		BotResponse    string   `json:"bot_response"`
+		ResponseTimeMs int      `json:"response_time_ms"`
+		Mode           string   `json:"mode"`
+		ToolsUsed      []string `json:"tools_used"`
+		Model          string   `json:"model"`
+		TokensIn       int      `json:"tokens_in"`
+		TokensOut      int      `json:"tokens_out"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err), 400)
+		return
+	}
+	if req.InteractionID == "" {
+		req.InteractionID = fmt.Sprintf("discord-%d", time.Now().UnixNano())
+	}
+	toolsJSON, _ := json.Marshal(req.ToolsUsed)
+
+	_, err := s.db.Exec(`INSERT INTO discord_interactions 
+		(interaction_id, guild_id, guild_name, channel_id, channel_name, user_id, user_name, 
+		 user_message, bot_response, response_time_ms, mode, tools_used, model, tokens_in, tokens_out)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		req.InteractionID, req.GuildID, req.GuildName, req.ChannelID, req.ChannelName,
+		req.UserID, req.UserName, req.UserMessage, req.BotResponse, req.ResponseTimeMs,
+		req.Mode, string(toolsJSON), req.Model, req.TokensIn, req.TokensOut)
+
+	if err != nil {
+		log.Printf("[discord-audit] Error logging interaction: %v", err)
+		http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err), 500)
+		return
+	}
+
+	// Create discovery event for engagement tracking (1 point per interaction)
+	s.db.Exec(`INSERT INTO events (event_type, artifact_title, source, timestamp, created_at, score_delta, status)
+		VALUES ('discord_interaction', ?, 'discord', ?, ?, 1, 'approved')`,
+		fmt.Sprintf("Discord: %s in #%s", req.UserName, req.ChannelName),
+		time.Now().UTC().Format(time.RFC3339), time.Now().UTC().Format(time.RFC3339))
+
+	log.Printf("[discord-audit] Logged: %s from %s in #%s (%s mode)", req.InteractionID, req.UserName, req.ChannelName, req.Mode)
+	writeJSON(w, map[string]interface{}{"ok": true, "interaction_id": req.InteractionID})
+}
+
+// GET /v1/discord/interactions - List interactions with filters
+func (s *Server) handleDiscordInteractions(w http.ResponseWriter, r *http.Request) {
+	cors(w)
+	if r.Method == "OPTIONS" {
+		return
+	}
+	if r.Method != "GET" {
+		http.Error(w, `{"error":"GET only"}`, 405)
+		return
+	}
+
+	guildID := r.URL.Query().Get("guild_id")
+	userID := r.URL.Query().Get("user_id")
+	mode := r.URL.Query().Get("mode")
+	limit := 50
+	if l := r.URL.Query().Get("limit"); l != "" {
+		fmt.Sscanf(l, "%d", &limit)
+	}
+
+	query := `SELECT id, interaction_id, guild_id, guild_name, channel_id, channel_name,
+		user_id, user_name, user_message, bot_response, response_time_ms, mode,
+		COALESCE(tools_used, '[]'), COALESCE(model, ''), tokens_in, tokens_out, created_at
+		FROM discord_interactions WHERE 1=1`
+	args := []interface{}{}
+
+	if guildID != "" {
+		query += " AND guild_id = ?"
+		args = append(args, guildID)
+	}
+	if userID != "" {
+		query += " AND user_id = ?"
+		args = append(args, userID)
+	}
+	if mode != "" {
+		query += " AND mode = ?"
+		args = append(args, mode)
+	}
+	query += " ORDER BY created_at DESC LIMIT ?"
+	args = append(args, limit)
+
+	rows, err := s.db.Query(query, args...)
+	if err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err), 500)
+		return
+	}
+	defer rows.Close()
+
+	var interactions []DiscordInteraction
+	for rows.Next() {
+		var i DiscordInteraction
+		var toolsJSON string
+		rows.Scan(&i.ID, &i.InteractionID, &i.GuildID, &i.GuildName, &i.ChannelID, &i.ChannelName,
+			&i.UserID, &i.UserName, &i.UserMessage, &i.BotResponse, &i.ResponseTimeMs, &i.Mode,
+			&toolsJSON, &i.Model, &i.TokensIn, &i.TokensOut, &i.CreatedAt)
+		json.Unmarshal([]byte(toolsJSON), &i.ToolsUsed)
+
+		// Get feedback for this interaction
+		fbRows, _ := s.db.Query(`SELECT id, feedback_type, feedback_text, COALESCE(memory_action,''), created_at 
+			FROM interaction_feedback WHERE interaction_id = ?`, i.InteractionID)
+		for fbRows.Next() {
+			var fb InteractionFeedback
+			fbRows.Scan(&fb.ID, &fb.FeedbackType, &fb.FeedbackText, &fb.MemoryAction, &fb.CreatedAt)
+			i.Feedback = append(i.Feedback, fb)
+		}
+		fbRows.Close()
+
+		interactions = append(interactions, i)
+	}
+	if interactions == nil {
+		interactions = []DiscordInteraction{}
+	}
+
+	writeJSON(w, map[string]interface{}{"interactions": interactions, "count": len(interactions)})
+}
+
+// POST /v1/discord/feedback - Submit feedback on an interaction
+func (s *Server) handleDiscordFeedback(w http.ResponseWriter, r *http.Request) {
+	cors(w)
+	if r.Method == "OPTIONS" {
+		return
+	}
+	if r.Method != "POST" {
+		http.Error(w, `{"error":"POST only"}`, 405)
+		return
+	}
+	var req struct {
+		InteractionID string `json:"interaction_id"`
+		FeedbackType  string `json:"feedback_type"`
+		FeedbackText  string `json:"feedback_text"`
+		MemoryAction  string `json:"memory_action,omitempty"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err), 400)
+		return
+	}
+
+	_, err := s.db.Exec(`INSERT INTO interaction_feedback 
+		(interaction_id, feedback_type, feedback_text, memory_action)
+		VALUES (?, ?, ?, ?)`,
+		req.InteractionID, req.FeedbackType, req.FeedbackText, req.MemoryAction)
+
+	if err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err), 500)
+		return
+	}
+
+	// If memory action requested, call Mem0 to store correction
+	if req.FeedbackType == "memory" && req.MemoryAction == "add" {
+		var userMsg, botResp string
+		s.db.QueryRow("SELECT user_message, bot_response FROM discord_interactions WHERE interaction_id=?", req.InteractionID).Scan(&userMsg, &botResp)
+
+		memoryText := fmt.Sprintf("Training feedback: When asked '%s', the response needed improvement. Correction: %s", userMsg, req.FeedbackText)
+		go func() {
+			payload, _ := json.Marshal(map[string]interface{}{
+				"messages": []map[string]string{{"role": "user", "content": memoryText}},
+				"user_id":  "wirebot_verious",
+			})
+			resp, err := http.Post("http://127.0.0.1:8200/v1/memories/", "application/json", bytes.NewReader(payload))
+			if err != nil {
+				log.Printf("[discord-feedback] Mem0 error: %v", err)
+			} else {
+				resp.Body.Close()
+				log.Printf("[discord-feedback] Added memory correction for %s", req.InteractionID)
+			}
+		}()
+	}
+
+	log.Printf("[discord-feedback] %s feedback on %s: %s", req.FeedbackType, req.InteractionID, req.FeedbackText)
+	writeJSON(w, map[string]interface{}{"ok": true})
 }
