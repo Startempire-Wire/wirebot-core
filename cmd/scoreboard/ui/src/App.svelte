@@ -168,9 +168,11 @@ Tracked with Wirebot — your AI business operating partner`;
                { key: 'store_url', label: 'Store URL', placeholder: 'https://startempirewire.com' }] },
     { id: 'freshbooks', name: 'FreshBooks', icon: '📗', lane: 'revenue',
       desc: 'Invoices, expenses, payments — real P&L', auth: 'oauth',
+      oauthUrl: '/v1/oauth/freshbooks/authorize',
       hint: 'Connect your FreshBooks account to track invoices, expenses, and payments' },
     { id: 'hubspot', name: 'HubSpot', icon: '🔶', lane: 'revenue',
       auth: 'oauth', desc: 'CRM deals, contacts, pipeline',
+      oauthUrl: '/v1/oauth/hubspot/authorize',
       hint: 'Connect HubSpot to track deals, contacts, and pipeline' },
     { id: 'paypal', name: 'PayPal', icon: '💰', lane: 'revenue',
       auth: 'oauth', desc: 'Payment & invoice tracking',
@@ -363,6 +365,7 @@ Tracked with Wirebot — your AI business operating partner`;
         onSuccess: async (publicToken, metadata) => {
           connectStatus = 'saving';
           connectMsg = 'Connecting bank account...';
+          showConnectForm = null; // Close form on success only
 
           // 4. Exchange public_token for access_token on server
           try {
@@ -1139,8 +1142,8 @@ Tracked with Wirebot — your AI business operating partner`;
                     <!-- Plaid Link — one button, zero typing -->
                     <button class="int-setup-oauth" onclick={async () => {
                       connectStatus = 'saving'; connectMsg = 'Opening bank connection...';
-                      showConnectForm = null;
                       await startPlaidLink(provider);
+                      // Form closes in startPlaidLink on success
                     }}>
                       🏦 Connect Bank Account →
                     </button>

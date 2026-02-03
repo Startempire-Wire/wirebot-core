@@ -457,12 +457,12 @@ func main() {
 	mux.HandleFunc("/v1/integrations", s.authMember(s.handleIntegrations))
 	mux.HandleFunc("/v1/integrations/", s.authMember(s.handleIntegrationConfig))
 	mux.HandleFunc("/v1/network/members", s.auth(s.handleNetworkMembers)) // Real members from startempirewire.com
-	mux.HandleFunc("/v1/oauth/config", s.auth(s.handleOAuthConfig))       // GET=status, POST=store credentials
-	mux.HandleFunc("/v1/oauth/setup/github", s.auth(s.handleGitHubSetup)) // Manifest flow: redirect to GitHub
+	mux.HandleFunc("/v1/oauth/config", s.authMember(s.handleOAuthConfig))       // GET=status, POST=store credentials
+	mux.HandleFunc("/v1/oauth/setup/github", s.authMember(s.handleGitHubSetup)) // Manifest flow: redirect to GitHub
 	mux.HandleFunc("/v1/oauth/setup/github/callback", s.handleGitHubSetupCallback) // GitHub returns here with code
-	mux.HandleFunc("/v1/oauth/setup/stripe", s.auth(s.handleStripeSetup))
-	mux.HandleFunc("/v1/oauth/setup/freshbooks", s.auth(s.handleFreshBooksSetup))
-	mux.HandleFunc("/v1/oauth/setup/hubspot", s.auth(s.handleHubSpotSetup))
+	mux.HandleFunc("/v1/oauth/setup/stripe", s.authMember(s.handleStripeSetup))
+	mux.HandleFunc("/v1/oauth/setup/freshbooks", s.authMember(s.handleFreshBooksSetup))
+	mux.HandleFunc("/v1/oauth/setup/hubspot", s.authMember(s.handleHubSpotSetup))
 
 	// Webhook receivers (use their own verification, not bearer auth)
 	mux.HandleFunc("/v1/webhooks/github", s.auth(s.handleGitHubWebhook))
@@ -474,20 +474,20 @@ func main() {
 	mux.HandleFunc("/v1/reconcile/test-transactions", s.auth(s.handleTestTransactions))
 
 	// Plaid (bank account connections)
-	mux.HandleFunc("/v1/plaid/link-token", s.auth(s.handlePlaidLinkToken))
-	mux.HandleFunc("/v1/plaid/exchange", s.auth(s.handlePlaidExchange))
+	mux.HandleFunc("/v1/plaid/link-token", s.authMember(s.handlePlaidLinkToken))
+	mux.HandleFunc("/v1/plaid/exchange", s.authMember(s.handlePlaidExchange))
 
 	// OAuth flows (provider authorization + callbacks)
-	mux.HandleFunc("/v1/oauth/stripe/authorize", s.auth(s.handleOAuthStart))
-	mux.HandleFunc("/v1/oauth/github/authorize", s.auth(s.handleOAuthStart))
-	mux.HandleFunc("/v1/oauth/google/authorize", s.auth(s.handleOAuthStart))
-	mux.HandleFunc("/v1/oauth/freshbooks/authorize", s.auth(s.handleOAuthStart))
-	mux.HandleFunc("/v1/oauth/hubspot/authorize", s.auth(s.handleOAuthStart))
+	mux.HandleFunc("/v1/oauth/stripe/authorize", s.authMember(s.handleOAuthStart))
+	mux.HandleFunc("/v1/oauth/github/authorize", s.authMember(s.handleOAuthStart))
+	mux.HandleFunc("/v1/oauth/google/authorize", s.authMember(s.handleOAuthStart))
+	mux.HandleFunc("/v1/oauth/freshbooks/authorize", s.authMember(s.handleOAuthStart))
+	mux.HandleFunc("/v1/oauth/hubspot/authorize", s.authMember(s.handleOAuthStart))
 	mux.HandleFunc("/v1/oauth/callback", s.handleOAuthCallback) // Provider redirects back here
 
 	// Checklist data for Dashboard view
-	mux.HandleFunc("/v1/checklist", s.auth(s.handleChecklist))
-	mux.HandleFunc("/v1/proposals", s.auth(s.handleProposals))
+	mux.HandleFunc("/v1/checklist", s.authMember(s.handleChecklist))
+	mux.HandleFunc("/v1/proposals", s.authMember(s.handleProposals))
 
 	// SSO callback — receives JWT from Connect Plugin redirect
 	mux.HandleFunc("/auth/callback", s.handleSSOCallback)
