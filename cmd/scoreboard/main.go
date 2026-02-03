@@ -454,8 +454,8 @@ func main() {
 	s.registerPairingRoutes(mux)
 
 	// Integrations management
-	mux.HandleFunc("/v1/integrations", s.auth(s.handleIntegrations))
-	mux.HandleFunc("/v1/integrations/", s.auth(s.handleIntegrationConfig))
+	mux.HandleFunc("/v1/integrations", s.authMember(s.handleIntegrations))
+	mux.HandleFunc("/v1/integrations/", s.authMember(s.handleIntegrationConfig))
 	mux.HandleFunc("/v1/network/members", s.auth(s.handleNetworkMembers)) // Real members from startempirewire.com
 	mux.HandleFunc("/v1/oauth/config", s.auth(s.handleOAuthConfig))       // GET=status, POST=store credentials
 	mux.HandleFunc("/v1/oauth/setup/github", s.auth(s.handleGitHubSetup)) // Manifest flow: redirect to GitHub

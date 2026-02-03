@@ -517,7 +517,14 @@ Tracked with Wirebot — your AI business operating partner`;
 
   // Try to get token from localStorage for authenticated calls
   function getToken() {
-    return localStorage.getItem('wb_token') || '';
+    // Check all possible token sources in priority order:
+    // 1. wb_token (from Ring Leader login)
+    // 2. rl_jwt (legacy Ring Leader JWT)
+    // 3. operator_token (direct operator access)
+    return localStorage.getItem('wb_token') 
+        || localStorage.getItem('rl_jwt') 
+        || localStorage.getItem('operator_token') 
+        || '';
   }
 
   function authHeaders() {
