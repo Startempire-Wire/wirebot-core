@@ -7378,7 +7378,19 @@ func (s *Server) pollDueIntegrations() {
 		case "dropbox":
 			pollErr = s.pollDropbox(id, credential, config, lastPoll)
 		case "stripe":
-			pollErr = s.pollStripe(id, credential, lastPoll)
+			// Support API key from env var (for operator's own accounts)
+			apiKey := credential
+			if apiKey == "" && config != "" {
+				var cfg map[string]string
+				json.Unmarshal([]byte(config), &cfg)
+				if envVar := cfg["api_key_env"]; envVar != "" {
+					apiKey = os.Getenv(envVar)
+				}
+			}
+			if apiKey == "" {
+				apiKey = stripeKey // Fallback to default STRIPE_SECRET_KEY
+			}
+			pollErr = s.pollStripe(id, apiKey, lastPoll)
 		case "github":
 			pollErr = s.pollGitHub(id, credential, lastPoll)
 		default:
