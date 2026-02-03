@@ -6,10 +6,10 @@
    * 1. Welcome header + user avatar + score pill
    * 2. Business Setup Progress bar (START % / COMPLETED) + NEXT TASK
    * 3. Finish Onboarding cards (horizontal scroll, only if incomplete)
-   * 4. Network Growth Partners (avatar row + CONNECT)
-   * 5. Stage selector pills (Idea / Launch / Growth)
+   * 4. Network Growth Partners (collapsible, real members only)
+   * 5. Stage selector pills (Idea / Launch / Growth) — filters categories in-place
    * 6. Daily Stand Up Tasks (checkboxes + action icons)
-   * 7. Business Set Up Tasks (checkboxes + action icons)
+   * 7. Business Set Up Tasks (grouped by category, collapsible)
    * 8. Wire Bot Intelligent Suggestions (horizontal scroll cards)
    * 9. Ask Wire Bot input bar + bot avatar
    *
@@ -28,10 +28,11 @@
     { id: 'SEW', label: 'SEW Network', icon: '🕸' },
   ];
 
+  // All checklist data (loaded once per stage)
+  let allCategories = $state([]);   // full categories from API
+  let categories = $state([]);      // filtered for display
   let checklist = $state(null);
-  let categories = $state([]);  // grouped checklist data
   let dailyTasks = $state([]);
-  let setupTasks = $state([]);
   let nextTask = $state(null);
   let stage = $state('launch');
   let askInput = $state('');
@@ -43,15 +44,15 @@
   let loading = $state(true);
   let partners = $state([]);
   let expandedTask = $state(null);
-  let expandedCat = $state(null);  // which category is open
-  let partnersOpen = $state(true); // growth partners section
+  let expandedCat = $state(null);
+  let partnersOpen = $state(false); // collapsed by default (empty)
   let onboardingComplete = $state(false);
+  let stageLoading = $state(false);
+  let hasLoaded = $state(false);
 
   const API = '';
+  function headers() { return { 'Authorization': `Bearer ${token}` }; }
 
-  function headers() {
-    return { 'Authorization': `Bearer ${token}` };
-  }
   async function authFetch(path) {
     try {
       const res = await fetch(`${API}${path}`, { headers: headers() });
@@ -60,43 +61,62 @@
     } catch { return null; }
   }
 
-  $effect(() => { if (token) loadAll(); });
+  // Only fire once on mount, not on every token reactivity tick
+  $effect(() => { if (token && !hasLoaded) { hasLoaded = true; loadAll(); } });
 
   async function loadAll() {
     loading = true;
-    const [grouped, dt, dr, mem] = await Promise.all([
+
+    // Parallel: checklist + daily tasks + drift (skip slow external member call)
+    const [grouped, dt, dr] = await Promise.all([
       authFetch(`/v1/checklist?action=grouped&stage=${stage}`),
       authFetch('/v1/checklist?action=daily'),
       authFetch('/v1/pairing/neural-drift'),
-      authFetch('/v1/network/members?limit=8'),
     ]);
 
     if (grouped) {
       checklist = { total: grouped.total, completed: grouped.completed, percent: grouped.percent, stage: grouped.stage };
       nextTask = grouped.next_task || null;
       stage = grouped.stage || 'launch';
-      categories = grouped.categories || [];
+      allCategories = grouped.categories || [];
+      categories = allCategories;
       onboardingComplete = (grouped.percent || 0) >= 100;
-      // Extract setup tasks from categories (incomplete ones across all cats)
-      setupTasks = [];
-      for (const cat of categories) {
-        for (const t of (cat.tasks || [])) {
-          if (t.status !== 'completed' && t.status !== 'done' && t.status !== 'skipped') {
-            setupTasks.push({ ...t, _catLabel: cat.label, _catIcon: cat.icon });
-          }
-        }
-      }
     }
     if (dt?.tasks) dailyTasks = dt.tasks.slice(0, 5);
     if (dr?.drift) drift = dr.drift;
 
-    // Real network members from BuddyBoss
-    if (mem?.members) {
-      partners = mem.members;
-    }
-
     buildSuggestions();
     loading = false;
+
+    // Load partners in background (non-blocking — may be slow)
+    authFetch('/v1/network/members?limit=8').then(mem => {
+      if (mem?.members) partners = mem.members;
+      if (partners.length > 0) partnersOpen = true;
+    });
+  }
+
+  // Stage change — only reload checklist, not everything
+  async function changeStage(s) {
+    if (s === stage) return;
+    stage = s;
+    stageLoading = true;
+    const grouped = await authFetch(`/v1/checklist?action=grouped&stage=${stage}`);
+    if (grouped) {
+      checklist = { total: grouped.total, completed: grouped.completed, percent: grouped.percent, stage: grouped.stage };
+      nextTask = grouped.next_task || null;
+      allCategories = grouped.categories || [];
+      categories = allCategories;
+      onboardingComplete = (grouped.percent || 0) >= 100;
+    }
+    expandedCat = null;
+    stageLoading = false;
+  }
+
+  // Business filter — filters events/display, doesn't reload
+  function switchBusiness(bizId) {
+    dispatch('businessChange', bizId);
+    // Locally: could filter categories if they have business tags
+    // For now, business filter is for score/feed, checklist is operator-wide
   }
 
   function buildSuggestions() {
@@ -135,17 +155,41 @@
 
   async function completeTask(id) {
     await fetch(`${API}/v1/checklist?action=complete&id=${id}`, { method: 'POST', headers: headers() });
-    loadAll();
+    // Reload just checklist
+    const grouped = await authFetch(`/v1/checklist?action=grouped&stage=${stage}`);
+    if (grouped) {
+      checklist = { total: grouped.total, completed: grouped.completed, percent: grouped.percent, stage: grouped.stage };
+      nextTask = grouped.next_task || null;
+      allCategories = grouped.categories || [];
+      categories = allCategories;
+      onboardingComplete = (grouped.percent || 0) >= 100;
+    }
+    const dt = await authFetch('/v1/checklist?action=daily');
+    if (dt?.tasks) dailyTasks = dt.tasks.slice(0, 5);
+    buildSuggestions();
   }
 
-  function changeStage(s) { stage = s; loadAll(); }
+  async function skipTask(id) {
+    await fetch(`${API}/v1/checklist?action=complete&id=${id}`, { method: 'POST', headers: headers() });
+    const grouped = await authFetch(`/v1/checklist?action=grouped&stage=${stage}`);
+    if (grouped) {
+      checklist = { total: grouped.total, completed: grouped.completed, percent: grouped.percent, stage: grouped.stage };
+      nextTask = grouped.next_task || null;
+      allCategories = grouped.categories || [];
+      categories = allCategories;
+      onboardingComplete = (grouped.percent || 0) >= 100;
+    }
+  }
 
   function handleSuggestion(action) {
-    if (action === 'score') dispatch('nav', 'score');
+    if (action === 'score' || action === 'intent') dispatch('nav', 'score');
     else if (action === 'settings') dispatch('nav', 'settings');
     else if (action === 'ship') dispatch('openFab');
     else if (action === 'handshake') doHandshake();
-    else if (action === 'intent') dispatch('nav', 'score');
+    else if (action === 'checklist') {
+      // Scroll to checklist section
+      document.querySelector('.cat-list')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
   }
 
   async function doHandshake() {
@@ -169,7 +213,7 @@
     <!-- ═══ 1. WELCOME HEADER ═══ -->
     <div class="header">
       <div class="header-left">
-        <h1>Welcome, {user?.display_name?.split(' ')[0] || 'Verious'}!</h1>
+        <h1>Welcome, {user?.display_name?.split(' ')[0] || 'Operator'}!</h1>
         {#if data?.score}
           <div class="score-row">
             <span class="score-num" style="color:{signalColor(data.score.execution_score)}">⚡ {data.score.execution_score}</span>
@@ -183,7 +227,11 @@
         {/if}
       </div>
       <div class="header-right">
-        <div class="avatar">{user?.display_name?.[0] || '👤'}</div>
+        {#if user?.avatar_url}
+          <img class="avatar-img" src={user.avatar_url} alt="" />
+        {:else}
+          <div class="avatar">{user?.display_name?.[0] || '👤'}</div>
+        {/if}
       </div>
     </div>
 
@@ -192,7 +240,7 @@
       <div class="biz-row">
         {#each BUSINESSES as biz}
           <button class="biz-chip" class:active={activeBusiness === biz.id}
-            onclick={() => { dispatch('businessChange', biz.id); }}>
+            onclick={() => switchBusiness(biz.id)}>
             {biz.icon} {biz.label}
           </button>
         {/each}
@@ -203,7 +251,7 @@
     {#if checklist}
       <div class="card setup-card">
         <div class="setup-header">
-          <span class="setup-label">BUSINESS SETUP TASKS — {checklist.percent || 0}%</span>
+          <span class="setup-label">BUSINESS SETUP — {stage.toUpperCase()} STAGE</span>
           <span class="setup-count">{checklist.completed || 0}/{checklist.total || 0}</span>
         </div>
         <div class="progress-wrap">
@@ -211,94 +259,97 @@
             <div class="progress-fill" style="width:{checklist.percent || 0}%"></div>
           </div>
           <div class="progress-labels">
-            <span class="progress-start">START {checklist.percent || 0}%</span>
-            <span class="progress-end">{onboardingComplete ? 'COMPLETED' : 'IN PROGRESS'}</span>
+            <span class="progress-start">{checklist.percent || 0}%</span>
+            <span class="progress-end">{onboardingComplete ? '✅ COMPLETED' : 'IN PROGRESS'}</span>
           </div>
         </div>
         <div class="big-stat">{checklist.completed || 0} <span class="big-stat-label">TASKS COMPLETED</span></div>
         {#if nextTask}
-          <div class="next-task">
-            <span class="next-tag">NEXT TASK:</span>
+          <button class="next-task" onclick={() => {
+            // Scroll to the task's category and expand it
+            if (nextTask.category) {
+              expandedCat = nextTask.category;
+              setTimeout(() => document.querySelector('.cat-tasks')?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 50);
+            }
+          }}>
+            <span class="next-tag">NEXT →</span>
             <span class="next-title">{nextTask.title || nextTask}</span>
-            <button class="next-action" onclick={() => nextTask?.id && completeTask(nextTask.id)}>
-              <span class="action-icons">✏️ ✓</span>
-            </button>
-          </div>
+            <span class="next-cat">{nextTask._catIcon || '📋'}</span>
+          </button>
         {/if}
       </div>
     {/if}
 
     <!-- ═══ 3. FINISH ONBOARDING (if not complete) ═══ -->
     {#if checklist && !onboardingComplete}
-      <div class="section-header">
-        <span>FINISH ONBOARDING</span>
-      </div>
+      <div class="section-header"><span>FINISH ONBOARDING</span></div>
       <div class="onboard-scroll">
-        <div class="onboard-card">
+        <button class="onboard-card" onclick={() => dispatch('openPairing')}>
           <div class="ob-icon">🎯</div>
           <div class="ob-title">Pairing Assessment</div>
           <div class="ob-desc">Help Wirebot understand you</div>
-          <button class="ob-btn" onclick={() => dispatch('openPairing')}>Start →</button>
-        </div>
-        <div class="onboard-card">
+          <span class="ob-btn">Start →</span>
+        </button>
+        <button class="onboard-card" onclick={() => dispatch('nav', 'settings')}>
           <div class="ob-icon">💳</div>
           <div class="ob-title">Connect Revenue</div>
           <div class="ob-desc">Stripe, FreshBooks, or Bank</div>
-          <button class="ob-btn" onclick={() => dispatch('nav', 'settings')}>Connect →</button>
-        </div>
-        <div class="onboard-card">
+          <span class="ob-btn">Connect →</span>
+        </button>
+        <button class="onboard-card" onclick={() => dispatch('openFab')}>
           <div class="ob-icon">🚀</div>
           <div class="ob-title">Ship First Thing</div>
           <div class="ob-desc">Log your first ship event</div>
-          <button class="ob-btn" onclick={() => dispatch('openFab')}>Ship →</button>
-        </div>
+          <span class="ob-btn">Ship →</span>
+        </button>
       </div>
     {/if}
 
-    <!-- ═══ 4. NETWORK GROWTH PARTNERS (real members) ═══ -->
+    <!-- ═══ 4. NETWORK GROWTH PARTNERS ═══ -->
     <button class="section-header section-toggle" onclick={() => partnersOpen = !partnersOpen}>
-      <span>{partnersOpen ? '▾' : '▸'} NETWORK GROWTH PARTNERS</span>
+      <span>{partnersOpen ? '▾' : '▸'} NETWORK GROWTH PARTNERS {partners.length > 0 ? `(${partners.length})` : ''}</span>
       <span class="connect-link" onclick={(e) => { e.stopPropagation(); window.open('https://startempirewire.com/members/', '_blank'); }}>CONNECT ➜</span>
     </button>
-    {#if !partnersOpen}
-      <!-- collapsed — just the header -->
-    {:else if partners.length > 0}
-      <div class="partners-row">
-        {#each partners as p}
-          <a class="partner-avatar" href={p.link || '#'} target="_blank" title={p.name}>
-            {#if p.avatar}
-              <img class="pa-img" src={p.avatar} alt={p.name} />
-            {:else}
-              <div class="pa-circle">{p.name?.[0] || '?'}</div>
-            {/if}
-            <span class="pa-name">{p.name?.split(' ')[0] || ''}</span>
+    {#if partnersOpen}
+      {#if partners.length > 0}
+        <div class="partners-row">
+          {#each partners as p}
+            <a class="partner-avatar" href={p.link || '#'} target="_blank" title={p.name}>
+              {#if p.avatar}
+                <img class="pa-img" src={p.avatar} alt={p.name} />
+              {:else}
+                <div class="pa-circle">{p.name?.[0] || '?'}</div>
+              {/if}
+              <span class="pa-name">{p.name?.split(' ')[0] || ''}</span>
+            </a>
+          {/each}
+          <a class="partner-avatar" href="https://startempirewire.com/members/" target="_blank">
+            <div class="pa-circle pa-add">+</div>
+            <span class="pa-name">Add</span>
           </a>
-        {/each}
-        <a class="partner-avatar" href="https://startempirewire.com/members/" target="_blank">
-          <div class="pa-circle pa-add">+</div>
-          <span class="pa-name">Add</span>
-        </a>
-      </div>
-    {:else}
-      <div class="partners-empty">
-        <div class="pe-avatars">
-          <div class="pa-circle pe-ghost">👤</div>
-          <div class="pa-circle pe-ghost">👤</div>
-          <div class="pa-circle pe-ghost">👤</div>
-          <div class="pa-circle pa-add pe-pulse">+</div>
         </div>
-        <p class="pe-text">No growth partners yet</p>
-        <p class="pe-hint">Connect with members on Startempire Wire and designate them as growth partners to see them here.</p>
-        <a class="pe-btn" href="https://startempirewire.com/members/" target="_blank">Find Partners →</a>
-      </div>
+      {:else}
+        <div class="partners-empty">
+          <div class="pe-avatars">
+            <div class="pa-circle pe-ghost">👤</div>
+            <div class="pa-circle pe-ghost">👤</div>
+            <div class="pa-circle pe-ghost">👤</div>
+            <div class="pa-circle pa-add pe-pulse">+</div>
+          </div>
+          <p class="pe-text">No growth partners yet</p>
+          <p class="pe-hint">Connect with members on Startempire Wire, then designate them as growth partners.</p>
+          <a class="pe-btn" href="https://startempirewire.com/members/" target="_blank">Find Partners →</a>
+        </div>
+      {/if}
     {/if}
 
     <!-- ═══ 5. STAGE SELECTOR ═══ -->
     <div class="stage-row">
       {#each ['idea', 'launch', 'growth'] as s}
-        <button class="stage-pill" class:active={stage === s} onclick={() => changeStage(s)}>
+        <button class="stage-pill" class:active={stage === s} disabled={stageLoading} onclick={() => changeStage(s)}>
           <span class="stage-dot" class:active={stage === s}></span>
           {s.charAt(0).toUpperCase() + s.slice(1)}
+          {#if stageLoading && stage === s}<span class="stage-spin">⟳</span>{/if}
         </button>
       {/each}
     </div>
@@ -312,22 +363,27 @@
             <button class="task-check" onclick={() => task.id && completeTask(task.id)}>
               <span class="check-box" class:checked={task.completed}>{task.completed ? '✓' : ''}</span>
             </button>
-            <span class="task-title">{task.title || 'Create Mission Statement'}</span>
-            <div class="task-actions">
-              <button class="ta-btn" title="Fire" onclick={() => task.id && completeTask(task.id)}>🔥</button>
-              <button class="ta-btn" title="Configure" onclick={() => { expandedTask = expandedTask === task.id ? null : task.id; }}>⚙️</button>
-              <button class="ta-btn" title="Details" onclick={() => dispatch('taskDetail', task)}>📋</button>
-            </div>
-          </div>
-          {#if expandedTask === task.id}
-            <div class="task-detail">
-              <div class="td-row"><span class="td-label">Category:</span> <span>{task.category || 'General'}</span></div>
-              <div class="td-row"><span class="td-label">Stage:</span> <span>{task.stage || stage}</span></div>
-              {#if task.description}
-                <div class="td-desc">{task.description}</div>
+            <div class="task-body">
+              <span class="task-title">{task.title || 'Untitled task'}</span>
+              {#if expandedTask === `daily-${task.id}`}
+                <div class="task-detail-inline">
+                  {#if task.description}<p class="tdi-desc">{task.description}</p>{/if}
+                  {#if task.aiSuggestion}<div class="task-ai">💡 {task.aiSuggestion}</div>{/if}
+                  <div class="tdi-meta">
+                    <span>{task.category || 'General'}</span>
+                    <span>•</span>
+                    <span>{task.stage || stage}</span>
+                  </div>
+                </div>
               {/if}
             </div>
-          {/if}
+            <div class="task-actions">
+              <button class="ta-btn" title="Complete" onclick={() => task.id && completeTask(task.id)}>✅</button>
+              <button class="ta-btn" title="Details" onclick={() => { expandedTask = expandedTask === `daily-${task.id}` ? null : `daily-${task.id}`; }}>
+                {expandedTask === `daily-${task.id}` ? '▾' : '💡'}
+              </button>
+            </div>
+          </div>
         {/each}
       </div>
     {:else}
@@ -336,7 +392,9 @@
 
     <!-- ═══ 7. BUSINESS SET UP TASKS (grouped by category) ═══ -->
     <div class="section-header"><span>BUSINESS SET UP TASKS</span></div>
-    {#if categories.length > 0}
+    {#if stageLoading}
+      <div class="task-empty"><span class="spinner small"></span></div>
+    {:else if categories.length > 0}
       <div class="cat-list">
         {#each categories as cat}
           <div class="cat-group">
@@ -360,19 +418,17 @@
                     </button>
                     <div class="task-body">
                       <span class="task-title">{task.title}</span>
-                      {#if task.aiSuggestion && expandedTask === task.id}
-                        <div class="task-ai">💡 {task.aiSuggestion}</div>
+                      {#if expandedTask === task.id}
+                        {#if task.description}<p class="tdi-desc">{task.description}</p>{/if}
+                        {#if task.aiSuggestion}<div class="task-ai">💡 {task.aiSuggestion}</div>{/if}
                       {/if}
                     </div>
                     <div class="task-actions">
-                      <button class="ta-btn" title="Details" onclick={() => { expandedTask = expandedTask === task.id ? null : task.id; }}>
+                      <button class="ta-btn" title="AI Hint" onclick={() => { expandedTask = expandedTask === task.id ? null : task.id; }}>
                         {expandedTask === task.id ? '▾' : '💡'}
                       </button>
                       {#if task.status !== 'completed' && task.status !== 'done'}
-                        <button class="ta-btn" title="Skip" onclick={async () => {
-                          await fetch(`${API}/v1/checklist?action=complete&id=${task.id}`, { method: 'POST', headers: headers() });
-                          loadAll();
-                        }}>⏭️</button>
+                        <button class="ta-btn" title="Skip / N/A" onclick={() => skipTask(task.id)}>⏭️</button>
                       {/if}
                     </div>
                   </div>
@@ -383,11 +439,11 @@
         {/each}
       </div>
     {:else}
-      <div class="task-empty">Loading tasks...</div>
+      <div class="task-empty">No tasks for this stage</div>
     {/if}
 
     <!-- ═══ 8. WIREBOT SUGGESTIONS ═══ -->
-    <div class="section-header"><span>WIRE BOT INTELLIGENT SUGGESTIONS</span></div>
+    <div class="section-header"><span>WIRE BOT SUGGESTIONS</span></div>
     <div class="suggestions-scroll">
       {#each suggestions as sug}
         <button class="sug-card" onclick={() => handleSuggestion(sug.action)}>
@@ -409,7 +465,7 @@
       <input type="text" bind:value={askInput} onkeydown={keydown}
         placeholder="Ask Wire Bot A Question..." disabled={chatLoading} />
       <button class="ask-send" onclick={askWirebot} disabled={chatLoading || !askInput.trim()}>
-        <span class="bot-icon">🤖</span>
+        {#if chatLoading}<span class="spinner small"></span>{:else}<span class="bot-icon">🤖</span>{/if}
       </button>
     </div>
 
@@ -420,6 +476,7 @@
   .dashboard { padding: 16px 16px 120px; max-width: 480px; margin: 0 auto; }
   .loading { display: flex; align-items: center; justify-content: center; height: 60vh; }
   .spinner { width: 32px; height: 32px; border: 3px solid #333; border-top-color: #7c7cff; border-radius: 50%; animation: spin .8s linear infinite; }
+  .spinner.small { width: 16px; height: 16px; border-width: 2px; }
   @keyframes spin { to { transform: rotate(360deg); } }
 
   /* ─── Header ─── */
@@ -431,6 +488,7 @@
   .streak { font-size: 12px; background: #ff440020; border: 1px solid #ff440040; padding: 2px 8px; border-radius: 10px; color: #ff8800; }
   .drift-chip { font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 10px; border: 1px solid transparent; }
   .avatar { width: 40px; height: 40px; border-radius: 50%; background: #2a2a3a; display: flex; align-items: center; justify-content: center; font-size: 18px; color: #888; font-weight: 700; }
+  .avatar-img { width: 40px; height: 40px; border-radius: 50%; object-fit: cover; border: 2px solid #2a2a3a; }
 
   /* ─── Business Filter ─── */
   .biz-row { display: flex; gap: 6px; overflow-x: auto; margin-bottom: 14px; scrollbar-width: none; -webkit-overflow-scrolling: touch; }
@@ -456,11 +514,11 @@
   .big-stat { font-size: 32px; font-weight: 800; color: #e0e0e8; text-align: center; margin: 10px 0 6px; }
   .big-stat-label { font-size: 12px; font-weight: 700; color: #666; letter-spacing: .08em; display: block; }
 
-  .next-task { display: flex; align-items: center; gap: 8px; padding: 8px 10px; background: #1a1a2a; border-radius: 8px; margin-top: 6px; }
+  .next-task { display: flex; align-items: center; gap: 8px; padding: 8px 10px; background: #1a1a2a; border-radius: 8px; margin-top: 6px; width: 100%; border: 1px solid #1e1e30; cursor: pointer; transition: border-color .15s; color: inherit; }
+  .next-task:hover { border-color: #7c7cff40; }
   .next-tag { font-size: 10px; font-weight: 800; color: #7c7cff; letter-spacing: .05em; white-space: nowrap; }
-  .next-title { font-size: 13px; color: #c8c8d0; flex: 1; }
-  .next-action { background: none; border: none; color: #888; font-size: 13px; cursor: pointer; padding: 4px; }
-  .action-icons { display: flex; gap: 4px; }
+  .next-title { font-size: 13px; color: #c8c8d0; flex: 1; text-align: left; }
+  .next-cat { font-size: 14px; }
 
   /* ─── Section Headers ─── */
   .section-header { display: flex; justify-content: space-between; align-items: center; margin: 16px 0 8px; }
@@ -471,15 +529,15 @@
   /* ─── Onboarding Cards ─── */
   .onboard-scroll { display: flex; gap: 10px; overflow-x: auto; padding-bottom: 4px; margin-bottom: 8px; scrollbar-width: none; }
   .onboard-scroll::-webkit-scrollbar { display: none; }
-  .onboard-card { flex-shrink: 0; width: 140px; padding: 14px; background: #16161e; border: 1px solid #1e1e30; border-radius: 10px; }
+  .onboard-card { flex-shrink: 0; width: 140px; padding: 14px; background: #16161e; border: 1px solid #1e1e30; border-radius: 10px; text-align: left; cursor: pointer; transition: border-color .15s; color: inherit; }
+  .onboard-card:hover { border-color: #7c7cff40; }
   .ob-icon { font-size: 24px; margin-bottom: 6px; }
   .ob-title { font-size: 12px; font-weight: 700; color: #d0d0d8; margin-bottom: 2px; }
   .ob-desc { font-size: 11px; color: #666; margin-bottom: 8px; }
-  .ob-btn { background: #7c7cff20; border: none; color: #7c7cff; font-size: 11px; font-weight: 600; padding: 5px 12px; border-radius: 6px; cursor: pointer; }
-  .ob-btn:hover { background: #7c7cff30; }
+  .ob-btn { background: #7c7cff20; color: #7c7cff; font-size: 11px; font-weight: 600; padding: 5px 12px; border-radius: 6px; display: inline-block; }
 
   /* ─── Partners (real BuddyBoss members) ─── */
-  .partners-row { display: flex; gap: 12px; overflow-x: auto; padding: 4px 0 12px; scrollbar-width: none; }
+  .partners-row { display: flex; gap: 12px; overflow-x: auto; padding: 4px 0 12px; scrollbar-width: none; animation: section-slide 200ms ease-out; }
   .partners-row::-webkit-scrollbar { display: none; }
   .partner-avatar { display: flex; flex-direction: column; align-items: center; gap: 4px; text-decoration: none; flex-shrink: 0; }
   .pa-img { width: 44px; height: 44px; border-radius: 50%; object-fit: cover; border: 2px solid #2a2a3a; }
@@ -488,7 +546,7 @@
   .pa-name { font-size: 10px; color: #666; max-width: 50px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: center; }
 
   /* Partners empty state */
-  .partners-empty { background: #16161e; border: 1px solid #1e1e30; border-radius: 12px; padding: 20px; text-align: center; margin-bottom: 12px; }
+  .partners-empty { background: #16161e; border: 1px solid #1e1e30; border-radius: 12px; padding: 20px; text-align: center; margin-bottom: 12px; animation: section-slide 200ms ease-out; }
   .pe-avatars { display: flex; justify-content: center; gap: 10px; margin-bottom: 12px; }
   .pe-ghost { opacity: 0.2; }
   .pe-pulse { animation: pulse 2s ease-in-out infinite; opacity: 0.6; }
@@ -501,9 +559,17 @@
   /* ─── Stage Pills ─── */
   .stage-row { display: flex; gap: 8px; margin-bottom: 14px; }
   .stage-pill { flex: 1; padding: 9px 4px; border-radius: 22px; border: 1px solid #1e1e30; background: #16161e; color: #888; font-size: 12px; font-weight: 600; cursor: pointer; text-align: center; display: flex; align-items: center; justify-content: center; gap: 6px; transition: all .2s; }
+  .stage-pill:disabled { opacity: 0.6; }
   .stage-pill.active { background: #7c7cff; border-color: #7c7cff; color: white; }
-  .stage-dot { width: 6px; height: 6px; border-radius: 50%; background: #444; }
+  .stage-dot { width: 6px; height: 6px; border-radius: 50%; background: #444; transition: background .2s; }
   .stage-dot.active { background: white; }
+  .stage-spin { animation: spin .6s linear infinite; font-size: 10px; }
+
+  /* ─── Section slide animation ─── */
+  @keyframes section-slide {
+    from { opacity: 0; transform: translateY(8px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
 
   /* ─── Tasks ─── */
   .task-list { display: flex; flex-direction: column; gap: 2px; margin-bottom: 8px; }
@@ -514,10 +580,13 @@
   .check-box.checked { background: #7c7cff20; border-color: #7c7cff; }
   .task-body { flex: 1; min-width: 0; }
   .task-title { font-size: 13px; color: #c0c0c0; }
-  .task-ai { font-size: 11px; color: #888; margin-top: 4px; line-height: 1.5; padding: 6px 8px; background: #12121a; border-radius: 6px; border-left: 2px solid #7c7cff40; }
+  .task-ai { font-size: 11px; color: #888; margin-top: 6px; line-height: 1.5; padding: 6px 8px; background: #12121a; border-radius: 6px; border-left: 2px solid #7c7cff40; animation: section-slide 150ms ease-out; }
+  .task-detail-inline { margin-top: 6px; animation: section-slide 150ms ease-out; }
+  .tdi-desc { font-size: 12px; color: #777; margin: 0 0 4px; line-height: 1.5; }
+  .tdi-meta { font-size: 10px; color: #555; display: flex; gap: 6px; margin-top: 4px; }
   .task-actions { display: flex; gap: 2px; flex-shrink: 0; }
-  .ta-btn { background: none; border: none; font-size: 12px; cursor: pointer; padding: 2px 3px; opacity: 0.5; transition: opacity .15s; }
-  .ta-btn:hover { opacity: 1; }
+  .ta-btn { background: none; border: none; font-size: 12px; cursor: pointer; padding: 4px 5px; opacity: 0.5; transition: opacity .15s; border-radius: 4px; }
+  .ta-btn:hover { opacity: 1; background: #1e1e30; }
   .task-empty { padding: 20px; text-align: center; color: #555; font-size: 13px; }
 
   /* ─── Category Groups (like 100tasks) ─── */
@@ -532,19 +601,19 @@
   .cat-bar { width: 40px; height: 4px; background: #1e1e30; border-radius: 2px; overflow: hidden; }
   .cat-fill { height: 100%; background: #7c7cff; border-radius: 2px; transition: width .4s; }
   .cat-chevron { font-size: 10px; color: #555; }
-  .cat-tasks { padding: 0 12px 8px; border-top: 1px solid #1a1a28; }
+  .cat-tasks { padding: 4px 12px 8px; border-top: 1px solid #1a1a28; animation: section-slide 150ms ease-out; }
 
   /* ─── Suggestions ─── */
   .suggestions-scroll { display: flex; gap: 10px; overflow-x: auto; padding-bottom: 4px; margin-bottom: 14px; scrollbar-width: none; }
   .suggestions-scroll::-webkit-scrollbar { display: none; }
-  .sug-card { flex-shrink: 0; width: 150px; padding: 12px; background: #16161e; border: 1px solid #1e1e30; border-radius: 10px; text-align: left; cursor: pointer; transition: border-color .2s; color: inherit; }
+  .sug-card { flex-shrink: 0; width: 150px; padding: 12px; background: #16161e; border: 1px solid #1e1e30; border-radius: 10px; text-align: left; cursor: pointer; transition: border-color .15s; color: inherit; }
   .sug-card:hover { border-color: #7c7cff40; }
   .sug-icon { font-size: 20px; margin-bottom: 4px; }
   .sug-title { font-size: 12px; font-weight: 700; color: #d0d0d8; margin-bottom: 2px; }
   .sug-text { font-size: 11px; color: #666; line-height: 1.4; }
 
   /* ─── Ask Bar ─── */
-  .chat-bubble { background: #16161e; border: 1px solid #1e1e30; border-radius: 10px; padding: 12px; margin-bottom: 10px; }
+  .chat-bubble { background: #16161e; border: 1px solid #1e1e30; border-radius: 10px; padding: 12px; margin-bottom: 10px; animation: section-slide 200ms ease-out; }
   .cb-header { font-size: 11px; color: #7c7cff; font-weight: 700; margin-bottom: 4px; }
   .cb-text { font-size: 13px; color: #d0d0d0; white-space: pre-wrap; line-height: 1.5; }
   .ask-bar { display: flex; gap: 8px; }
