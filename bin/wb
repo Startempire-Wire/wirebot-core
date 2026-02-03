@@ -1249,6 +1249,11 @@ SCOREBOARD (wins.wirebot.chat)
   wb scoreboard             Quick scoreboard view (alias: wb wins)
   wb card daily|weekly|season  Open social share card (SVG)
 
+DRIFT (Neural Sync)
+  wb drift                 Full Drift status — score, components, modesty reflex
+  wb handshake             Initiate daily Neural Handshake (morning sync ritual)
+  wb rabbit                R.A.B.I.T. detection status (spirals, avoidance, tool-hopping)
+
 ADVANCED
   wb raw <tool> '<args>'    Invoke any registered gateway tool with raw JSON args
                             Tools: wirebot_recall, wirebot_remember,
