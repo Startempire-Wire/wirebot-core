@@ -20,7 +20,6 @@
   // Swipe state
   let startX = 0;
   let startY = 0;
-  let currentX = 0;
   let dragging = $state(false);
   let swipeOffset = $state(0);
   let swipeOpacity = $state(0);
@@ -40,10 +39,6 @@
   
   function exit() {
     dispatch('exit');
-    // Also try navigation
-    if (typeof window !== 'undefined') {
-      window.history.back();
-    }
   }
   
   async function loadQueue() {
@@ -58,12 +53,10 @@
       counts.total = counts.pending + counts.approved + counts.rejected;
       currentIndex = 0;
       
-      // Calculate initial power from approved count
       const totalReviewed = counts.approved + counts.rejected;
       memoryPower = (totalReviewed * 10) % POWER_PER_LEVEL;
       powerLevel = Math.floor((totalReviewed * 10) / POWER_PER_LEVEL) + 1;
       
-      // Load conflicts
       await loadConflicts();
     } catch (e) {
       console.error('Failed to load memory queue:', e);
@@ -73,15 +66,12 @@
   
   async function loadConflicts() {
     try {
-      const res = await fetch(`${API}/v1/memory/conflicts`, {
-        headers: authHeaders()
-      });
+      const res = await fetch(`${API}/v1/memory/conflicts`, { headers: authHeaders() });
       if (res.ok) {
         const data = await res.json();
         conflicts = data.conflicts || [];
       }
     } catch (e) {
-      // Conflicts endpoint may not exist yet
       conflicts = [];
     }
   }
@@ -91,7 +81,6 @@
     memoryPower += gain;
     streak++;
     
-    // Level up check
     if (memoryPower >= POWER_PER_LEVEL) {
       memoryPower = memoryPower - POWER_PER_LEVEL;
       powerLevel++;
@@ -142,42 +131,23 @@
     }
   }
   
-  async function resolveConflict(conflictId, keepId) {
-    try {
-      await fetch(`${API}/v1/memory/conflicts/${conflictId}/resolve`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...authHeaders() },
-        body: JSON.stringify({ keep: keepId })
-      });
-      conflicts = conflicts.filter(c => c.id !== conflictId);
-      addPower('correct');
-    } catch (e) {
-      console.error('Failed to resolve conflict:', e);
-    }
-  }
-  
   function handleTouchStart(e) {
     if (correctionMode || animatingOut) return;
     startX = e.touches[0].clientX;
     startY = e.touches[0].clientY;
-    currentX = startX;
     dragging = true;
   }
   
   function handleTouchMove(e) {
     if (!dragging || correctionMode || animatingOut) return;
-    currentX = e.touches[0].clientX;
     const deltaY = Math.abs(e.touches[0].clientY - startY);
-    const deltaX = currentX - startX;
+    const deltaX = e.touches[0].clientX - startX;
     
     if (Math.abs(deltaX) > deltaY) {
       e.preventDefault();
       swipeOffset = deltaX;
       swipeOpacity = Math.min(Math.abs(deltaX) / SWIPE_THRESHOLD, 1);
-      
-      if (deltaX > 40) swipeDirection = 'right';
-      else if (deltaX < -40) swipeDirection = 'left';
-      else swipeDirection = null;
+      swipeDirection = deltaX > 40 ? 'right' : deltaX < -40 ? 'left' : null;
     }
   }
   
@@ -185,23 +155,15 @@
     if (!dragging || animatingOut) return;
     dragging = false;
     
-    if (swipeOffset > SWIPE_THRESHOLD) {
-      takeAction('approve');
-    } else if (swipeOffset < -SWIPE_THRESHOLD) {
-      takeAction('reject');
-    } else {
-      swipeOffset = 0;
-      swipeOpacity = 0;
-      swipeDirection = null;
-    }
+    if (swipeOffset > SWIPE_THRESHOLD) takeAction('approve');
+    else if (swipeOffset < -SWIPE_THRESHOLD) takeAction('reject');
+    else { swipeOffset = 0; swipeOpacity = 0; swipeDirection = null; }
   }
   
   function handleMouseDown(e) {
     if (correctionMode || animatingOut) return;
-    // Only start drag on the card itself
     if (e.target.closest('.memory-card')) {
       startX = e.clientX;
-      currentX = startX;
       dragging = true;
       e.preventDefault();
     }
@@ -209,34 +171,55 @@
   
   function handleMouseMove(e) {
     if (!dragging || correctionMode || animatingOut) return;
-    currentX = e.clientX;
-    swipeOffset = currentX - startX;
+    swipeOffset = e.clientX - startX;
     swipeOpacity = Math.min(Math.abs(swipeOffset) / SWIPE_THRESHOLD, 1);
+    swipeDirection = swipeOffset > 40 ? 'right' : swipeOffset < -40 ? 'left' : null;
+  }
+  
+  function handleMouseUp() { handleTouchEnd(); }
+  
+  function getSourceInfo(item) {
+    const type = item.source_type;
+    const file = item.source_file;
     
-    if (swipeOffset > 40) swipeDirection = 'right';
-    else if (swipeOffset < -40) swipeDirection = 'left';
-    else swipeDirection = null;
-  }
-  
-  function handleMouseUp() {
-    handleTouchEnd();
-  }
-  
-  function getConfidenceBadge(conf) {
-    if (conf >= 0.8) return { label: 'High', color: '#10b981' };
-    if (conf >= 0.5) return { label: 'Medium', color: '#f59e0b' };
-    return { label: 'Low', color: '#ef4444' };
-  }
-  
-  function getSourceLabel(type) {
-    switch (type) {
-      case 'obsidian': return { icon: '📓', label: 'Obsidian Vault' };
-      case 'conversation': return { icon: '💬', label: 'Conversation' };
-      case 'bootstrap': return { icon: '🚀', label: 'Initial Setup' };
-      case 'recovered': return { icon: '🔄', label: 'Recovered Memory' };
-      case 'inference': return { icon: '🤖', label: 'AI Inference' };
-      default: return { icon: '📄', label: type || 'Unknown' };
+    if (type === 'recovered') {
+      return {
+        icon: '⚠️',
+        label: 'Migrated Memory',
+        sublabel: 'Source unknown - imported from previous system',
+        hasContext: false
+      };
     }
+    if (type === 'pairing') {
+      return {
+        icon: '🎯',
+        label: 'Pairing Answer',
+        sublabel: file || 'From onboarding questionnaire',
+        hasContext: true
+      };
+    }
+    if (type === 'obsidian') {
+      return {
+        icon: '📓',
+        label: 'Obsidian Note',
+        sublabel: file || 'From your vault',
+        hasContext: true
+      };
+    }
+    if (type === 'conversation') {
+      return {
+        icon: '💬',
+        label: 'Conversation',
+        sublabel: file || 'Extracted from chat',
+        hasContext: true
+      };
+    }
+    return {
+      icon: '📄',
+      label: type || 'Unknown',
+      sublabel: file || 'No source information',
+      hasContext: !!item.source_context
+    };
   }
   
   function getPowerLabel(level) {
@@ -244,9 +227,7 @@
     return labels[Math.min(level - 1, labels.length - 1)];
   }
   
-  $effect(() => {
-    loadQueue();
-  });
+  $effect(() => { loadQueue(); });
   
   let currentItem = $derived(items[currentIndex]);
   let nextItems = $derived(items.slice(currentIndex + 1, currentIndex + 3));
@@ -256,188 +237,159 @@
 <svelte:window on:mouseup={handleMouseUp} on:mousemove={handleMouseMove} />
 
 <div class="memory-review">
-  <!-- Tap to exit header -->
   <header class="mr-header" onclick={exit}>
-    <button class="back-btn" onclick={exit}>
-      <span>←</span>
-    </button>
-    <div class="mr-title">
-      <span class="mr-icon">🧠</span>
-      <span>Memory Review</span>
-    </div>
+    <button class="back-btn">←</button>
+    <div class="mr-title">🧠 Memory Review</div>
     <div class="tap-hint">tap to exit</div>
   </header>
   
-  <!-- Memory Power Bar -->
+  <!-- Power Bar -->
   <div class="power-section" class:flash={powerFlash}>
     <div class="power-header">
       <span class="power-label">Memory Sync</span>
       <span class="power-level">Lv.{powerLevel} {getPowerLabel(powerLevel)}</span>
     </div>
     <div class="power-bar">
-      <div class="power-fill" style="width: {powerPercent}%">
-        <div class="power-glow"></div>
-      </div>
+      <div class="power-fill" style="width: {powerPercent}%"></div>
     </div>
     <div class="power-stats">
       <span>✓ {counts.approved}</span>
       <span>✗ {counts.rejected}</span>
-      {#if streak > 2}
-        <span class="streak">🔥 {streak} streak</span>
-      {/if}
+      {#if streak > 2}<span class="streak">🔥 {streak}</span>{/if}
     </div>
   </div>
   
-  <!-- Conflicts Alert -->
+  <!-- Conflicts -->
   {#if conflicts.length > 0}
     <button class="conflicts-alert" onclick={() => showConflicts = !showConflicts}>
-      <span class="alert-icon">⚠️</span>
-      <span class="alert-text">{conflicts.length} memory conflict{conflicts.length > 1 ? 's' : ''} detected</span>
-      <span class="alert-arrow">{showConflicts ? '▼' : '▶'}</span>
+      <span>⚠️</span>
+      <span class="alert-text">{conflicts.length} conflict{conflicts.length > 1 ? 's' : ''}</span>
+      <span>{showConflicts ? '▼' : '▶'}</span>
     </button>
-    
-    {#if showConflicts}
-      <div class="conflicts-list">
-        {#each conflicts as conflict}
-          <div class="conflict-card">
-            <div class="conflict-header">⚡ Conflicting Memories</div>
-            <div class="conflict-items">
-              <button class="conflict-option" onclick={() => resolveConflict(conflict.id, conflict.a.id)}>
-                <span class="option-text">"{conflict.a.text}"</span>
-                <span class="option-meta">{conflict.a.source}</span>
-              </button>
-              <div class="conflict-vs">VS</div>
-              <button class="conflict-option" onclick={() => resolveConflict(conflict.id, conflict.b.id)}>
-                <span class="option-text">"{conflict.b.text}"</span>
-                <span class="option-meta">{conflict.b.source}</span>
-              </button>
-            </div>
-            <div class="conflict-hint">Tap the correct one to keep</div>
-          </div>
-        {/each}
-      </div>
-    {/if}
   {/if}
   
   {#if loading}
-    <div class="mr-loading">
-      <div class="spinner"></div>
-      <span>Loading memories...</span>
-    </div>
+    <div class="mr-loading"><div class="spinner"></div>Loading...</div>
   {:else if items.length === 0}
     <div class="mr-empty" onclick={exit}>
       <div class="empty-check">✓</div>
       <h3>All caught up!</h3>
-      <p>No memories need review right now.</p>
-      <div class="power-summary">
-        <div class="summary-level">Level {powerLevel} • {getPowerLabel(powerLevel)}</div>
-        <div class="summary-stats">{counts.approved + counts.rejected} memories reviewed</div>
-      </div>
-      <div class="tap-exit">Tap anywhere to exit</div>
+      <p>Level {powerLevel} • {getPowerLabel(powerLevel)}</p>
+      <p class="tap-exit">Tap to exit</p>
     </div>
   {:else if currentItem}
     <div class="card-stack">
       {#each nextItems as _, i}
-        <div 
-          class="card-behind"
-          style="transform: scale({0.95 - i * 0.05}) translateY({(i + 1) * 8}px); opacity: {0.5 - i * 0.2};"
-        ></div>
+        <div class="card-behind" style="transform: scale({0.95 - i * 0.03}) translateY({(i + 1) * 12}px); opacity: {0.4 - i * 0.15};"></div>
       {/each}
       
       <div 
         class="memory-card"
         class:dragging
         class:animating={animatingOut}
-        style="transform: translateX({swipeOffset}px) rotate({swipeOffset * 0.05}deg);"
+        style="transform: translateX({swipeOffset}px) rotate({swipeOffset * 0.04}deg);"
         ontouchstart={handleTouchStart}
         ontouchmove={handleTouchMove}
         ontouchend={handleTouchEnd}
         onmousedown={handleMouseDown}
       >
-        <div class="swipe-overlay approve" style="opacity: {swipeDirection === 'right' ? swipeOpacity : 0}">
-          <span>✓ KEEP</span>
-        </div>
-        <div class="swipe-overlay reject" style="opacity: {swipeDirection === 'left' ? swipeOpacity : 0}">
-          <span>✗ DROP</span>
-        </div>
+        <!-- Swipe stamps -->
+        <div class="swipe-stamp approve" style="opacity: {swipeDirection === 'right' ? swipeOpacity : 0}">KEEP</div>
+        <div class="swipe-stamp reject" style="opacity: {swipeDirection === 'left' ? swipeOpacity : 0}">DROP</div>
         
         {#if !correctionMode}
-          <div class="card-content">
+          {@const sourceInfo = getSourceInfo(currentItem)}
+          
+          <div class="card-inner">
+            <!-- Source Header -->
             <div class="card-source">
-              <span class="source-icon">{getSourceLabel(currentItem.source_type).icon}</span>
-              <span class="source-label">{getSourceLabel(currentItem.source_type).label}</span>
+              <span class="source-icon">{sourceInfo.icon}</span>
+              <div class="source-text">
+                <div class="source-label">{sourceInfo.label}</div>
+                <div class="source-sub">{sourceInfo.sublabel}</div>
+              </div>
             </div>
             
+            <!-- The Memory -->
             <div class="card-memory">
-              {currentItem.memory_text}
+              "{currentItem.memory_text}"
             </div>
             
-            {#if currentItem.source_context}
-              <div class="card-context">
-                <div class="context-header">💡 Context</div>
-                <div class="context-body">{currentItem.source_context}</div>
-              </div>
-            {/if}
+            <!-- Context Section -->
+            <div class="card-context-section">
+              {#if currentItem.source_context}
+                <div class="context-header">📎 Source Context</div>
+                <blockquote class="context-quote">
+                  {currentItem.source_context}
+                </blockquote>
+              {:else if !sourceInfo.hasContext}
+                <div class="no-context">
+                  <div class="no-context-icon">❓</div>
+                  <div class="no-context-text">
+                    <strong>No source context available</strong>
+                    <p>This memory was imported without its original context. You'll need to verify it based on your own knowledge.</p>
+                  </div>
+                </div>
+              {:else}
+                <div class="no-context">
+                  <div class="no-context-icon">📝</div>
+                  <div class="no-context-text">
+                    <strong>Context not captured</strong>
+                    <p>The source exists but context wasn't recorded during extraction.</p>
+                  </div>
+                </div>
+              {/if}
+            </div>
             
+            <!-- Confidence -->
             <div class="card-confidence">
-              <div class="conf-bar">
-                <div 
-                  class="conf-fill" 
-                  style="width: {currentItem.confidence * 100}%; background: {getConfidenceBadge(currentItem.confidence).color}"
-                ></div>
+              <div class="conf-row">
+                <span class="conf-label">Confidence</span>
+                <span class="conf-value" class:high={currentItem.confidence >= 0.8} class:med={currentItem.confidence >= 0.5 && currentItem.confidence < 0.8} class:low={currentItem.confidence < 0.5}>
+                  {currentItem.confidence >= 0.8 ? 'High' : currentItem.confidence >= 0.5 ? 'Medium' : 'Low'}
+                </span>
               </div>
-              <span class="conf-label" style="color: {getConfidenceBadge(currentItem.confidence).color}">
-                {getConfidenceBadge(currentItem.confidence).label} confidence
-              </span>
+              <div class="conf-bar">
+                <div class="conf-fill" class:high={currentItem.confidence >= 0.8} class:med={currentItem.confidence >= 0.5 && currentItem.confidence < 0.8} class:low={currentItem.confidence < 0.5} style="width: {currentItem.confidence * 100}%"></div>
+              </div>
             </div>
           </div>
           
+          <!-- Actions -->
           <div class="card-actions">
             <button class="btn-action reject" onclick={() => takeAction('reject')}>
               <span class="btn-icon">✗</span>
-              <span class="btn-label">Drop</span>
-              <span class="btn-power">+5</span>
+              <span class="btn-text">Drop</span>
             </button>
             <button class="btn-action edit" onclick={() => { correctionMode = true; correctionText = currentItem.memory_text; }}>
               <span class="btn-icon">✎</span>
-              <span class="btn-label">Edit</span>
-              <span class="btn-power">+25</span>
+              <span class="btn-text">Edit</span>
             </button>
             <button class="btn-action approve" onclick={() => takeAction('approve')}>
               <span class="btn-icon">✓</span>
-              <span class="btn-label">Keep</span>
-              <span class="btn-power">+15</span>
+              <span class="btn-text">Keep</span>
             </button>
           </div>
         {:else}
-          <div class="correction-mode">
-            <div class="corr-header">
-              <span>✎</span> Edit Memory
+          <!-- Edit Mode -->
+          <div class="edit-mode">
+            <div class="edit-header">✎ Edit Memory</div>
+            <div class="edit-original">
+              <span class="edit-label">Original:</span>
+              "{currentItem.memory_text}"
             </div>
-            <div class="corr-original">
-              <span class="corr-label">Original:</span>
-              <span class="corr-text">{currentItem.memory_text}</span>
-            </div>
-            <textarea 
-              bind:value={correctionText}
-              placeholder="Write the corrected memory..."
-              rows="4"
-            ></textarea>
-            <div class="corr-actions">
-              <button class="btn-cancel" onclick={() => { correctionMode = false; correctionText = ''; }}>
-                Cancel
-              </button>
-              <button class="btn-save" onclick={() => takeAction('correct', correctionText)}>
-                Save +25 ⚡
-              </button>
+            <textarea bind:value={correctionText} placeholder="Write the correct version..." rows="4"></textarea>
+            <div class="edit-actions">
+              <button class="btn-cancel" onclick={() => { correctionMode = false; correctionText = ''; }}>Cancel</button>
+              <button class="btn-save" onclick={() => takeAction('correct', correctionText)}>Save</button>
             </div>
           </div>
         {/if}
       </div>
     </div>
     
-    <div class="progress-section">
-      <div class="progress-text">{currentIndex + 1} of {items.length} remaining</div>
+    <div class="progress-row">
+      <span>{currentIndex + 1} of {items.length}</span>
     </div>
   {/if}
 </div>
@@ -448,523 +400,227 @@
     display: flex;
     flex-direction: column;
     padding: 1rem;
-    background: linear-gradient(180deg, #0a0a12 0%, #12121a 100%);
+    background: linear-gradient(180deg, #08080f 0%, #0f0f18 100%);
   }
   
   .mr-header {
     display: flex;
     align-items: center;
     gap: 0.75rem;
-    margin-bottom: 1rem;
-    cursor: pointer;
     padding: 0.5rem;
     margin: -0.5rem -0.5rem 1rem -0.5rem;
     border-radius: 12px;
-    transition: background 0.2s;
+    cursor: pointer;
   }
-  
-  .mr-header:hover {
-    background: #1a1a24;
-  }
+  .mr-header:active { background: #1a1a24; }
   
   .back-btn {
-    width: 36px;
-    height: 36px;
+    width: 36px; height: 36px;
     border-radius: 50%;
     border: none;
     background: #1a1a24;
     color: #888;
     font-size: 1.2rem;
     cursor: pointer;
-    display: flex;
-    align-items: center;
-    justify-content: center;
   }
   
-  .mr-title {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    font-size: 1.1rem;
-    font-weight: 600;
-    flex: 1;
-  }
-  
-  .tap-hint {
-    font-size: 0.7rem;
-    color: #444;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-  }
+  .mr-title { flex: 1; font-size: 1.1rem; font-weight: 600; }
+  .tap-hint { font-size: 0.65rem; color: #444; text-transform: uppercase; letter-spacing: 0.05em; }
   
   /* Power Bar */
   .power-section {
-    background: linear-gradient(135deg, #1a1a2e 0%, #16162a 100%);
-    border: 1px solid #2a2a4a;
-    border-radius: 16px;
-    padding: 1rem;
+    background: #12121a;
+    border: 1px solid #1a1a2a;
+    border-radius: 12px;
+    padding: 0.75rem 1rem;
     margin-bottom: 1rem;
-    transition: all 0.3s;
   }
+  .power-section.flash { border-color: #a855f7; box-shadow: 0 0 20px #a855f720; }
   
-  .power-section.flash {
-    border-color: #a855f7;
-    box-shadow: 0 0 30px #a855f720;
-    animation: levelUp 0.5s ease-out;
-  }
+  .power-header { display: flex; justify-content: space-between; margin-bottom: 0.4rem; }
+  .power-label { font-size: 0.7rem; color: #666; text-transform: uppercase; letter-spacing: 0.05em; }
+  .power-level { font-size: 0.8rem; font-weight: 700; color: #a855f7; }
   
-  @keyframes levelUp {
-    0%, 100% { transform: scale(1); }
-    50% { transform: scale(1.02); }
-  }
+  .power-bar { height: 6px; background: #0a0a12; border-radius: 3px; overflow: hidden; margin-bottom: 0.4rem; }
+  .power-fill { height: 100%; background: linear-gradient(90deg, #7c3aed, #a855f7); border-radius: 3px; transition: width 0.3s; }
   
-  .power-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    margin-bottom: 0.5rem;
-  }
-  
-  .power-label {
-    font-size: 0.75rem;
-    color: #888;
-    text-transform: uppercase;
-    letter-spacing: 0.1em;
-  }
-  
-  .power-level {
-    font-size: 0.85rem;
-    font-weight: 700;
-    color: #a855f7;
-  }
-  
-  .power-bar {
-    height: 8px;
-    background: #0f0f1a;
-    border-radius: 4px;
-    overflow: hidden;
-    margin-bottom: 0.5rem;
-  }
-  
-  .power-fill {
-    height: 100%;
-    background: linear-gradient(90deg, #7c3aed, #a855f7, #c084fc);
-    border-radius: 4px;
-    transition: width 0.3s ease-out;
-    position: relative;
-  }
-  
-  .power-glow {
-    position: absolute;
-    right: 0;
-    top: 0;
-    bottom: 0;
-    width: 20px;
-    background: linear-gradient(90deg, transparent, #fff4);
-    animation: glow 1.5s ease-in-out infinite;
-  }
-  
-  @keyframes glow {
-    0%, 100% { opacity: 0.3; }
-    50% { opacity: 0.8; }
-  }
-  
-  .power-stats {
-    display: flex;
-    gap: 1rem;
-    font-size: 0.75rem;
-    color: #666;
-  }
-  
-  .streak {
-    color: #f59e0b;
-    font-weight: 600;
-  }
+  .power-stats { display: flex; gap: 1rem; font-size: 0.75rem; color: #555; }
+  .streak { color: #f59e0b; }
   
   /* Conflicts */
   .conflicts-alert {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    width: 100%;
-    padding: 0.75rem 1rem;
-    background: linear-gradient(135deg, #7f1d1d20, #991b1b10);
-    border: 1px solid #7f1d1d;
-    border-radius: 12px;
-    margin-bottom: 1rem;
-    cursor: pointer;
-    color: #fca5a5;
+    display: flex; align-items: center; gap: 0.5rem;
+    width: 100%; padding: 0.6rem 1rem;
+    background: #1a1010; border: 1px solid #7f1d1d; border-radius: 10px;
+    color: #fca5a5; cursor: pointer; margin-bottom: 1rem;
   }
-  
-  .alert-icon { font-size: 1.1rem; }
   .alert-text { flex: 1; text-align: left; font-size: 0.85rem; }
-  .alert-arrow { color: #666; }
   
-  .conflicts-list {
-    display: flex;
-    flex-direction: column;
-    gap: 0.75rem;
-    margin-bottom: 1rem;
-  }
-  
-  .conflict-card {
-    background: #1a1a24;
-    border: 1px solid #2a2a3a;
-    border-radius: 12px;
-    padding: 1rem;
-  }
-  
-  .conflict-header {
-    font-size: 0.8rem;
-    color: #f59e0b;
-    margin-bottom: 0.75rem;
-    font-weight: 600;
-  }
-  
-  .conflict-items {
-    display: flex;
-    flex-direction: column;
-    gap: 0.5rem;
-  }
-  
-  .conflict-option {
-    background: #0f0f15;
-    border: 1px solid #2a2a3a;
-    border-radius: 10px;
-    padding: 0.75rem;
-    cursor: pointer;
-    text-align: left;
-    transition: all 0.2s;
-  }
-  
-  .conflict-option:hover {
-    border-color: #10b981;
-    background: #10b98110;
-  }
-  
-  .option-text {
-    display: block;
-    color: #fff;
-    font-size: 0.9rem;
-    margin-bottom: 0.25rem;
-  }
-  
-  .option-meta {
-    font-size: 0.7rem;
-    color: #555;
-  }
-  
-  .conflict-vs {
-    text-align: center;
-    font-size: 0.7rem;
-    color: #555;
-    font-weight: 700;
-  }
-  
-  .conflict-hint {
-    font-size: 0.7rem;
-    color: #444;
-    text-align: center;
-    margin-top: 0.5rem;
-  }
-  
-  /* Loading & Empty */
-  .mr-loading {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    gap: 1rem;
-    color: #666;
-  }
-  
-  .spinner {
-    width: 40px;
-    height: 40px;
-    border: 3px solid #222;
-    border-top-color: #a855f7;
-    border-radius: 50%;
-    animation: spin 1s linear infinite;
-  }
-  
+  /* Loading/Empty */
+  .mr-loading { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1rem; color: #666; }
+  .spinner { width: 36px; height: 36px; border: 3px solid #222; border-top-color: #a855f7; border-radius: 50%; animation: spin 1s linear infinite; }
   @keyframes spin { to { transform: rotate(360deg); } }
   
-  .mr-empty {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    text-align: center;
-    cursor: pointer;
-  }
+  .mr-empty { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; cursor: pointer; }
+  .empty-check { width: 70px; height: 70px; background: linear-gradient(135deg, #10b981, #059669); border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 2rem; color: white; margin-bottom: 1rem; }
+  .mr-empty h3 { margin: 0 0 0.25rem 0; }
+  .mr-empty p { color: #666; margin: 0; }
+  .tap-exit { margin-top: 1.5rem; font-size: 0.75rem; color: #444; }
   
-  .empty-check {
-    width: 80px;
-    height: 80px;
-    background: linear-gradient(135deg, #10b981, #059669);
-    border-radius: 50%;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 2.5rem;
-    color: white;
-    margin-bottom: 1rem;
-  }
-  
-  .mr-empty h3 { margin: 0 0 0.5rem 0; }
-  .mr-empty p { color: #666; margin: 0 0 1.5rem 0; }
-  
-  .power-summary {
-    background: #1a1a2e;
-    border-radius: 12px;
-    padding: 1rem 2rem;
-    margin-bottom: 1rem;
-  }
-  
-  .summary-level {
-    font-size: 1.1rem;
-    font-weight: 700;
-    color: #a855f7;
-  }
-  
-  .summary-stats {
-    font-size: 0.8rem;
-    color: #666;
-  }
-  
-  .tap-exit {
-    font-size: 0.75rem;
-    color: #444;
-  }
-  
-  /* Cards */
-  .card-stack {
-    flex: 1;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    position: relative;
-    padding: 0.5rem 0;
-  }
+  /* Card Stack */
+  .card-stack { flex: 1; display: flex; align-items: center; justify-content: center; position: relative; padding: 0.5rem 0; min-height: 520px; }
   
   .card-behind {
     position: absolute;
-    width: 100%;
-    max-width: 340px;
-    height: 380px;
-    background: #1a1a24;
-    border-radius: 20px;
-    border: 1px solid #2a2a3a;
+    width: 100%; max-width: 360px;
+    height: 480px;
+    background: #16161e;
+    border-radius: 24px;
+    border: 1px solid #1a1a2a;
   }
   
   .memory-card {
     position: relative;
-    width: 100%;
-    max-width: 340px;
-    min-height: 380px;
-    background: linear-gradient(160deg, #1e1e2a 0%, #16161e 100%);
-    border-radius: 20px;
-    border: 2px solid #2a2a3a;
+    width: 100%; max-width: 360px;
+    min-height: 480px;
+    background: linear-gradient(165deg, #1a1a26 0%, #141420 100%);
+    border-radius: 24px;
+    border: 2px solid #252532;
     overflow: hidden;
     touch-action: pan-y;
     cursor: grab;
-    transition: transform 0.15s ease-out;
+    transition: transform 0.12s ease-out;
     user-select: none;
     display: flex;
     flex-direction: column;
   }
-  
   .memory-card.dragging { cursor: grabbing; transition: none; }
   .memory-card.animating { transition: transform 0.25s ease-out; }
   
-  .swipe-overlay {
+  /* Swipe Stamps */
+  .swipe-stamp {
     position: absolute;
-    top: 20px;
-    padding: 10px 24px;
+    top: 30px;
+    padding: 12px 28px;
     border-radius: 8px;
-    font-size: 1.1rem;
-    font-weight: 800;
-    letter-spacing: 0.1em;
+    font-size: 1.3rem;
+    font-weight: 900;
+    letter-spacing: 0.15em;
     z-index: 10;
     pointer-events: none;
+    border: 4px solid white;
   }
+  .swipe-stamp.approve { right: 20px; background: #10b981; color: white; transform: rotate(15deg); }
+  .swipe-stamp.reject { left: 20px; background: #ef4444; color: white; transform: rotate(-15deg); }
   
-  .swipe-overlay.approve {
-    right: 20px;
-    background: #10b981;
-    color: white;
-    transform: rotate(12deg);
-    border: 3px solid #fff;
-  }
+  /* Card Inner */
+  .card-inner { flex: 1; padding: 1.5rem; display: flex; flex-direction: column; gap: 1rem; }
   
-  .swipe-overlay.reject {
-    left: 20px;
-    background: #ef4444;
-    color: white;
-    transform: rotate(-12deg);
-    border: 3px solid #fff;
-  }
-  
-  .card-content {
-    flex: 1;
-    padding: 1.25rem;
-    display: flex;
-    flex-direction: column;
-    gap: 0.75rem;
-  }
-  
-  .card-source {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    font-size: 0.75rem;
-  }
-  
-  .source-icon { font-size: 1rem; }
-  .source-label { color: #a855f7; font-weight: 500; }
+  .card-source { display: flex; align-items: flex-start; gap: 0.75rem; }
+  .source-icon { font-size: 1.5rem; }
+  .source-text { flex: 1; }
+  .source-label { font-size: 0.9rem; font-weight: 600; color: #a855f7; }
+  .source-sub { font-size: 0.75rem; color: #555; margin-top: 0.1rem; }
   
   .card-memory {
-    font-size: 1.1rem;
+    font-size: 1.2rem;
     line-height: 1.6;
     color: #fff;
-    flex: 1;
+    font-style: italic;
+    padding: 1rem 0;
+    border-top: 1px solid #252532;
+    border-bottom: 1px solid #252532;
   }
   
-  .card-context {
-    background: #0f0f15;
+  /* Context Section */
+  .card-context-section { flex: 1; }
+  
+  .context-header { font-size: 0.75rem; color: #888; margin-bottom: 0.5rem; text-transform: uppercase; letter-spacing: 0.05em; }
+  
+  .context-quote {
+    margin: 0;
+    padding: 1rem;
+    background: #0c0c14;
+    border-left: 3px solid #7c3aed;
+    border-radius: 0 8px 8px 0;
+    font-size: 0.9rem;
+    line-height: 1.6;
+    color: #aaa;
+    font-style: italic;
+  }
+  
+  .no-context {
+    display: flex;
+    gap: 0.75rem;
+    padding: 1rem;
+    background: #0c0c14;
     border-radius: 10px;
-    padding: 0.75rem;
+    border: 1px dashed #333;
   }
+  .no-context-icon { font-size: 1.5rem; }
+  .no-context-text strong { color: #888; font-size: 0.85rem; display: block; margin-bottom: 0.25rem; }
+  .no-context-text p { color: #555; font-size: 0.8rem; margin: 0; line-height: 1.4; }
   
-  .context-header {
-    font-size: 0.7rem;
-    color: #a855f7;
-    margin-bottom: 0.4rem;
-  }
+  /* Confidence */
+  .card-confidence { margin-top: auto; }
+  .conf-row { display: flex; justify-content: space-between; margin-bottom: 0.3rem; }
+  .conf-label { font-size: 0.7rem; color: #555; text-transform: uppercase; }
+  .conf-value { font-size: 0.75rem; font-weight: 600; }
+  .conf-value.high { color: #10b981; }
+  .conf-value.med { color: #f59e0b; }
+  .conf-value.low { color: #ef4444; }
   
-  .context-body {
-    font-size: 0.8rem;
-    color: #888;
-    line-height: 1.4;
-  }
+  .conf-bar { height: 4px; background: #1a1a24; border-radius: 2px; overflow: hidden; }
+  .conf-fill { height: 100%; border-radius: 2px; transition: width 0.3s; }
+  .conf-fill.high { background: #10b981; }
+  .conf-fill.med { background: #f59e0b; }
+  .conf-fill.low { background: #ef4444; }
   
-  .card-confidence {
-    display: flex;
-    flex-direction: column;
-    gap: 0.3rem;
-  }
-  
-  .conf-bar {
-    height: 4px;
-    background: #222;
-    border-radius: 2px;
-    overflow: hidden;
-  }
-  
-  .conf-fill {
-    height: 100%;
-    border-radius: 2px;
-  }
-  
-  .conf-label {
-    font-size: 0.7rem;
-    font-weight: 500;
-  }
-  
-  .card-actions {
-    display: flex;
-    gap: 0.5rem;
-    padding: 0.75rem 1.25rem 1.25rem;
-  }
+  /* Actions */
+  .card-actions { display: flex; gap: 0.75rem; padding: 1rem 1.5rem 1.5rem; background: linear-gradient(0deg, #12121a 50%, transparent); }
   
   .btn-action {
     flex: 1;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 0.15rem;
-    padding: 0.6rem 0.4rem;
-    border-radius: 12px;
+    display: flex; flex-direction: column; align-items: center; gap: 0.25rem;
+    padding: 0.9rem 0.5rem;
+    border-radius: 14px;
     border: none;
     cursor: pointer;
-    transition: all 0.2s;
+    transition: transform 0.15s;
   }
+  .btn-action:active { transform: scale(0.95); }
   
   .btn-action.reject { background: linear-gradient(135deg, #dc2626, #b91c1c); color: white; }
   .btn-action.edit { background: linear-gradient(135deg, #d97706, #b45309); color: white; }
   .btn-action.approve { background: linear-gradient(135deg, #16a34a, #15803d); color: white; }
-  .btn-action:active { transform: scale(0.95); }
   
-  .btn-icon { font-size: 1.2rem; font-weight: 700; }
-  .btn-label { font-size: 0.7rem; font-weight: 600; }
-  .btn-power { font-size: 0.6rem; opacity: 0.7; }
+  .btn-icon { font-size: 1.4rem; font-weight: 700; }
+  .btn-text { font-size: 0.8rem; font-weight: 600; text-transform: uppercase; }
   
-  /* Correction mode */
-  .correction-mode {
-    padding: 1.25rem;
-    display: flex;
-    flex-direction: column;
-    gap: 0.75rem;
-    height: 100%;
-  }
+  /* Edit Mode */
+  .edit-mode { padding: 1.5rem; display: flex; flex-direction: column; gap: 1rem; height: 100%; }
+  .edit-header { font-size: 1.1rem; font-weight: 600; color: #f59e0b; }
+  .edit-original { background: #0c0c14; padding: 1rem; border-radius: 10px; font-size: 0.9rem; color: #888; }
+  .edit-label { display: block; font-size: 0.7rem; color: #555; text-transform: uppercase; margin-bottom: 0.3rem; }
   
-  .corr-header {
-    font-size: 1rem;
-    font-weight: 600;
-    color: #f59e0b;
-  }
-  
-  .corr-original {
-    background: #0f0f15;
-    padding: 0.75rem;
-    border-radius: 10px;
-    font-size: 0.85rem;
-  }
-  
-  .corr-label { color: #555; display: block; font-size: 0.65rem; text-transform: uppercase; margin-bottom: 0.2rem; }
-  .corr-text { color: #888; }
-  
-  .correction-mode textarea {
+  .edit-mode textarea {
     flex: 1;
-    padding: 0.75rem;
-    border-radius: 10px;
-    border: 2px solid #2a2a3a;
-    background: #0f0f15;
+    padding: 1rem;
+    border-radius: 12px;
+    border: 2px solid #252532;
+    background: #0c0c14;
     color: #fff;
     font-family: inherit;
-    font-size: 0.95rem;
+    font-size: 1rem;
+    line-height: 1.5;
     resize: none;
   }
+  .edit-mode textarea:focus { outline: none; border-color: #a855f7; }
   
-  .correction-mode textarea:focus { outline: none; border-color: #a855f7; }
-  
-  .corr-actions {
-    display: flex;
-    gap: 0.5rem;
-  }
-  
-  .corr-actions button {
-    flex: 1;
-    padding: 0.75rem;
-    border-radius: 10px;
-    border: none;
-    font-size: 0.85rem;
-    font-weight: 600;
-    cursor: pointer;
-  }
-  
-  .btn-cancel { background: #2a2a3a; color: #888; }
+  .edit-actions { display: flex; gap: 0.75rem; }
+  .edit-actions button { flex: 1; padding: 0.9rem; border-radius: 12px; border: none; font-size: 0.9rem; font-weight: 600; cursor: pointer; }
+  .btn-cancel { background: #252532; color: #888; }
   .btn-save { background: linear-gradient(135deg, #a855f7, #7c3aed); color: white; }
   
-  .progress-section {
-    text-align: center;
-    padding: 0.75rem 0;
-  }
-  
-  .progress-text {
-    font-size: 0.8rem;
-    color: #555;
-  }
+  .progress-row { text-align: center; padding: 0.75rem 0; font-size: 0.8rem; color: #444; }
 </style>
