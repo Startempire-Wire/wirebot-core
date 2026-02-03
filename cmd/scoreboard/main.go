@@ -4377,7 +4377,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	// Build proxy request to OpenClaw
 	// "user" field = stable session key → persistent conversation with memory
 	gatewayURL := "http://127.0.0.1:18789/v1/chat/completions"
-	gatewayToken := os.Getenv("SCOREBOARD_TOKEN")
+	gatewayToken := os.Getenv("GATEWAY_TOKEN")
 	if gatewayToken == "" {
 		gatewayToken = "65b918ba-baf5-4996-8b53-6fb0f662a0c3"
 	}
