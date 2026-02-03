@@ -843,6 +843,16 @@
                   </div>
                 </div>
 
+                {#if selfReportCount === 0}
+                  <button class="eq-cta" onclick={() => showPairing = true}>
+                    🧬 Take Founder Assessment <span class="eq-cta-sub">5 min · improves accuracy</span>
+                  </button>
+                {:else}
+                  <button class="eq-cta eq-cta-retake" onclick={() => showPairing = true}>
+                    🔄 Retake Assessment <span class="eq-cta-sub">{selfReportCount} answers · {eqAcc}% accurate</span>
+                  </button>
+                {/if}
+
                 <button class="btn-logout" onclick={logout}>Sign out</button>
               </div>
               {#if tokenStatus}
@@ -1564,6 +1574,16 @@
     font-size: 10px; color: #666; margin-top: 6px;
   }
   .eq-score-line { color: #7c7cff; font-weight: 500; }
+
+  .eq-cta {
+    width: 100%; padding: 10px; margin-top: 8px; border-radius: 8px;
+    background: rgba(124,124,255,0.15); border: 1px solid rgba(124,124,255,0.4);
+    color: #e8e8ff; font-size: 13px; font-weight: 600; cursor: pointer;
+    display: flex; align-items: center; gap: 6px; justify-content: center;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .eq-cta-retake { background: rgba(255,255,255,0.05); border-color: #333; color: #999; }
+  .eq-cta-sub { font-size: 10px; font-weight: 400; color: #888; }
 
   .btn-logout {
     background: transparent; border: 1px solid #333; color: #666; border-radius: 6px;
