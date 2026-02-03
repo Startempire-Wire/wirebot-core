@@ -905,7 +905,7 @@ Tracked with Wirebot — your AI business operating partner`;
       {:else if view === 'audit'}
         <Audit />
       {:else if view === 'memory-review'}
-        <MemoryReview />
+        <MemoryReview on:exit={() => navigateTo('settings')} />
       {:else if view === 'settings'}
         <div class="settings-view">
           <div class="s-hdr"><h2>⚙️ Settings</h2></div>
