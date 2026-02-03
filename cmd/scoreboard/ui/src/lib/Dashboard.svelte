@@ -25,11 +25,11 @@
   // Startempire Wire Network IS the network — not a separate entity
   const ENTITIES = [
     { id: '', label: 'All', icon: '🌐', type: 'all' },
-    { id: 'SEW', label: 'Startempire Wire Network', icon: '⚡', type: 'business', legal: 'LLC',
+    { id: 'SEW', label: 'SEW', fullName: 'Startempire Wire Network', icon: '🚀', type: 'business', legal: 'LLC',
       products: [
-        { id: 'WB', label: 'Wirebot', icon: '🤖', type: 'product' },
+        { id: 'WB', label: 'WB', fullName: 'Wirebot', icon: '🤖', type: 'product' },
       ]},
-    { id: 'PVD', label: 'Philoveracity Design', icon: '📘', type: 'business', legal: 'Sole Prop', products: [] },
+    { id: 'PVD', label: 'PVD', fullName: 'Philoveracity Design', icon: '📘', type: 'business', legal: 'Sole Prop', products: [] },
   ];
 
   // Flat list for iteration (with nesting info)
@@ -271,9 +271,9 @@
       {#if localBiz}
         {@const active = BUSINESSES.find(b => b.id === localBiz)}
         <div class="biz-context">
-          {active?.icon} {active?.label}
+          {active?.icon} {active?.fullName || active?.label}
           {#if active?.type === 'product'}
-            <span class="biz-ctx-type">Product under {ENTITIES.find(e => e.id === active?.parent)?.label || 'Startempire Wire Network'}</span>
+            <span class="biz-ctx-type">Product under {ENTITIES.find(e => e.id === active?.parent)?.fullName || 'Startempire Wire Network'}</span>
           {:else if active?.legal}
             <span class="biz-ctx-type">{active.legal}</span>
           {/if}
@@ -288,7 +288,7 @@
     {#if checklist}
       <div class="card setup-card">
         <div class="setup-header">
-          <span class="setup-label">{localBiz ? (BUSINESSES.find(b=>b.id===localBiz)?.label || '').toUpperCase()+' — ' : ''}SETUP — {stage.toUpperCase()}</span>
+          <span class="setup-label">{localBiz ? ((BUSINESSES.find(b=>b.id===localBiz)?.fullName || BUSINESSES.find(b=>b.id===localBiz)?.label || '').toUpperCase()+' — ') : ''}SETUP — {stage.toUpperCase()}</span>
           <span class="setup-count">{checklist.completed || 0}/{checklist.total || 0}</span>
         </div>
         <div class="progress-wrap">
