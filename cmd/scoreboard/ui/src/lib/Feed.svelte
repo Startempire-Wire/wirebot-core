@@ -1,7 +1,7 @@
 <script>
   let { items, pendingCount = 0, onHelp, activeBusiness = '', onBusinessChange } = $props();
 
-  const BIZ_LABELS = { SEW: '🚀', STA: '🚀', WB: '🤖', WIR: '🤖', PVD: '📘', PHI: '📘' };
+  const BIZ_LABELS = { SEW: '🚀', STA: '🚀', SWN: '🕸', WB: '🤖', WIR: '🤖', PVD: '📘', PHI: '📘' };
 
   let tab = $state('all');
   let projects = $state([]);         // project summaries

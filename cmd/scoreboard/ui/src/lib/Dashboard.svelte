@@ -25,8 +25,9 @@
   // Startempire Wire Network IS the network — not a separate entity
   const ENTITIES = [
     { id: '', label: 'All', icon: '🌐', type: 'all' },
-    { id: 'SEW', label: 'SEW', fullName: 'Startempire Wire Network', icon: '🚀', type: 'business', legal: 'LLC',
+    { id: 'SEW', label: 'SEW', fullName: 'Startempire Wire', icon: '🚀', type: 'business', legal: 'LLC',
       products: [
+        { id: 'SWN', label: 'SWN', fullName: 'Startempire Wire Network', icon: '🕸', type: 'product' },
         { id: 'WB', label: 'WB', fullName: 'Wirebot', icon: '🤖', type: 'product' },
       ]},
     { id: 'PVD', label: 'PVD', fullName: 'Philoveracity Design', icon: '📘', type: 'business', legal: 'Sole Prop', products: [] },
