@@ -1348,50 +1348,9 @@
   /* ── View Transitions (native API) ── */
   @view-transition { navigation: auto; }
 
-  /* Nav stays frozen during transitions */
-  ::view-transition-old(nav),
-  ::view-transition-new(nav) {
-    animation: none;
-  }
+  /* View Transitions must be :global — they're document-level pseudo-elements */
 
-  /* Slide + fade for page content only */
-  ::view-transition-old(content) {
-    animation: 300ms cubic-bezier(0.25, 0.46, 0.45, 0.94) both vt-slide-out;
-  }
-  ::view-transition-new(content) {
-    animation: 300ms cubic-bezier(0.25, 0.46, 0.45, 0.94) both vt-slide-in;
-  }
-
-  /* Direction-aware: forward = slide left, back = slide right */
-  :root[data-direction="forward"]::view-transition-old(content) {
-    animation-name: vt-slide-out-left;
-  }
-  :root[data-direction="forward"]::view-transition-new(content) {
-    animation-name: vt-slide-in-right;
-  }
-  :root[data-direction="back"]::view-transition-old(content) {
-    animation-name: vt-slide-out-right;
-  }
-  :root[data-direction="back"]::view-transition-new(content) {
-    animation-name: vt-slide-in-left;
-  }
-
-  @keyframes vt-slide-out-left {
-    from { opacity: 1; transform: translateX(0); }
-    to { opacity: 0; transform: translateX(-60px); }
-  }
-  @keyframes vt-slide-in-right {
-    from { opacity: 0; transform: translateX(60px); }
-    to { opacity: 1; transform: translateX(0); }
-  }
-  @keyframes vt-slide-out-right {
-    from { opacity: 1; transform: translateX(0); }
-    to { opacity: 0; transform: translateX(60px); }
-  }
-  @keyframes vt-slide-in-left {
-    from { opacity: 0; transform: translateX(-60px); }
-    to { opacity: 1; transform: translateX(0); }
-  }
+  /* vt-slide keyframes moved to global <svelte:head> for View Transitions API */
 
   /* Fallback for browsers without View Transitions API */
   .content.slide-forward {
@@ -2024,3 +1983,47 @@
     text-align: center; padding: 16px; font-size: 12px; color: #555;
   }
 </style>
+
+<svelte:head>
+  {@html `<style>
+    /* View Transition styles — must be global (document-level pseudo-elements) */
+    ::view-transition-old(nav),
+    ::view-transition-new(nav) {
+      animation: none !important;
+    }
+    ::view-transition-old(content) {
+      animation: 300ms cubic-bezier(0.25, 0.46, 0.45, 0.94) both vt-slide-out;
+    }
+    ::view-transition-new(content) {
+      animation: 300ms cubic-bezier(0.25, 0.46, 0.45, 0.94) both vt-slide-in;
+    }
+    [data-direction="forward"]::view-transition-old(content) {
+      animation-name: vt-slide-out-left;
+    }
+    [data-direction="forward"]::view-transition-new(content) {
+      animation-name: vt-slide-in-right;
+    }
+    [data-direction="back"]::view-transition-old(content) {
+      animation-name: vt-slide-out-right;
+    }
+    [data-direction="back"]::view-transition-new(content) {
+      animation-name: vt-slide-in-left;
+    }
+    @keyframes vt-slide-out-left {
+      from { opacity: 1; transform: translateX(0); }
+      to { opacity: 0; transform: translateX(-60px); }
+    }
+    @keyframes vt-slide-in-right {
+      from { opacity: 0; transform: translateX(60px); }
+      to { opacity: 1; transform: translateX(0); }
+    }
+    @keyframes vt-slide-out-right {
+      from { opacity: 1; transform: translateX(0); }
+      to { opacity: 0; transform: translateX(60px); }
+    }
+    @keyframes vt-slide-in-left {
+      from { opacity: 0; transform: translateX(-60px); }
+      to { opacity: 1; transform: translateX(0); }
+    }
+  `}
+</svelte:head>
