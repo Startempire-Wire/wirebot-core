@@ -140,6 +140,14 @@ Tracked with Wirebot — your AI business operating partner`;
 
   // ── Integrations (Connected Accounts) ──
   let integrations = $state([]);
+  let groupedIntegrations = $derived(
+    integrations.reduce((acc, acct) => {
+      const key = acct.provider;
+      if (!acc[key]) acc[key] = [];
+      acc[key].push(acct);
+      return acc;
+    }, {})
+  );
   let showConnectForm = $state(null); // provider ID being configured, or null
   let connectBusiness = $state(''); // business_id for multi-account tagging
   let connectCred = $state('');
@@ -1066,14 +1074,8 @@ Tracked with Wirebot — your AI business operating partner`;
 
             <!-- Active integrations grouped by provider type -->
             {#if integrations.length > 0}
-              {@const grouped = integrations.reduce((acc, acct) => {
-                const key = acct.provider;
-                if (!acc[key]) acc[key] = [];
-                acc[key].push(acct);
-                return acc;
-              }, {})}
               <div class="int-grouped-section">
-                {#each Object.entries(grouped) as [providerKey, accounts]}
+                {#each Object.entries(groupedIntegrations) as [providerKey, accounts]}
                   {@const prov = PROVIDERS.find(p => p.id === providerKey) || { icon: '🔗', name: providerKey }}
                   <details class="int-group" open>
                     <summary class="int-group-header">
