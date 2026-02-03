@@ -7056,6 +7056,10 @@ func (s *Server) pollDueIntegrations() {
 			pollErr = s.pollGoogleDrive(id, credential, config, lastPoll)
 		case "dropbox":
 			pollErr = s.pollDropbox(id, credential, config, lastPoll)
+		case "stripe":
+			pollErr = s.pollStripe(id, credential, lastPoll)
+		case "github":
+			pollErr = s.pollGitHub(id, credential, lastPoll)
 		default:
 			log.Printf("Poller: unknown provider %s for integration %s", provider, id)
 		}
@@ -8524,6 +8528,275 @@ func (s *Server) pollDropbox(integrationID, credential, configJSON, lastPoll str
 		fmt.Sprintf("Scanned Dropbox storage"))
 
 	log.Printf("[dropbox] Indexed %d files from Dropbox", len(indexFiles))
+	return nil
+}
+
+// ─── Stripe Poller ──────────────────────────────────────────────────────
+// Polls Stripe API for recent charges, payouts, and balance using API key
+
+func (s *Server) pollStripe(integrationID, apiKey, lastPoll string) error {
+	client := &http.Client{Timeout: 30 * time.Second}
+
+	// Parse lastPoll for filtering
+	var sinceTS int64 = 0
+	if lastPoll != "" {
+		if t, err := time.Parse(time.RFC3339, lastPoll); err == nil {
+			sinceTS = t.Unix()
+		}
+	}
+	if sinceTS == 0 {
+		sinceTS = time.Now().Add(-7 * 24 * time.Hour).Unix() // Last 7 days on first poll
+	}
+
+	eventsCreated := 0
+
+	// 1. Get recent successful charges
+	chargeURL := fmt.Sprintf("https://api.stripe.com/v1/charges?limit=25&created[gte]=%d", sinceTS)
+	req, _ := http.NewRequest("GET", chargeURL, nil)
+	req.SetBasicAuth(apiKey, "")
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("stripe charges API error: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("stripe API %d: %s", resp.StatusCode, string(body))
+	}
+
+	var chargesResp struct {
+		Data []struct {
+			ID       string `json:"id"`
+			Amount   int64  `json:"amount"`
+			Currency string `json:"currency"`
+			Status   string `json:"status"`
+			Created  int64  `json:"created"`
+			Customer string `json:"customer"`
+			Metadata map[string]string `json:"metadata"`
+			Description string `json:"description"`
+		} `json:"data"`
+	}
+	json.NewDecoder(resp.Body).Decode(&chargesResp)
+
+	for _, charge := range chargesResp.Data {
+		if charge.Status != "succeeded" {
+			continue
+		}
+		// Skip test/fake charges
+		amountDollars := float64(charge.Amount) / 100.0
+		if amountDollars < 1.0 {
+			continue // Skip charges under $1
+		}
+
+		eventID := fmt.Sprintf("stripe-charge-%s", charge.ID)
+		chargeTime := time.Unix(charge.Created, 0)
+
+		title := fmt.Sprintf("Payment: $%.2f %s", amountDollars, strings.ToUpper(charge.Currency))
+		if charge.Description != "" {
+			title = fmt.Sprintf("Payment: $%.2f — %s", amountDollars, charge.Description)
+		}
+
+		s.mu.Lock()
+		var exists int
+		s.db.QueryRow("SELECT COUNT(*) FROM events WHERE id = ?", eventID).Scan(&exists)
+		if exists == 0 {
+			timeStr := chargeTime.UTC().Format(time.RFC3339)
+			s.db.Exec(`INSERT INTO events (id, event_type, lane, score_delta, artifact_title, artifact_url, source, timestamp, created_at, status)
+				VALUES (?, 'revenue', 'revenue', ?, ?, ?, 'stripe', ?, ?, 'approved')`,
+				eventID, int(amountDollars/10), title, fmt.Sprintf("https://dashboard.stripe.com/payments/%s", charge.ID),
+				timeStr, timeStr)
+			eventsCreated++
+		}
+		s.mu.Unlock()
+	}
+
+	// 2. Get recent payouts
+	payoutURL := fmt.Sprintf("https://api.stripe.com/v1/payouts?limit=10&created[gte]=%d", sinceTS)
+	req2, _ := http.NewRequest("GET", payoutURL, nil)
+	req2.SetBasicAuth(apiKey, "")
+	resp2, err := client.Do(req2)
+	if err == nil && resp2.StatusCode == 200 {
+		var payoutsResp struct {
+			Data []struct {
+				ID       string `json:"id"`
+				Amount   int64  `json:"amount"`
+				Currency string `json:"currency"`
+				Status   string `json:"status"`
+				Created  int64  `json:"created"`
+				ArrivalDate int64 `json:"arrival_date"`
+			} `json:"data"`
+		}
+		json.NewDecoder(resp2.Body).Decode(&payoutsResp)
+		resp2.Body.Close()
+
+		for _, payout := range payoutsResp.Data {
+			if payout.Status != "paid" {
+				continue
+			}
+			amountDollars := float64(payout.Amount) / 100.0
+
+			eventID := fmt.Sprintf("stripe-payout-%s", payout.ID)
+			payoutTime := time.Unix(payout.Created, 0)
+
+			title := fmt.Sprintf("Payout: $%.2f %s", amountDollars, strings.ToUpper(payout.Currency))
+
+			s.mu.Lock()
+			var exists int
+			s.db.QueryRow("SELECT COUNT(*) FROM events WHERE id = ?", eventID).Scan(&exists)
+			if exists == 0 {
+				timeStr := payoutTime.UTC().Format(time.RFC3339)
+				s.db.Exec(`INSERT INTO events (id, event_type, lane, score_delta, artifact_title, artifact_url, source, timestamp, created_at, status)
+					VALUES (?, 'payout', 'revenue', 0, ?, ?, 'stripe', ?, ?, 'approved')`,
+					eventID, title, fmt.Sprintf("https://dashboard.stripe.com/payouts/%s", payout.ID),
+					timeStr, timeStr)
+				eventsCreated++
+			}
+			s.mu.Unlock()
+		}
+	}
+
+	log.Printf("[stripe] Polled: %d new events from charges/payouts", eventsCreated)
+	return nil
+}
+
+// ─── GitHub Poller ──────────────────────────────────────────────────────
+// Polls GitHub API for recent commits and activity using PAT
+
+func (s *Server) pollGitHub(integrationID, token, lastPoll string) error {
+	client := &http.Client{Timeout: 30 * time.Second}
+
+	// Parse lastPoll for filtering
+	var sinceTime time.Time
+	if lastPoll != "" {
+		if t, err := time.Parse(time.RFC3339, lastPoll); err == nil {
+			sinceTime = t
+		}
+	}
+	if sinceTime.IsZero() {
+		sinceTime = time.Now().Add(-7 * 24 * time.Hour) // Last 7 days on first poll
+	}
+
+	eventsCreated := 0
+
+	// Get user's recent events (pushes, PRs, etc.)
+	eventsURL := "https://api.github.com/users/verioussmith/events?per_page=30"
+	req, _ := http.NewRequest("GET", eventsURL, nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Accept", "application/vnd.github.v3+json")
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("github events API error: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("github API %d: %s", resp.StatusCode, string(body))
+	}
+
+	var events []struct {
+		ID        string `json:"id"`
+		Type      string `json:"type"`
+		CreatedAt string `json:"created_at"`
+		Repo      struct {
+			Name string `json:"name"`
+		} `json:"repo"`
+		Payload struct {
+			Ref     string `json:"ref"`
+			Size    int    `json:"size"`    // Number of commits in push
+			Commits []struct {
+				SHA     string `json:"sha"`
+				Message string `json:"message"`
+			} `json:"commits"`
+			Action      string `json:"action"` // For PRs: opened, closed, merged
+			PullRequest struct {
+				Title  string `json:"title"`
+				Number int    `json:"number"`
+				Merged bool   `json:"merged"`
+			} `json:"pull_request"`
+			Release struct {
+				TagName string `json:"tag_name"`
+				Name    string `json:"name"`
+			} `json:"release"`
+		} `json:"payload"`
+	}
+	json.NewDecoder(resp.Body).Decode(&events)
+
+	for _, event := range events {
+		eventTime, _ := time.Parse(time.RFC3339, event.CreatedAt)
+		if eventTime.Before(sinceTime) {
+			continue
+		}
+
+		var eventID, eventType, lane, title, artifactURL string
+		var scoreDelta int
+
+		switch event.Type {
+		case "PushEvent":
+			// Commits shipped
+			numCommits := event.Payload.Size
+			if numCommits == 0 {
+				numCommits = len(event.Payload.Commits)
+			}
+			if numCommits == 0 {
+				continue
+			}
+			eventID = fmt.Sprintf("github-push-%s", event.ID)
+			eventType = "commit"
+			lane = "ship"
+			title = fmt.Sprintf("Pushed %d commit(s) to %s", numCommits, event.Repo.Name)
+			if numCommits == 1 && len(event.Payload.Commits) > 0 {
+				msg := event.Payload.Commits[0].Message
+				if len(msg) > 60 {
+					msg = msg[:60] + "..."
+				}
+				title = fmt.Sprintf("%s: %s", event.Repo.Name, msg)
+			}
+			artifactURL = fmt.Sprintf("https://github.com/%s", event.Repo.Name)
+			scoreDelta = min(numCommits, 3) // Cap at 3 points per push
+
+		case "PullRequestEvent":
+			if event.Payload.Action != "closed" || !event.Payload.PullRequest.Merged {
+				continue // Only count merged PRs
+			}
+			eventID = fmt.Sprintf("github-pr-%s", event.ID)
+			eventType = "pr_merged"
+			lane = "ship"
+			title = fmt.Sprintf("Merged PR #%d: %s", event.Payload.PullRequest.Number, event.Payload.PullRequest.Title)
+			artifactURL = fmt.Sprintf("https://github.com/%s/pull/%d", event.Repo.Name, event.Payload.PullRequest.Number)
+			scoreDelta = 3
+
+		case "ReleaseEvent":
+			eventID = fmt.Sprintf("github-release-%s", event.ID)
+			eventType = "release"
+			lane = "ship"
+			releaseName := event.Payload.Release.Name
+			if releaseName == "" {
+				releaseName = event.Payload.Release.TagName
+			}
+			title = fmt.Sprintf("Released %s: %s", event.Repo.Name, releaseName)
+			artifactURL = fmt.Sprintf("https://github.com/%s/releases/tag/%s", event.Repo.Name, event.Payload.Release.TagName)
+			scoreDelta = 5
+
+		default:
+			continue
+		}
+
+		s.mu.Lock()
+		var exists int
+		s.db.QueryRow("SELECT COUNT(*) FROM events WHERE id = ?", eventID).Scan(&exists)
+		if exists == 0 {
+			timeStr := eventTime.UTC().Format(time.RFC3339)
+			s.db.Exec(`INSERT INTO events (id, event_type, lane, score_delta, artifact_title, artifact_url, source, timestamp, created_at, status)
+				VALUES (?, ?, ?, ?, ?, ?, 'github', ?, ?, 'pending')`,
+				eventID, eventType, lane, scoreDelta, title, artifactURL, timeStr, timeStr)
+			eventsCreated++
+		}
+		s.mu.Unlock()
+	}
+
+	log.Printf("[github] Polled: %d new events from user activity", eventsCreated)
 	return nil
 }
 
