@@ -4813,7 +4813,7 @@ func (s *Server) runTaskAutoDetect(tasks []interface{}, cl map[string]interface{
 			continue
 		}
 		status, _ := tm["status"].(string)
-		if status == "completed" || status == "done" || status == "skipped" {
+		if status == "completed" || status == "done" || status == "skipped" || status == "deferred" {
 			continue // already done
 		}
 
@@ -5078,7 +5078,7 @@ func (s *Server) generateProposals(tasks []interface{}) []TaskProposal {
 			continue
 		}
 		status, _ := tm["status"].(string)
-		if status == "completed" || status == "done" || status == "skipped" {
+		if status == "completed" || status == "done" || status == "skipped" || status == "deferred" {
 			continue
 		}
 		det, _ := tm["detection"].(map[string]interface{})
@@ -5646,6 +5646,72 @@ func (s *Server) handleProposals(w http.ResponseWriter, r *http.Request) {
 		s.db.Exec("UPDATE task_proposals SET status='rejected', reviewed_at=datetime('now') WHERE task_id=?", taskID)
 		json.NewEncoder(w).Encode(map[string]interface{}{"ok": true, "id": taskID, "status": "rejected"})
 
+	case "defer":
+		// Defer a proposal/task — 4 modes:
+		//   ?mode=time&value=2h|1d|1w
+		//   ?mode=stage&value=launch|growth
+		//   ?mode=date&value=2026-03-15
+		//   ?mode=task&value=TASK_ID (after another task completes)
+		taskID := r.URL.Query().Get("id")
+		mode := r.URL.Query().Get("mode")
+		value := r.URL.Query().Get("value")
+		if taskID == "" || mode == "" || value == "" || r.Method != "POST" {
+			http.Error(w, `{"error":"POST with id, mode, value required"}`, 400)
+			return
+		}
+
+		// Calculate deferred_until timestamp (for time/date modes)
+		var deferredUntil string
+		switch mode {
+		case "time":
+			dur := parseDuration(value)
+			deferredUntil = time.Now().Add(dur).UTC().Format(time.RFC3339)
+		case "date":
+			// Parse date, set to start of day PT
+			loc, _ := time.LoadLocation("America/Los_Angeles")
+			t, err := time.ParseInLocation("2006-01-02", value, loc)
+			if err != nil {
+				http.Error(w, `{"error":"invalid date format, use YYYY-MM-DD"}`, 400)
+				return
+			}
+			deferredUntil = t.UTC().Format(time.RFC3339)
+		case "stage":
+			deferredUntil = "" // stage-based, no timestamp
+		case "task":
+			deferredUntil = "" // task-dependency, no timestamp
+		default:
+			http.Error(w, `{"error":"mode must be time|stage|date|task"}`, 400)
+			return
+		}
+
+		// Update proposal status
+		s.db.Exec("UPDATE task_proposals SET status='deferred', reviewed_at=datetime('now') WHERE task_id=?", taskID)
+
+		// Update checklist task with defer info
+		data, _ := os.ReadFile(checklistPath)
+		var cl map[string]interface{}
+		json.Unmarshal(data, &cl)
+		tasks, _ := cl["tasks"].([]interface{})
+		for _, t := range tasks {
+			tm, _ := t.(map[string]interface{})
+			if id, _ := tm["id"].(string); id == taskID {
+				tm["status"] = "deferred"
+				tm["defer"] = map[string]interface{}{
+					"mode":           mode,
+					"value":          value,
+					"deferred_until": deferredUntil,
+					"deferred_at":    time.Now().UTC().Format(time.RFC3339),
+				}
+			}
+		}
+		updated, _ := json.MarshalIndent(cl, "", "  ")
+		os.WriteFile(checklistPath, updated, 0644)
+
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"ok": true, "id": taskID, "status": "deferred",
+			"mode": mode, "value": value, "deferred_until": deferredUntil,
+		})
+
 	case "generate":
 		// Trigger proposal generation on demand
 		if r.Method != "POST" {
@@ -5671,6 +5737,354 @@ func (s *Server) handleProposals(w http.ResponseWriter, r *http.Request) {
 				"POST /v1/proposals?action=reject&id=TASK_ID",
 			},
 		})
+	}
+}
+
+// ─── Defer Action Engine ────────────────────────────────────────────────
+// When a deferred task's condition is met, Wirebot doesn't just un-defer.
+// It tries to TAKE ACTION:
+//   1. Can Wirebot auto-complete it? (run detection checks)
+//   2. Can Wirebot DO the task? (actionable tasks with automations)
+//   3. Otherwise: surface with a nudge + what changed since deferral
+//
+// Task capabilities — things Wirebot can actually execute:
+var taskActions = map[string]string{
+	"Set Up Google Business Profile":    "draft_google_profile",
+	"Write Elevator Pitch":              "draft_content",
+	"Write One-Page Business Plan":      "draft_content",
+	"Write Brand Story":                 "draft_content",
+	"Write Brand Voice Guidelines":      "draft_content",
+	"Create Brand Style Guide":          "draft_content",
+	"Create Mission Statement":          "draft_content",
+	"Define Vision Statement":           "draft_content",
+	"Build Sales Pitch Deck":            "draft_content",
+	"Create Sales Materials":            "draft_content",
+	"Build Company Culture Doc":         "draft_content",
+	"Create Onboarding Process":         "draft_content",
+	"Set Up Onboarding Playbook":        "draft_content",
+	"Create Standard Operating Procedures": "draft_content",
+	"Document All Key Processes":        "draft_content",
+	"Document Processes for Delegation": "draft_content",
+	"Plan Launch Marketing Campaign":    "draft_content",
+	"Build Referral Program":            "draft_content",
+	"Create Lead Generation Strategy":   "draft_content",
+	"Define Sales Process":              "draft_content",
+	"Build Retention Strategy":          "draft_content",
+	"Plan for 10x Volume":              "draft_content",
+	"Plan Tech Stack for Scale":         "draft_content",
+	"Set 90-Day Goals":                  "draft_content",
+	"Identify Key Milestones":           "draft_content",
+	"Define Revenue Model":              "draft_content",
+	"Set Pricing Strategy":              "draft_content",
+	"Set Financial Goals (Year 1)":      "draft_content",
+	"Set Revenue Targets (Monthly)":     "draft_content",
+	"Configure SEO Basics":              "run_seo_check",
+	"Implement Basic SEO":               "run_seo_check",
+	"Set Up Analytics":                  "check_integration",
+	"Set Up CRM":                        "check_integration",
+	"Set Up Payment Processing":         "check_integration",
+	"Set Up Accounting Software":        "check_integration",
+	"Set Up Monitoring & Alerts":        "check_integration",
+	"Set Up Email Marketing":            "check_integration",
+}
+
+func (s *Server) checkDeferredTasks(tasks []interface{}, cl map[string]interface{}) {
+	now := time.Now().UTC()
+	changed := false
+	deferredCount := 0
+
+	completedIDs := map[string]bool{}
+	for _, t := range tasks {
+		tm, _ := t.(map[string]interface{})
+		status, _ := tm["status"].(string)
+		if status == "completed" || status == "done" {
+			if id, _ := tm["id"].(string); id != "" {
+				completedIDs[id] = true
+			}
+		}
+	}
+	currentStage, _ := cl["stage"].(string)
+
+	for _, t := range tasks {
+		tm, _ := t.(map[string]interface{})
+		status, _ := tm["status"].(string)
+		if status != "deferred" {
+			continue
+		}
+		deferredCount++
+		deferMap, _ := tm["defer"].(map[string]interface{})
+		if deferMap == nil {
+			log.Printf("[defer] Task has deferred status but no defer map: %v", tm["title"])
+			continue
+		}
+		mode, _ := deferMap["mode"].(string)
+		value, _ := deferMap["value"].(string)
+		deferredUntil, _ := deferMap["deferred_until"].(string)
+		title, _ := tm["title"].(string)
+		log.Printf("[defer] Checking: %s (mode=%s, value=%s, until=%s)", title, mode, value, deferredUntil)
+
+		triggered := false
+		switch mode {
+		case "time", "date":
+			if deferredUntil != "" {
+				t, err := time.Parse(time.RFC3339, deferredUntil)
+				if err == nil && now.After(t) {
+					triggered = true
+				}
+			}
+		case "stage":
+			stageOrder := map[string]int{"idea": 0, "launch": 1, "growth": 2}
+			if stageOrder[currentStage] >= stageOrder[value] {
+				triggered = true
+			}
+		case "task":
+			if completedIDs[value] {
+				triggered = true
+			}
+		}
+
+		if !triggered {
+			continue
+		}
+
+		// title already extracted above for logging
+		taskID, _ := tm["id"].(string)
+		businessID, _ := tm["business_id"].(string)
+		action := taskActions[title]
+
+		log.Printf("[defer] ⏰ Triggered: %s (was %s:%s) → action: %s", title, mode, value, action)
+
+		switch action {
+		case "draft_content":
+			// Wirebot drafts the content and saves as a proposal with the draft
+			draft := s.generateDraftForTask(title, businessID)
+			if draft != "" {
+				tm["status"] = "pending"
+				tm["defer"] = nil
+				// Store draft as a rich proposal the operator can review
+				s.db.Exec(`INSERT OR REPLACE INTO task_proposals
+					(task_id, title, status, draft, evidence, confidence, business_id)
+					VALUES (?, ?, 'action_ready', ?, '[]', 0.7, ?)`,
+					taskID, title, draft, businessID)
+				log.Printf("[defer] 📝 Drafted content for: %s", title)
+				changed = true
+
+				// Emit a scoreboard event so it shows in the feed
+				s.emitDeferAction(taskID, title, "DRAFT_READY", businessID)
+			} else {
+				// Can't draft — just surface as nudge
+				tm["status"] = "pending"
+				tm["defer"] = nil
+				s.emitDeferAction(taskID, title, "DEFER_EXPIRED", businessID)
+				changed = true
+			}
+
+		case "run_seo_check":
+			// Wirebot can actually check SEO status
+			tm["status"] = "pending"
+			tm["defer"] = nil
+			changed = true
+			// Run a quick SEO probe
+			go s.runSEOCheckForTask(taskID, title, businessID)
+
+		case "check_integration":
+			// Check if the integration got connected while deferred
+			tm["status"] = "pending"
+			tm["defer"] = nil
+			changed = true
+			s.emitDeferAction(taskID, title, "DEFER_EXPIRED", businessID)
+
+		default:
+			// No special action — just un-defer with a nudge
+			tm["status"] = "pending"
+			tm["defer"] = nil
+			changed = true
+			s.emitDeferAction(taskID, title, "DEFER_EXPIRED", businessID)
+			log.Printf("[defer] ⏰ Un-deferred (no action): %s", title)
+		}
+
+		// Clear deferred proposal
+		s.db.Exec("DELETE FROM task_proposals WHERE task_id=? AND status='deferred'", taskID)
+	}
+
+	if changed {
+		cl["tasks"] = tasks
+		updated, _ := json.MarshalIndent(cl, "", "  ")
+		os.WriteFile(checklistPath, updated, 0644)
+	}
+
+	if deferredCount > 0 {
+		log.Printf("[defer] Checked %d deferred tasks, %d triggered", deferredCount, func() int {
+			if changed {
+				return deferredCount
+			}
+			return 0
+		}())
+	}
+}
+
+// emitDeferAction creates a feed event when a deferred task triggers
+func (s *Server) emitDeferAction(taskID, title, eventType, businessID string) {
+	id := fmt.Sprintf("def_%d", time.Now().UnixNano())
+	s.mu.Lock()
+	s.db.Exec(`INSERT INTO events (id, event_type, lane, source, timestamp,
+		artifact_type, artifact_title, confidence, score_delta, business_id, status, created_at)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+		id, eventType, "systems", "wirebot:defer", time.Now().UTC().Format(time.RFC3339),
+		"task", title, 0.9, 0, businessID, "pending", time.Now().UTC().Format(time.RFC3339))
+	s.mu.Unlock()
+}
+
+// generateDraftForTask uses the gateway AI to draft content for a task
+func (s *Server) generateDraftForTask(title, businessID string) string {
+	// Build context-aware prompt
+	bizName := map[string]string{
+		"SEW": "Startempire Wire (LLC, entrepreneur networking platform)",
+		"SEWN": "Startempire Wire Network (webring/network product)",
+		"WB": "Wirebot (AI operating partner product)",
+		"PVD": "Philoveracity Design (design sole proprietorship)",
+	}[businessID]
+	if bizName == "" {
+		bizName = "the business"
+	}
+
+	prompt := fmt.Sprintf(
+		`You are Wirebot, an AI business operating partner. Draft the following for %s:
+
+Task: %s
+
+Requirements:
+- Write a practical, actionable first draft
+- Keep it concise (250-500 words)
+- Include specific details relevant to the business
+- Format with clear headings and bullet points
+- This should be ready for the founder to review and refine, not a template
+
+Write the draft now:`, bizName, title)
+
+	// Call the gateway for AI generation
+	gatewayURL := "http://127.0.0.1:18789/v1/chat/completions"
+	token := os.Getenv("GATEWAY_TOKEN")
+	if token == "" {
+		token = "65b918ba-baf5-4996-8b53-6fb0f662a0c3"
+	}
+
+	reqBody, _ := json.Marshal(map[string]interface{}{
+		"model": "kimi-coding/k2p5",
+		"messages": []map[string]string{
+			{"role": "user", "content": prompt},
+		},
+		"max_tokens": 800,
+	})
+
+	req, _ := http.NewRequest("POST", gatewayURL, bytes.NewReader(reqBody))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+token)
+
+	client := &http.Client{Timeout: 60 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		log.Printf("[defer] Draft generation failed for '%s': %v", title, err)
+		return ""
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		body, _ := io.ReadAll(resp.Body)
+		log.Printf("[defer] Draft generation HTTP %d for '%s': %s", resp.StatusCode, title, string(body))
+		return ""
+	}
+
+	var result struct {
+		Choices []struct {
+			Message struct {
+				Content string `json:"content"`
+			} `json:"message"`
+		} `json:"choices"`
+	}
+	json.NewDecoder(resp.Body).Decode(&result)
+
+	if len(result.Choices) > 0 && result.Choices[0].Message.Content != "" {
+		return result.Choices[0].Message.Content
+	}
+	return ""
+}
+
+// runSEOCheckForTask probes the business's domain for SEO basics
+func (s *Server) runSEOCheckForTask(taskID, title, businessID string) {
+	domain := "startempirewire.com"
+	if businessID == "WB" {
+		domain = "wirebot.chat"
+	} else if businessID == "PVD" {
+		domain = "philoveracity.com"
+	}
+
+	url := "https://" + domain
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Get(url)
+	if err != nil {
+		return
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 50000))
+	html := string(body)
+
+	findings := []string{}
+	if strings.Contains(html, "<title>") {
+		findings = append(findings, "✅ Title tag present")
+	} else {
+		findings = append(findings, "❌ Missing title tag")
+	}
+	if strings.Contains(html, `name="description"`) || strings.Contains(html, `name="Description"`) {
+		findings = append(findings, "✅ Meta description present")
+	} else {
+		findings = append(findings, "❌ Missing meta description")
+	}
+	if strings.Contains(html, `og:title`) {
+		findings = append(findings, "✅ Open Graph tags present")
+	} else {
+		findings = append(findings, "⚠️ Missing Open Graph tags")
+	}
+	if strings.Contains(html, `rel="canonical"`) {
+		findings = append(findings, "✅ Canonical URL set")
+	} else {
+		findings = append(findings, "⚠️ Missing canonical URL")
+	}
+	if strings.Contains(html, "sitemap") || strings.Contains(html, "Sitemap") {
+		findings = append(findings, "✅ Sitemap referenced")
+	}
+
+	report := fmt.Sprintf("SEO Check for %s:\n%s", domain, strings.Join(findings, "\n"))
+
+	// Store as action_ready proposal
+	s.db.Exec(`INSERT OR REPLACE INTO task_proposals
+		(task_id, title, status, draft, evidence, confidence, business_id)
+		VALUES (?, ?, 'action_ready', ?, '[]', 0.75, ?)`,
+		taskID, title, report, businessID)
+
+	s.emitDeferAction(taskID, title, "SEO_CHECK_COMPLETE", businessID)
+	log.Printf("[defer] 🔍 SEO check complete for %s: %d findings", domain, len(findings))
+}
+
+// parseDuration converts shorthand like 2h, 1d, 1w, 1m to time.Duration
+func parseDuration(s string) time.Duration {
+	s = strings.TrimSpace(strings.ToLower(s))
+	if len(s) < 2 {
+		return 24 * time.Hour
+	}
+	num := 1
+	fmt.Sscanf(s[:len(s)-1], "%d", &num)
+	switch s[len(s)-1] {
+	case 'h':
+		return time.Duration(num) * time.Hour
+	case 'd':
+		return time.Duration(num) * 24 * time.Hour
+	case 'w':
+		return time.Duration(num) * 7 * 24 * time.Hour
+	case 'm':
+		return time.Duration(num) * 30 * 24 * time.Hour
+	default:
+		return 24 * time.Hour
 	}
 }
 
@@ -5789,6 +6203,52 @@ func (s *Server) handleChecklist(w http.ResponseWriter, r *http.Request) {
 			"id":   taskID,
 			"note": "Task marked complete",
 		})
+	case "defer":
+		// Defer a task — same modes as proposals defer
+		taskID := r.URL.Query().Get("id")
+		mode := r.URL.Query().Get("mode")
+		value := r.URL.Query().Get("value")
+		if taskID == "" || mode == "" || value == "" || r.Method != "POST" {
+			http.Error(w, `{"error":"POST with id, mode, value required"}`, 400)
+			return
+		}
+		var deferredUntil string
+		switch mode {
+		case "time":
+			deferredUntil = time.Now().Add(parseDuration(value)).UTC().Format(time.RFC3339)
+		case "date":
+			loc, _ := time.LoadLocation("America/Los_Angeles")
+			t, err := time.ParseInLocation("2006-01-02", value, loc)
+			if err != nil {
+				http.Error(w, `{"error":"invalid date"}`, 400)
+				return
+			}
+			deferredUntil = t.UTC().Format(time.RFC3339)
+		case "stage", "task":
+			deferredUntil = ""
+		default:
+			http.Error(w, `{"error":"mode: time|stage|date|task"}`, 400)
+			return
+		}
+		for _, t := range tasks {
+			tm, _ := t.(map[string]interface{})
+			if id, _ := tm["id"].(string); id == taskID {
+				tm["status"] = "deferred"
+				tm["defer"] = map[string]interface{}{
+					"mode": mode, "value": value,
+					"deferred_until": deferredUntil,
+					"deferred_at":    time.Now().UTC().Format(time.RFC3339),
+				}
+			}
+		}
+		cl["tasks"] = tasks
+		updated, _ := json.MarshalIndent(cl, "", "  ")
+		os.WriteFile(checklistPath, updated, 0644)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"ok": true, "id": taskID, "status": "deferred",
+			"mode": mode, "value": value, "deferred_until": deferredUntil,
+		})
+
 	case "autodetect":
 		// Proactively detect which tasks have been completed
 		if r.Method != "POST" {
@@ -6206,6 +6666,9 @@ func (s *Server) runAutoDetectCron() {
 	if len(tasksRaw) == 0 {
 		return
 	}
+
+	// Phase 0: Un-defer tasks whose defer conditions are met
+	s.checkDeferredTasks(tasksRaw, cl)
 
 	// Phase 1: Auto-detect definitive completions
 	detected := s.runTaskAutoDetect(tasksRaw, cl)

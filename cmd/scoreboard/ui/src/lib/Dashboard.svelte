@@ -62,6 +62,9 @@
   let partners = $state([]);
   let expandedTask = $state(null);
   let expandedCat = $state(null);
+  let deferTarget = $state(null);  // task ID being deferred
+  let deferMode = $state('time');
+  let deferValue = $state('1w');
   let partnersOpen = $state(false); // collapsed by default (empty)
   let onboardingComplete = $state(false);
   let stageLoading = $state(false);
@@ -111,8 +114,13 @@
       if (mem?.members) partners = mem.members;
       if (partners.length > 0) partnersOpen = true;
     });
-    authFetch('/v1/proposals?action=list&status=proposed').then(res => {
-      if (res?.proposals) proposals = res.proposals;
+    // Load proposals: both proposed (evidence-based) and action_ready (Wirebot drafted content)
+    Promise.all([
+      authFetch('/v1/proposals?action=list&status=proposed'),
+      authFetch('/v1/proposals?action=list&status=action_ready'),
+    ]).then(([proposed, ready]) => {
+      const all = [...(ready?.proposals || []), ...(proposed?.proposals || [])];
+      proposals = all;
     });
   }
 
@@ -157,6 +165,25 @@
     if (s.length < 3)
       s.push({ icon: '⚡', title: 'Keep Building', text: 'You\'re making progress — keep the streak alive', action: 'score' });
     suggestions = s.slice(0, 4);
+  }
+
+  async function deferTask(taskId, source = 'checklist') {
+    const endpoint = source === 'proposal'
+      ? `/v1/proposals?action=defer&id=${taskId}&mode=${deferMode}&value=${deferValue}`
+      : `/v1/checklist?action=defer&id=${taskId}&mode=${deferMode}&value=${deferValue}`;
+    await fetch(`${API}${endpoint}`, { method: 'POST', headers: headers() });
+    deferTarget = null;
+    deferMode = 'time';
+    deferValue = '1w';
+    // Remove from proposals if it was a proposal
+    proposals = proposals.filter(p => p.task_id !== taskId);
+    // Reload checklist
+    const grouped = await authFetch(`/v1/checklist?action=grouped&stage=${stage}`);
+    if (grouped) {
+      checklist = { total: grouped.total, completed: grouped.completed, percent: grouped.percent, stage: grouped.stage };
+      allCategories = grouped.categories || [];
+      categories = allCategories;
+    }
   }
 
   async function acceptProposal(taskId) {
@@ -471,11 +498,52 @@
                       <button class="ta-btn" title="AI Hint" onclick={() => { expandedTask = expandedTask === task.id ? null : task.id; }}>
                         {expandedTask === task.id ? '▾' : '💡'}
                       </button>
-                      {#if task.status !== 'completed' && task.status !== 'done'}
-                        <button class="ta-btn" title="Skip / N/A" onclick={() => skipTask(task.id)}>⏭️</button>
+                      {#if task.status !== 'completed' && task.status !== 'done' && task.status !== 'deferred'}
+                        <button class="ta-btn" title="Defer" onclick={() => { deferTarget = deferTarget === task.id ? null : task.id; deferMode = 'time'; deferValue = '1w'; }}>⏳</button>
+                      {/if}
+                      {#if task.status === 'deferred' && task.defer}
+                        <span class="task-deferred-badge" title="Deferred: {task.defer.mode} → {task.defer.value}">⏳</span>
                       {/if}
                     </div>
                   </div>
+                  {#if deferTarget === task.id}
+                    <div class="defer-picker task-defer-picker">
+                      <div class="defer-modes">
+                        <button class="dm {deferMode === 'time' ? 'active' : ''}" onclick={() => { deferMode = 'time'; deferValue = '1w'; }}>⏱️ After</button>
+                        <button class="dm {deferMode === 'stage' ? 'active' : ''}" onclick={() => { deferMode = 'stage'; deferValue = 'launch'; }}>🎯 Stage</button>
+                        <button class="dm {deferMode === 'date' ? 'active' : ''}" onclick={() => { deferMode = 'date'; deferValue = ''; }}>📅 Date</button>
+                        <button class="dm {deferMode === 'task' ? 'active' : ''}" onclick={() => { deferMode = 'task'; deferValue = ''; }}>🔗 Task</button>
+                      </div>
+                      <div class="defer-value">
+                        {#if deferMode === 'time'}
+                          <div class="defer-chips">
+                            {#each [['2h','2 hrs'],['1d','1 day'],['3d','3 days'],['1w','1 wk'],['2w','2 wks'],['1m','1 mo']] as [v, label]}
+                              <button class="dc {deferValue === v ? 'active' : ''}" onclick={() => deferValue = v}>{label}</button>
+                            {/each}
+                          </div>
+                        {:else if deferMode === 'stage'}
+                          <div class="defer-chips">
+                            {#each [['idea','💡 Idea'],['launch','🚀 Launch'],['growth','📈 Growth']] as [v, label]}
+                              <button class="dc {deferValue === v ? 'active' : ''}" onclick={() => deferValue = v}>{label}</button>
+                            {/each}
+                          </div>
+                        {:else if deferMode === 'date'}
+                          <input type="date" class="defer-date" bind:value={deferValue} min={new Date().toISOString().split('T')[0]} />
+                        {:else if deferMode === 'task'}
+                          <select class="defer-select" bind:value={deferValue}>
+                            <option value="">Select blocking task…</option>
+                            {#each allCategories.flatMap(c => c.tasks || []).filter(t => t.id !== task.id && t.status !== 'completed') as t}
+                              <option value={t.id}>{t.title}</option>
+                            {/each}
+                          </select>
+                        {/if}
+                      </div>
+                      <div class="defer-confirm">
+                        <button class="defer-go" disabled={!deferValue} onclick={() => deferTask(task.id)}>⏳ Defer</button>
+                        <button class="defer-cancel" onclick={() => deferTarget = null}>Cancel</button>
+                      </div>
+                    </div>
+                  {/if}
                 {/each}
               </div>
             {/if}
@@ -524,22 +592,32 @@
 
     <!-- ═══ 7b. WIREBOT PROPOSALS (auto-inferred completions) ═══ -->
     {#if proposals.length > 0}
-      <div class="section-header"><span>📝 WIREBOT THINKS THESE ARE DONE</span></div>
+      <div class="section-header"><span>📝 WIREBOT ACTIONS</span></div>
       <div class="proposals-list">
         {#each proposals as prop}
           {@const bizInfo = prop.business_id ? ENTITIES.flatMap(e => [e, ...(e.products||[])]).find(b => b.id === prop.business_id) : null}
-          <div class="proposal-card">
+          <div class="proposal-card" class:action-ready={prop.status === 'action_ready'}>
             <div class="prop-header">
-              <span class="prop-title">{prop.title}</span>
+              <span class="prop-title">
+                {#if prop.status === 'action_ready'}📄{:else}🔍{/if}
+                {prop.title}
+              </span>
               <div class="prop-meta">
                 {#if bizInfo}
                   <span class="prop-biz">{bizInfo.icon} {bizInfo.label}</span>
-                {:else if prop.business_id === ''}
-                  <span class="prop-biz prop-biz-all">🌐 All</span>
                 {/if}
-                <span class="prop-conf" title="Confidence">{Math.round(prop.confidence * 100)}%</span>
+                {#if prop.status === 'action_ready'}
+                  <span class="prop-conf prop-drafted">DRAFTED</span>
+                {:else}
+                  <span class="prop-conf" title="Confidence">{Math.round(prop.confidence * 100)}%</span>
+                {/if}
               </div>
             </div>
+            {#if prop.status === 'action_ready' && prop.draft}
+              <div class="prop-draft-preview">
+                {prop.draft.substring(0, 300)}{prop.draft.length > 300 ? '…' : ''}
+              </div>
+            {/if}
             <div class="prop-evidence-list">
               {#each prop.evidence as ev}
                 <div class="prop-ev-item">
@@ -557,9 +635,48 @@
               {/each}
             </div>
             <div class="prop-actions">
-              <button class="prop-accept" onclick={() => acceptProposal(prop.task_id)}>✅ Confirm Done</button>
-              <button class="prop-reject" onclick={() => rejectProposal(prop.task_id)}>❌ Not Yet</button>
+              <button class="prop-accept" onclick={() => acceptProposal(prop.task_id)}>✅ Done</button>
+              <button class="prop-defer" onclick={() => { deferTarget = prop.task_id; deferMode = 'time'; deferValue = '1w'; }}>⏳ Defer</button>
+              <button class="prop-reject" onclick={() => rejectProposal(prop.task_id)}>❌ No</button>
             </div>
+            {#if deferTarget === prop.task_id}
+              <div class="defer-picker">
+                <div class="defer-modes">
+                  <button class="dm {deferMode === 'time' ? 'active' : ''}" onclick={() => { deferMode = 'time'; deferValue = '1w'; }}>⏱️ After</button>
+                  <button class="dm {deferMode === 'stage' ? 'active' : ''}" onclick={() => { deferMode = 'stage'; deferValue = 'launch'; }}>🎯 At Stage</button>
+                  <button class="dm {deferMode === 'date' ? 'active' : ''}" onclick={() => { deferMode = 'date'; deferValue = ''; }}>📅 Date</button>
+                  <button class="dm {deferMode === 'task' ? 'active' : ''}" onclick={() => { deferMode = 'task'; deferValue = ''; }}>🔗 After Task</button>
+                </div>
+                <div class="defer-value">
+                  {#if deferMode === 'time'}
+                    <div class="defer-chips">
+                      {#each [['2h','2 hrs'],['1d','1 day'],['3d','3 days'],['1w','1 week'],['2w','2 weeks'],['1m','1 month']] as [v, label]}
+                        <button class="dc {deferValue === v ? 'active' : ''}" onclick={() => deferValue = v}>{label}</button>
+                      {/each}
+                    </div>
+                  {:else if deferMode === 'stage'}
+                    <div class="defer-chips">
+                      {#each [['idea','💡 Idea'],['launch','🚀 Launch'],['growth','📈 Growth']] as [v, label]}
+                        <button class="dc {deferValue === v ? 'active' : ''}" onclick={() => deferValue = v}>{label}</button>
+                      {/each}
+                    </div>
+                  {:else if deferMode === 'date'}
+                    <input type="date" class="defer-date" bind:value={deferValue} min={new Date().toISOString().split('T')[0]} />
+                  {:else if deferMode === 'task'}
+                    <select class="defer-select" bind:value={deferValue}>
+                      <option value="">Select blocking task…</option>
+                      {#each allCategories.flatMap(c => c.tasks || []).filter(t => t.id !== prop.task_id && t.status !== 'completed' && t.status !== 'done') as t}
+                        <option value={t.id}>{t.title}</option>
+                      {/each}
+                    </select>
+                  {/if}
+                </div>
+                <div class="defer-confirm">
+                  <button class="defer-go" disabled={!deferValue} onclick={() => deferTask(prop.task_id, 'proposal')}>⏳ Defer</button>
+                  <button class="defer-cancel" onclick={() => deferTarget = null}>Cancel</button>
+                </div>
+              </div>
+            {/if}
           </div>
         {/each}
       </div>
@@ -786,6 +903,13 @@
   .prop-biz { font-size: 10px; padding: 2px 6px; border-radius: 8px; background: rgba(255,255,255,0.06); color: #aaa; white-space: nowrap; }
   .prop-biz-all { color: #666; }
   .prop-conf { font-size: 11px; color: #7c7cff; background: rgba(124,124,255,0.1); padding: 2px 6px; border-radius: 8px; }
+  .proposal-card.action-ready { border-color: rgba(0,220,130,0.3); background: linear-gradient(135deg, #0d1117 0%, rgba(0,220,130,0.05) 100%); }
+  .prop-drafted { background: rgba(0,220,130,0.2) !important; color: #00dc82 !important; }
+  .prop-draft-preview {
+    margin: 8px 0; padding: 10px; border-radius: 6px; background: rgba(0,0,0,0.4);
+    font-size: 11px; color: #999; line-height: 1.5; white-space: pre-wrap;
+    max-height: 120px; overflow-y: auto; border-left: 2px solid #00dc82;
+  }
   .prop-evidence-list { display: flex; flex-direction: column; gap: 8px; margin-bottom: 10px; }
   .prop-ev-item {
     background: rgba(255,255,255,0.03); border-left: 2px solid #333;
@@ -800,15 +924,49 @@
     font-style: italic; padding-left: 20px;
     overflow: hidden; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical;
   }
-  .prop-actions { display: flex; gap: 8px; }
-  .prop-accept {
+  .prop-actions { display: flex; gap: 6px; }
+  .prop-accept, .prop-defer, .prop-reject {
     flex: 1; padding: 8px; border-radius: 8px; border: none;
-    background: rgba(0,220,130,0.15); color: #00dc82; font-size: 12px; font-weight: 600; cursor: pointer;
+    font-size: 11px; font-weight: 600; cursor: pointer;
   }
-  .prop-reject {
-    flex: 1; padding: 8px; border-radius: 8px; border: none;
-    background: rgba(255,80,80,0.1); color: #ff5050; font-size: 12px; font-weight: 600; cursor: pointer;
+  .prop-accept { background: rgba(0,220,130,0.15); color: #00dc82; }
+  .prop-defer { background: rgba(255,200,50,0.1); color: #e8b830; }
+  .prop-reject { background: rgba(255,80,80,0.1); color: #ff5050; }
+
+  /* ─── Defer Picker ─── */
+  .defer-picker {
+    margin-top: 8px; padding: 10px; border-radius: 8px;
+    background: rgba(0,0,0,0.3); border: 1px solid #2a2a40;
   }
+  .task-defer-picker { margin: 4px 0 8px 28px; }
+  .defer-modes { display: flex; gap: 4px; margin-bottom: 8px; }
+  .dm {
+    flex: 1; padding: 5px 2px; border-radius: 6px; border: 1px solid #2a2a40;
+    background: transparent; color: #888; font-size: 10px; cursor: pointer; text-align: center;
+  }
+  .dm.active { border-color: #e8b830; color: #e8b830; background: rgba(232,184,48,0.1); }
+  .defer-value { margin-bottom: 8px; }
+  .defer-chips { display: flex; gap: 4px; flex-wrap: wrap; }
+  .dc {
+    padding: 4px 8px; border-radius: 6px; border: 1px solid #2a2a40;
+    background: transparent; color: #999; font-size: 11px; cursor: pointer;
+  }
+  .dc.active { border-color: #e8b830; color: #e8b830; background: rgba(232,184,48,0.1); }
+  .defer-date, .defer-select {
+    width: 100%; padding: 6px 8px; border-radius: 6px; border: 1px solid #2a2a40;
+    background: #0a0a15; color: #ddd; font-size: 12px;
+  }
+  .defer-confirm { display: flex; gap: 6px; }
+  .defer-go {
+    flex: 1; padding: 7px; border-radius: 6px; border: none;
+    background: rgba(232,184,48,0.2); color: #e8b830; font-size: 12px; font-weight: 600; cursor: pointer;
+  }
+  .defer-go:disabled { opacity: 0.3; cursor: default; }
+  .defer-cancel {
+    padding: 7px 12px; border-radius: 6px; border: none;
+    background: rgba(255,255,255,0.05); color: #666; font-size: 12px; cursor: pointer;
+  }
+  .task-deferred-badge { font-size: 12px; opacity: 0.5; }
   .sug-card { flex-shrink: 0; width: 150px; padding: 12px; background: #16161e; border: 1px solid #1e1e30; border-radius: 10px; text-align: left; cursor: pointer; transition: border-color .15s; color: inherit; }
   .sug-card:hover { border-color: #7c7cff40; }
   .sug-icon { font-size: 20px; margin-bottom: 4px; }
