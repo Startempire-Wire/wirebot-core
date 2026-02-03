@@ -756,7 +756,7 @@
           onopenPairing={() => showPairing = true}
           onbusinessChange={(e) => { activeBusiness = e.detail; fetchAll(); }} />
       {:else if view === 'score'}
-        <Score {data} {lastUpdate} onHelp={() => showHints = true} user={loggedInUser} onPairing={() => showPairing = true} />
+        <Score {data} {lastUpdate} onHelp={() => showHints = true} user={loggedInUser} onPairing={selfReportCount === 0 ? () => showPairing = true : null} />
       {:else if view === 'feed'}
         <Feed items={feed} pendingCount={data?.pending_count || 0} onHelp={() => showHints = true}
           {activeBusiness} onBusinessChange={(biz) => { activeBusiness = biz; fetchAll(); }} />
@@ -1140,7 +1140,7 @@
     {/if}
 
     <!-- Wirebot Chat -->
-    <Chat bind:visible={showChat} onPairing={() => { showChat = false; showPairing = true; pairingInstrument = ''; }} />
+    <Chat bind:visible={showChat} onPairing={selfReportCount === 0 ? () => { showChat = false; showPairing = true; pairingInstrument = ''; } : null} />
 
     <!-- Pairing Modal (slide-up sheet, same pattern as Chat) -->
     {#if showPairing}
