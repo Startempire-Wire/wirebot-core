@@ -44,6 +44,7 @@
   let partners = $state([]);
   let expandedTask = $state(null);
   let expandedCat = $state(null);  // which category is open
+  let partnersOpen = $state(true); // growth partners section
   let onboardingComplete = $state(false);
 
   const API = '';
@@ -255,11 +256,13 @@
     {/if}
 
     <!-- ═══ 4. NETWORK GROWTH PARTNERS (real members) ═══ -->
-    <div class="section-header">
-      <span>NETWORK GROWTH PARTNERS</span>
-      <button class="connect-link" onclick={() => window.open('https://startempirewire.com/members/', '_blank')}>CONNECT ➜</button>
-    </div>
-    {#if partners.length > 0}
+    <button class="section-header section-toggle" onclick={() => partnersOpen = !partnersOpen}>
+      <span>{partnersOpen ? '▾' : '▸'} NETWORK GROWTH PARTNERS</span>
+      <span class="connect-link" onclick={(e) => { e.stopPropagation(); window.open('https://startempirewire.com/members/', '_blank'); }}>CONNECT ➜</span>
+    </button>
+    {#if !partnersOpen}
+      <!-- collapsed — just the header -->
+    {:else if partners.length > 0}
       <div class="partners-row">
         {#each partners as p}
           <a class="partner-avatar" href={p.link || '#'} target="_blank" title={p.name}>
@@ -463,6 +466,7 @@
   .section-header { display: flex; justify-content: space-between; align-items: center; margin: 16px 0 8px; }
   .section-header span { font-size: 11px; font-weight: 800; letter-spacing: .08em; color: #888; }
   .connect-link { background: none; border: none; color: #7c7cff; font-size: 11px; font-weight: 700; cursor: pointer; letter-spacing: .05em; }
+  .section-toggle { cursor: pointer; border: none; background: none; width: 100%; padding: 0; color: inherit; }
 
   /* ─── Onboarding Cards ─── */
   .onboard-scroll { display: flex; gap: 10px; overflow-x: auto; padding-bottom: 4px; margin-bottom: 8px; scrollbar-width: none; }
