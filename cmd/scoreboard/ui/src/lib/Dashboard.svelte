@@ -22,12 +22,12 @@
   let localBiz = $state(parentBiz || '');  // local business filter state
 
   // Business = legal entity, Product = offering within a business
+  // Startempire Wire Network IS the network — not a separate entity
   const ENTITIES = [
     { id: '', label: 'All', icon: '🌐', type: 'all' },
-    { id: 'STA', label: 'Startempire Wire', icon: '⚡', type: 'business', legal: 'LLC',
+    { id: 'STA', label: 'Startempire Wire Network', icon: '⚡', type: 'business', legal: 'LLC',
       products: [
         { id: 'WIR', label: 'Wirebot', icon: '🤖', type: 'product' },
-        { id: 'SEW', label: 'Wire Network', icon: '🕸', type: 'product' },
       ]},
     { id: 'PHI', label: 'Philoveracity', icon: '📘', type: 'business', legal: 'Sole Prop', products: [] },
   ];
