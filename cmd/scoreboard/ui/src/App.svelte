@@ -1349,10 +1349,10 @@
 
   /* Slide + fade for page content */
   ::view-transition-old(root) {
-    animation: 180ms ease-out both vt-slide-out;
+    animation: 300ms cubic-bezier(0.25, 0.46, 0.45, 0.94) both vt-slide-out;
   }
   ::view-transition-new(root) {
-    animation: 180ms ease-out both vt-slide-in;
+    animation: 300ms cubic-bezier(0.25, 0.46, 0.45, 0.94) both vt-slide-in;
   }
 
   /* Direction-aware: forward = slide left, back = slide right */
@@ -1388,10 +1388,10 @@
 
   /* Fallback for browsers without View Transitions API */
   .content.slide-forward {
-    animation: fallback-slide-left 200ms ease-out;
+    animation: fallback-slide-left 350ms cubic-bezier(0.25, 0.46, 0.45, 0.94);
   }
   .content.slide-back {
-    animation: fallback-slide-right 200ms ease-out;
+    animation: fallback-slide-right 350ms cubic-bezier(0.25, 0.46, 0.45, 0.94);
   }
   @keyframes fallback-slide-left {
     0% { opacity: 0.3; transform: translateX(40px); }

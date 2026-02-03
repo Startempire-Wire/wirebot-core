@@ -352,7 +352,8 @@
       {/if}
     {/if}
 
-    <!-- ═══ 5. STAGE SELECTOR ═══ -->
+    <!-- ═══ 5. STAGE SELECTOR + BUSINESS SETUP TASKS (together) ═══ -->
+    <div class="section-header"><span>BUSINESS SET UP TASKS</span></div>
     <div class="stage-row">
       {#each ['idea', 'launch', 'growth'] as s}
         <button class="stage-pill" class:active={stage === s} disabled={stageLoading} onclick={() => changeStage(s)}>
@@ -363,44 +364,6 @@
       {/each}
     </div>
 
-    <!-- ═══ 6. DAILY STAND UP TASKS ═══ -->
-    <div class="section-header"><span>DAILY STAND UP TASKS</span></div>
-    {#if dailyTasks.length > 0}
-      <div class="task-list">
-        {#each dailyTasks as task}
-          <div class="task-item" class:done={task.completed}>
-            <button class="task-check" onclick={() => task.id && completeTask(task.id)}>
-              <span class="check-box" class:checked={task.completed}>{task.completed ? '✓' : ''}</span>
-            </button>
-            <div class="task-body">
-              <span class="task-title">{task.title || 'Untitled task'}</span>
-              {#if expandedTask === `daily-${task.id}`}
-                <div class="task-detail-inline">
-                  {#if task.description}<p class="tdi-desc">{task.description}</p>{/if}
-                  {#if task.aiSuggestion}<div class="task-ai">💡 {task.aiSuggestion}</div>{/if}
-                  <div class="tdi-meta">
-                    <span>{task.category || 'General'}</span>
-                    <span>•</span>
-                    <span>{task.stage || stage}</span>
-                  </div>
-                </div>
-              {/if}
-            </div>
-            <div class="task-actions">
-              <button class="ta-btn" title="Complete" onclick={() => task.id && completeTask(task.id)}>✅</button>
-              <button class="ta-btn" title="Details" onclick={() => { expandedTask = expandedTask === `daily-${task.id}` ? null : `daily-${task.id}`; }}>
-                {expandedTask === `daily-${task.id}` ? '▾' : '💡'}
-              </button>
-            </div>
-          </div>
-        {/each}
-      </div>
-    {:else}
-      <div class="task-empty">All caught up! 🎉</div>
-    {/if}
-
-    <!-- ═══ 7. BUSINESS SET UP TASKS (grouped by category) ═══ -->
-    <div class="section-header"><span>BUSINESS SET UP TASKS</span></div>
     {#if stageLoading}
       <div class="task-empty"><span class="spinner small"></span></div>
     {:else if categories.length > 0}
@@ -449,6 +412,42 @@
       </div>
     {:else}
       <div class="task-empty">No tasks for this stage</div>
+    {/if}
+
+    <!-- ═══ 7. DAILY STAND UP TASKS ═══ -->
+    <div class="section-header"><span>DAILY STAND UP TASKS</span></div>
+    {#if dailyTasks.length > 0}
+      <div class="task-list">
+        {#each dailyTasks as task}
+          <div class="task-item" class:done={task.completed}>
+            <button class="task-check" onclick={() => task.id && completeTask(task.id)}>
+              <span class="check-box" class:checked={task.completed}>{task.completed ? '✓' : ''}</span>
+            </button>
+            <div class="task-body">
+              <span class="task-title">{task.title || 'Untitled task'}</span>
+              {#if expandedTask === `daily-${task.id}`}
+                <div class="task-detail-inline">
+                  {#if task.description}<p class="tdi-desc">{task.description}</p>{/if}
+                  {#if task.aiSuggestion}<div class="task-ai">💡 {task.aiSuggestion}</div>{/if}
+                  <div class="tdi-meta">
+                    <span>{task.category || 'General'}</span>
+                    <span>•</span>
+                    <span>{task.stage || stage}</span>
+                  </div>
+                </div>
+              {/if}
+            </div>
+            <div class="task-actions">
+              <button class="ta-btn" title="Complete" onclick={() => task.id && completeTask(task.id)}>✅</button>
+              <button class="ta-btn" title="Details" onclick={() => { expandedTask = expandedTask === `daily-${task.id}` ? null : `daily-${task.id}`; }}>
+                {expandedTask === `daily-${task.id}` ? '▾' : '💡'}
+              </button>
+            </div>
+          </div>
+        {/each}
+      </div>
+    {:else}
+      <div class="task-empty">All caught up! 🎉</div>
     {/if}
 
     <!-- ═══ 8. WIREBOT SUGGESTIONS ═══ -->
@@ -508,10 +507,12 @@
   .biz-chip { padding: 5px 12px; border-radius: 20px; font-size: 11px; font-weight: 600; background: #16161e; border: 1px solid #1e1e30; color: #666; cursor: pointer; white-space: nowrap; transition: all .15s; }
   .biz-chip:hover { border-color: #7c7cff40; color: #aaa; }
   .biz-chip.active { background: #7c7cff15; border-color: #7c7cff; color: #7c7cff; }
-  .biz-context { font-size: 10px; font-weight: 700; letter-spacing: .06em; color: #7c7cff; text-align: center; margin: -6px 0 8px; animation: biz-fade 250ms ease-out; }
-  .biz-content { animation: biz-fade 250ms ease-out; }
+  .biz-context { font-size: 10px; font-weight: 700; letter-spacing: .06em; color: #7c7cff; text-align: center; margin: -6px 0 8px; animation: biz-label-in 350ms ease-out; }
+  @keyframes biz-label-in { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: translateY(0); } }
+  .biz-content { animation: biz-fade 450ms cubic-bezier(0.25, 0.46, 0.45, 0.94); }
   @keyframes biz-fade {
-    0% { opacity: 0; transform: translateY(6px); }
+    0% { opacity: 0; transform: translateY(12px); }
+    40% { opacity: 0.6; }
     100% { opacity: 1; transform: translateY(0); }
   }
 
@@ -555,7 +556,7 @@
   .ob-btn { background: #7c7cff20; color: #7c7cff; font-size: 11px; font-weight: 600; padding: 5px 12px; border-radius: 6px; display: inline-block; }
 
   /* ─── Partners (real BuddyBoss members) ─── */
-  .partners-row { display: flex; gap: 12px; overflow-x: auto; padding: 4px 0 12px; scrollbar-width: none; animation: section-slide 200ms ease-out; }
+  .partners-row { display: flex; gap: 12px; overflow-x: auto; padding: 4px 0 12px; scrollbar-width: none; animation: section-slide 350ms ease-out; }
   .partners-row::-webkit-scrollbar { display: none; }
   .partner-avatar { display: flex; flex-direction: column; align-items: center; gap: 4px; text-decoration: none; flex-shrink: 0; }
   .pa-img { width: 44px; height: 44px; border-radius: 50%; object-fit: cover; border: 2px solid #2a2a3a; }
@@ -564,7 +565,7 @@
   .pa-name { font-size: 10px; color: #666; max-width: 50px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: center; }
 
   /* Partners empty state */
-  .partners-empty { background: #16161e; border: 1px solid #1e1e30; border-radius: 12px; padding: 20px; text-align: center; margin-bottom: 12px; animation: section-slide 200ms ease-out; }
+  .partners-empty { background: #16161e; border: 1px solid #1e1e30; border-radius: 12px; padding: 20px; text-align: center; margin-bottom: 12px; animation: section-slide 350ms ease-out; }
   .pe-avatars { display: flex; justify-content: center; gap: 10px; margin-bottom: 12px; }
   .pe-ghost { opacity: 0.2; }
   .pe-pulse { animation: pulse 2s ease-in-out infinite; opacity: 0.6; }
@@ -585,8 +586,9 @@
 
   /* ─── Section slide animation ─── */
   @keyframes section-slide {
-    from { opacity: 0; transform: translateY(8px); }
-    to { opacity: 1; transform: translateY(0); }
+    0% { opacity: 0; transform: translateY(10px); }
+    50% { opacity: 0.7; }
+    100% { opacity: 1; transform: translateY(0); }
   }
 
   /* ─── Tasks ─── */
@@ -598,8 +600,8 @@
   .check-box.checked { background: #7c7cff20; border-color: #7c7cff; }
   .task-body { flex: 1; min-width: 0; }
   .task-title { font-size: 13px; color: #c0c0c0; }
-  .task-ai { font-size: 11px; color: #888; margin-top: 6px; line-height: 1.5; padding: 6px 8px; background: #12121a; border-radius: 6px; border-left: 2px solid #7c7cff40; animation: section-slide 150ms ease-out; }
-  .task-detail-inline { margin-top: 6px; animation: section-slide 150ms ease-out; }
+  .task-ai { font-size: 11px; color: #888; margin-top: 6px; line-height: 1.5; padding: 6px 8px; background: #12121a; border-radius: 6px; border-left: 2px solid #7c7cff40; animation: section-slide 250ms ease-out; }
+  .task-detail-inline { margin-top: 6px; animation: section-slide 250ms ease-out; }
   .tdi-desc { font-size: 12px; color: #777; margin: 0 0 4px; line-height: 1.5; }
   .tdi-meta { font-size: 10px; color: #555; display: flex; gap: 6px; margin-top: 4px; }
   .task-actions { display: flex; gap: 2px; flex-shrink: 0; }
@@ -619,7 +621,7 @@
   .cat-bar { width: 40px; height: 4px; background: #1e1e30; border-radius: 2px; overflow: hidden; }
   .cat-fill { height: 100%; background: #7c7cff; border-radius: 2px; transition: width .4s; }
   .cat-chevron { font-size: 10px; color: #555; }
-  .cat-tasks { padding: 4px 12px 8px; border-top: 1px solid #1a1a28; animation: section-slide 150ms ease-out; }
+  .cat-tasks { padding: 4px 12px 8px; border-top: 1px solid #1a1a28; animation: section-slide 300ms ease-out; }
 
   /* ─── Suggestions ─── */
   .suggestions-scroll { display: flex; gap: 10px; overflow-x: auto; padding-bottom: 4px; margin-bottom: 14px; scrollbar-width: none; }
@@ -631,7 +633,7 @@
   .sug-text { font-size: 11px; color: #666; line-height: 1.4; }
 
   /* ─── Ask Bar ─── */
-  .chat-bubble { background: #16161e; border: 1px solid #1e1e30; border-radius: 10px; padding: 12px; margin-bottom: 10px; animation: section-slide 200ms ease-out; }
+  .chat-bubble { background: #16161e; border: 1px solid #1e1e30; border-radius: 10px; padding: 12px; margin-bottom: 10px; animation: section-slide 350ms ease-out; }
   .cb-header { font-size: 11px; color: #7c7cff; font-weight: 700; margin-bottom: 4px; }
   .cb-text { font-size: 13px; color: #d0d0d0; white-space: pre-wrap; line-height: 1.5; }
   .ask-bar { display: flex; gap: 8px; }
