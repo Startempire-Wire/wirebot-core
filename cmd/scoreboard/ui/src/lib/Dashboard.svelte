@@ -49,6 +49,7 @@
   let onboardingComplete = $state(false);
   let stageLoading = $state(false);
   let hasLoaded = $state(false);
+  let bizKey = $state(0);  // bump to trigger content transition
 
   const API = '';
   function headers() { return { 'Authorization': `Bearer ${token}` }; }
@@ -112,11 +113,12 @@
     stageLoading = false;
   }
 
-  // Business filter — filters events/display, doesn't reload
+  // Business filter — visual transition + dispatch to parent
   function switchBusiness(bizId) {
+    if (bizId === activeBusiness) return;
     dispatch('businessChange', bizId);
-    // Locally: could filter categories if they have business tags
-    // For now, business filter is for score/feed, checklist is operator-wide
+    // Trigger fade transition on content below pills
+    bizKey++;
   }
 
   function buildSuggestions() {
@@ -245,7 +247,13 @@
           </button>
         {/each}
       </div>
+      {#if activeBusiness}
+        <div class="biz-context">Viewing: {BUSINESSES.find(b => b.id === activeBusiness)?.icon} {BUSINESSES.find(b => b.id === activeBusiness)?.label}</div>
+      {/if}
     {/if}
+
+    {#key bizKey}
+    <div class="biz-content">
 
     <!-- ═══ 2. BUSINESS SETUP PROGRESS ═══ -->
     {#if checklist}
@@ -469,6 +477,9 @@
       </button>
     </div>
 
+    </div><!-- .biz-content -->
+    {/key}
+
   {/if}
 </div>
 
@@ -496,6 +507,12 @@
   .biz-chip { padding: 5px 12px; border-radius: 20px; font-size: 11px; font-weight: 600; background: #16161e; border: 1px solid #1e1e30; color: #666; cursor: pointer; white-space: nowrap; transition: all .15s; }
   .biz-chip:hover { border-color: #7c7cff40; color: #aaa; }
   .biz-chip.active { background: #7c7cff15; border-color: #7c7cff; color: #7c7cff; }
+  .biz-context { font-size: 10px; font-weight: 700; letter-spacing: .06em; color: #7c7cff; text-align: center; margin: -6px 0 8px; animation: biz-fade 250ms ease-out; }
+  .biz-content { animation: biz-fade 250ms ease-out; }
+  @keyframes biz-fade {
+    0% { opacity: 0; transform: translateY(6px); }
+    100% { opacity: 1; transform: translateY(0); }
+  }
 
   /* ─── Cards ─── */
   .card { background: #16161e; border: 1px solid #1e1e30; border-radius: 12px; padding: 14px; margin-bottom: 12px; }
