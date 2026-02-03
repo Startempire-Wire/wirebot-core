@@ -259,22 +259,36 @@
       <span>NETWORK GROWTH PARTNERS</span>
       <button class="connect-link" onclick={() => window.open('https://startempirewire.com/members/', '_blank')}>CONNECT ➜</button>
     </div>
-    <div class="partners-row">
-      {#each partners as p}
-        <a class="partner-avatar" href={p.link || '#'} target="_blank" title={p.name}>
-          {#if p.avatar}
-            <img class="pa-img" src={p.avatar} alt={p.name} />
-          {:else}
-            <div class="pa-circle">{p.name?.[0] || '?'}</div>
-          {/if}
-          <span class="pa-name">{p.name?.split(' ')[0] || ''}</span>
+    {#if partners.length > 0}
+      <div class="partners-row">
+        {#each partners as p}
+          <a class="partner-avatar" href={p.link || '#'} target="_blank" title={p.name}>
+            {#if p.avatar}
+              <img class="pa-img" src={p.avatar} alt={p.name} />
+            {:else}
+              <div class="pa-circle">{p.name?.[0] || '?'}</div>
+            {/if}
+            <span class="pa-name">{p.name?.split(' ')[0] || ''}</span>
+          </a>
+        {/each}
+        <a class="partner-avatar" href="https://startempirewire.com/members/" target="_blank">
+          <div class="pa-circle pa-add">+</div>
+          <span class="pa-name">Add</span>
         </a>
-      {/each}
-      <a class="partner-avatar" href="https://startempirewire.com/register/" target="_blank">
-        <div class="pa-circle pa-add">+</div>
-        <span class="pa-name">Join</span>
-      </a>
-    </div>
+      </div>
+    {:else}
+      <div class="partners-empty">
+        <div class="pe-avatars">
+          <div class="pa-circle pe-ghost">👤</div>
+          <div class="pa-circle pe-ghost">👤</div>
+          <div class="pa-circle pe-ghost">👤</div>
+          <div class="pa-circle pa-add pe-pulse">+</div>
+        </div>
+        <p class="pe-text">No growth partners yet</p>
+        <p class="pe-hint">Connect with members on Startempire Wire and designate them as growth partners to see them here.</p>
+        <a class="pe-btn" href="https://startempirewire.com/members/" target="_blank">Find Partners →</a>
+      </div>
+    {/if}
 
     <!-- ═══ 5. STAGE SELECTOR ═══ -->
     <div class="stage-row">
@@ -468,6 +482,17 @@
   .pa-circle { width: 44px; height: 44px; border-radius: 50%; background: #2a2a3a; display: flex; align-items: center; justify-content: center; font-size: 18px; color: #888; font-weight: 700; }
   .pa-add { border: 2px dashed #333; background: transparent; color: #555; }
   .pa-name { font-size: 10px; color: #666; max-width: 50px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: center; }
+
+  /* Partners empty state */
+  .partners-empty { background: #16161e; border: 1px solid #1e1e30; border-radius: 12px; padding: 20px; text-align: center; margin-bottom: 12px; }
+  .pe-avatars { display: flex; justify-content: center; gap: 10px; margin-bottom: 12px; }
+  .pe-ghost { opacity: 0.2; }
+  .pe-pulse { animation: pulse 2s ease-in-out infinite; opacity: 0.6; }
+  @keyframes pulse { 0%,100% { opacity: 0.4; } 50% { opacity: 0.8; } }
+  .pe-text { font-size: 14px; font-weight: 600; color: #888; margin: 0 0 4px; }
+  .pe-hint { font-size: 12px; color: #555; margin: 0 0 12px; line-height: 1.5; }
+  .pe-btn { display: inline-block; padding: 8px 20px; background: #7c7cff20; border: 1px solid #7c7cff40; color: #7c7cff; font-size: 12px; font-weight: 600; border-radius: 8px; text-decoration: none; transition: all .2s; }
+  .pe-btn:hover { background: #7c7cff30; }
 
   /* ─── Stage Pills ─── */
   .stage-row { display: flex; gap: 8px; margin-bottom: 14px; }

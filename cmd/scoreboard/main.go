@@ -3104,58 +3104,51 @@ func getOAuthConfig(provider string) *oauthProviderConfig {
 // handleOAuthConfig lets operator store OAuth app credentials (client_id/secret)
 // via the UI instead of env vars. GET returns which providers are configured.
 // POST stores new credentials.
-// handleNetworkMembers fetches real members from startempirewire.com BuddyBoss API
+// handleNetworkMembers returns the operator's actual connections from startempirewire.com.
+// Uses BuddyBoss friends API (auth required) — only shows people you're connected to.
+// Falls back to empty with a "connect" prompt if no friends yet.
 func (s *Server) handleNetworkMembers(w http.ResponseWriter, r *http.Request) {
 	cors(w)
 
-	limit := r.URL.Query().Get("limit")
-	if limit == "" {
-		limit = "10"
-	}
+	// Query BuddyBoss friends for the operator's WP user ID
+	// TODO: resolve wp_user_id from JWT or config; for now use configured ID
+	wpUserID := envOr("OPERATOR_WP_USER_ID", "229") // Verious = 229
 
 	client := &http.Client{Timeout: 10 * time.Second}
-	req, _ := http.NewRequest("GET", fmt.Sprintf("https://startempirewire.com/wp-json/buddyboss/v1/members?per_page=%s&orderby=last_activity", limit), nil)
-	resp, err := client.Do(req)
-	if err != nil {
-		json.NewEncoder(w).Encode(map[string]interface{}{"members": []interface{}{}, "error": "network unreachable"})
-		return
-	}
-	defer resp.Body.Close()
 
-	var raw []map[string]interface{}
-	json.NewDecoder(resp.Body).Decode(&raw)
+	// Try friends endpoint (requires auth — use application password if available)
+	wpAppPass := os.Getenv("WP_APP_PASSWORD")
+	friendsURL := fmt.Sprintf("https://startempirewire.com/wp-json/buddyboss/v1/friends?user_id=%s&per_page=20", wpUserID)
+	req, _ := http.NewRequest("GET", friendsURL, nil)
+	if wpAppPass != "" {
+		req.SetBasicAuth("verious.smith", wpAppPass)
+	}
+	resp, err := client.Do(req)
+
+	var friends []map[string]interface{}
+	if err == nil && resp.StatusCode == 200 {
+		defer resp.Body.Close()
+		json.NewDecoder(resp.Body).Decode(&friends)
+	} else {
+		if resp != nil {
+			resp.Body.Close()
+		}
+	}
 
 	// Map to clean member objects
 	var members []map[string]interface{}
-	for _, m := range raw {
+	for _, m := range friends {
 		name, _ := m["name"].(string)
 		id := m["id"]
-		// Get avatar
 		avatar := ""
 		if avatarURLs, ok := m["avatar_urls"].(map[string]interface{}); ok {
 			if full, ok := avatarURLs["full"].(string); ok {
 				avatar = full
-			} else if thumb, ok := avatarURLs["thumb"].(string); ok {
-				avatar = thumb
 			}
 		}
-		// Get profile link
 		link, _ := m["link"].(string)
-		// Get last activity
-		lastActive, _ := m["last_activity"].(string)
-		// Get member type / role
-		memberType := ""
-		if types, ok := m["member_types"].([]interface{}); ok && len(types) > 0 {
-			memberType, _ = types[0].(string)
-		}
-
 		members = append(members, map[string]interface{}{
-			"id":          id,
-			"name":        name,
-			"avatar":      avatar,
-			"link":        link,
-			"last_active": lastActive,
-			"member_type": memberType,
+			"id": id, "name": name, "avatar": avatar, "link": link,
 		})
 	}
 
