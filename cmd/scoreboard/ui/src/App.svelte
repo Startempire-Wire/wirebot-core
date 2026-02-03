@@ -38,6 +38,7 @@
   let eqScore = $state(0);
   let eqLevel = $state('');
   let eqAcc = $state(0);
+  let selfReportCount = $state(0);
   let showFirstVisit = $state(false);
   let tokenStatus = $state(null);  // null | 'ok' | 'fail' | 'saving'
   let tokenMsg = $state('');
@@ -615,6 +616,7 @@
       eqScore = Math.round(eff.pairing_score || 0);
       eqLevel = eff.level || '';
       eqAcc = Math.round((eff.accuracy || 0) * 100);
+      selfReportCount = eff.self_report_count || 0;
 
       // Build equalizer bars from all dimensions
       const colors = {
@@ -747,6 +749,7 @@
     <div class="content">
       {#if view === 'dashboard'}
         <Dashboard {data} user={loggedInUser} token={getToken()} {activeBusiness}
+          pairingComplete={selfReportCount > 0}
           onnav={(e) => view = e.detail}
           onopenFab={() => showChat = true}
           onopenPairing={() => showPairing = true}

@@ -18,7 +18,7 @@
   import { createEventDispatcher } from 'svelte';
   const dispatch = createEventDispatcher();
 
-  let { data = null, user = null, token = '', activeBusiness: parentBiz = '' } = $props();
+  let { data = null, user = null, token = '', activeBusiness: parentBiz = '', pairingComplete = false } = $props();
   let localBiz = $state(parentBiz || '');  // local business filter state
 
   // Business = legal entity, Product = offering within a business
@@ -273,6 +273,20 @@
         {/if}
       </div>
     </div>
+
+    <!-- ═══ PAIRING ASSESSMENT CTA (prominent, only when incomplete) ═══ -->
+    {#if !pairingComplete}
+      <button class="pairing-cta-card" onclick={() => dispatch('openPairing')}>
+        <div class="pcc-left">
+          <div class="pcc-icon">🧬</div>
+          <div class="pcc-text">
+            <div class="pcc-title">Take Your Founder Assessment</div>
+            <div class="pcc-desc">5 min — helps Wirebot understand how you think, decide, and work</div>
+          </div>
+        </div>
+        <div class="pcc-arrow">→</div>
+      </button>
+    {/if}
 
     <!-- ═══ BUSINESS FILTER (hierarchical: businesses → products) ═══ -->
     {#if data?.score}
@@ -709,6 +723,26 @@
   /* ─── Suggestions ─── */
   .suggestions-scroll { display: flex; gap: 10px; overflow-x: auto; padding-bottom: 4px; margin-bottom: 14px; scrollbar-width: none; }
   .suggestions-scroll::-webkit-scrollbar { display: none; }
+
+  /* ─── Pairing Assessment CTA ─── */
+  .pairing-cta-card {
+    display: flex; justify-content: space-between; align-items: center;
+    background: linear-gradient(135deg, rgba(124,124,255,0.15), rgba(124,124,255,0.05));
+    border: 1px solid rgba(124,124,255,0.4);
+    border-radius: 12px; padding: 14px 16px; margin-bottom: 12px;
+    cursor: pointer; width: 100%; text-align: left;
+    -webkit-tap-highlight-color: transparent;
+    animation: pairingPulse 3s infinite;
+  }
+  @keyframes pairingPulse {
+    0%, 100% { border-color: rgba(124,124,255,0.4); }
+    50% { border-color: rgba(124,124,255,0.8); box-shadow: 0 0 12px rgba(124,124,255,0.2); }
+  }
+  .pcc-left { display: flex; align-items: center; gap: 12px; }
+  .pcc-icon { font-size: 28px; }
+  .pcc-title { font-size: 14px; font-weight: 700; color: #e8e8ff; }
+  .pcc-desc { font-size: 11px; color: #8888bb; margin-top: 2px; }
+  .pcc-arrow { font-size: 20px; color: #7c7cff; }
 
   /* ─── Proposals ─── */
   .proposals-list { display: flex; flex-direction: column; gap: 10px; margin-bottom: 16px; }
