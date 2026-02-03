@@ -10,6 +10,7 @@
   import Chat from './lib/Chat.svelte';
   import Profile from './lib/Profile.svelte';
   import PairingFlow from './lib/PairingFlow.svelte';
+  import Audit from './lib/Audit.svelte';
 
   let view = $state('dashboard');
   let viewHistory = $state(['dashboard']); // SPA navigation stack
@@ -892,6 +893,8 @@ Tracked with Wirebot — your AI business operating partner`;
         <Season season={data.season} {history} streak={data.streak} onHelp={() => showHints = true} onnav={(e) => navigateTo(e.detail)} />
       {:else if view === 'wrapped'}
         <Wrapped {wrapped} />
+      {:else if view === 'audit'}
+        <Audit />
       {:else if view === 'settings'}
         <div class="settings-view">
           <div class="s-hdr"><h2>⚙️ Settings</h2></div>
@@ -980,6 +983,12 @@ Tracked with Wirebot — your AI business operating partner`;
                     🔄 Retake Assessment <span class="eq-cta-sub">{selfReportCount} answers · {eqAcc}% accurate</span>
                   </button>
                 {/if}
+
+                <!-- Discord Training -->
+                <button class="btn-discord-audit" onclick={() => navigateTo('audit')}>
+                  🎯 Discord Training
+                  <span class="btn-sub">Review & train Wirebot's responses</span>
+                </button>
 
                 <button class="btn-logout" onclick={logout}>Sign out</button>
               </div>
@@ -1725,6 +1734,14 @@ Tracked with Wirebot — your AI business operating partner`;
   }
   .eq-cta-retake { background: rgba(255,255,255,0.05); border-color: #333; color: #999; }
   .eq-cta-sub { font-size: 10px; font-weight: 400; color: #888; }
+
+  .btn-discord-audit {
+    background: linear-gradient(135deg, #5865F2, #7289DA); color: #fff; border: none; border-radius: 8px;
+    padding: 10px 16px; font-size: 13px; cursor: pointer; display: flex; flex-direction: column;
+    align-items: flex-start; gap: 2px; width: 100%; text-align: left;
+  }
+  .btn-discord-audit:hover { filter: brightness(1.1); }
+  .btn-discord-audit .btn-sub { font-size: 10px; opacity: 0.8; }
 
   .btn-logout {
     background: transparent; border: 1px solid #333; color: #666; border-radius: 6px;
