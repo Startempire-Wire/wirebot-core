@@ -859,7 +859,6 @@
           <!-- ── Connected Accounts ── -->
           <div class="s-group">
             <label>Connected Accounts</label>
-            <p class="s-hint-text">Connect services to flow real data into your scoreboard</p>
 
             {#if connectStatus}
               <div class="token-status" class:ok={connectStatus === 'ok'} class:fail={connectStatus === 'fail'} class:saving={connectStatus === 'saving'}>
@@ -867,127 +866,154 @@
               </div>
             {/if}
 
-            <!-- Group by lane -->
-            {#each ['revenue', 'shipping', 'distribution', 'systems'] as lane}
-              {@const laneProviders = PROVIDERS.filter(p => p.lane === lane)}
-              <div class="int-lane-group">
-                <div class="int-lane-header">
-                  <span class="int-lane lane-{lane}">{lane}</span>
-                  {#if laneProviders.reduce((n, p) => n + getConnectedProviders(p.id).length, 0) > 0}
-                    <span class="int-lane-count">{laneProviders.reduce((n, p) => n + getConnectedProviders(p.id).length, 0)} connected</span>
-                  {/if}
-                </div>
-
-                {#each laneProviders as provider}
-                  {@const accounts = getConnectedProviders(provider.id)}
-                  {@const hasAccounts = accounts.length > 0}
-                  <div class="int-card" class:int-connected={hasAccounts} class:int-coming={provider.comingSoon}>
-                    <div class="int-row">
-                      <span class="int-icon">{provider.icon}</span>
-                      <div class="int-info">
-                        <div class="int-name">
-                          {provider.name}
-                          {#if hasAccounts}
-                            <span class="int-count">{accounts.length}</span>
-                          {/if}
-                        </div>
-                        <div class="int-desc">{provider.desc}</div>
-                      </div>
-                      <div class="int-action">
-                        {#if provider.comingSoon}
-                          <span class="int-soon">Soon</span>
-                        {:else if showConnectForm === provider.id}
-                          <button class="int-btn int-cancel" onclick={() => { showConnectForm = null; connectCred = ''; connectExtra = ''; }}>Cancel</button>
-                        {:else if provider.auth === 'oauth' && provider.oauthUrl}
-                          <button class="int-btn int-connect" onclick={() => connectProvider(provider)}>
-                            {hasAccounts ? '+ Add' : 'Connect'}
-                          </button>
+            <!-- Active integrations (what's already working) -->
+            {#if integrations.length > 0}
+              <div class="int-active-section">
+                {#each integrations as acct}
+                  {@const prov = PROVIDERS.find(p => p.id === acct.provider) || { icon: '🔗', name: acct.provider }}
+                  <div class="int-active-card">
+                    <span class="int-active-dot" class:active={acct.status === 'active'} class:error={acct.status === 'error'}></span>
+                    <span class="int-active-icon">{prov.icon}</span>
+                    <div class="int-active-info">
+                      <div class="int-active-name">{acct.display_name || prov.name}</div>
+                      <div class="int-active-meta">
+                        {#if acct.status === 'active'}
+                          ✓ Connected
+                        {:else if acct.status === 'error'}
+                          ⚠ Error
                         {:else}
-                          <button class="int-btn int-connect" onclick={() => { showConnectForm = provider.id; connectCred = ''; connectExtra = ''; }}>
-                            {hasAccounts ? '+ Add' : 'Add'}
-                          </button>
+                          {acct.status}
+                        {/if}
+                        {#if acct.last_used_at}
+                          · Last sync {new Date(acct.last_used_at).toLocaleDateString()}
                         {/if}
                       </div>
                     </div>
-
-                    <!-- Connected accounts list -->
-                    {#if hasAccounts}
-                      <div class="int-accounts">
-                        {#each accounts as acct}
-                          <div class="int-acct-row">
-                            <span class="int-status-dot" class:active={acct.status === 'active'} class:error={acct.status === 'error'}></span>
-                            <span class="int-acct-name">{acct.display_name || provider.name}</span>
-                            {#if acct.business_id}
-                              <span class="int-biz-tag">{acct.business_id}</span>
-                            {/if}
-                            {#if acct.last_used_at}
-                              <span class="int-last-poll">Synced {new Date(acct.last_used_at).toLocaleDateString()}</span>
-                            {/if}
-                            <button class="int-acct-remove" onclick={() => disconnectProvider(acct.id)} title="Disconnect">✕</button>
-                          </div>
-                          {#if acct.last_error}
-                            <div class="int-error">⚠ {acct.last_error}</div>
-                          {/if}
-                        {/each}
-                      </div>
-                    {/if}
-
-                    <!-- Credential input form (non-OAuth) -->
-                    {#if showConnectForm === provider.id && provider.auth !== 'oauth'}
-                      <div class="int-form">
-                        <p class="int-hint">{provider.hint}</p>
-
-                        {#if provider.webhookUrl}
-                          <div class="int-webhook-url">
-                            <span class="int-wh-label">Your webhook URL:</span>
-                            <code class="int-wh-code">{API}/v1/webhooks/{provider.id}</code>
-                          </div>
-                        {/if}
-
-                        <!-- Business selector (multi-account: which business is this for?) -->
-                        <select class="int-biz-select" bind:value={connectBusiness}>
-                          <option value="">All businesses</option>
-                          <option value="STA">Startempire Wire</option>
-                          <option value="WIR">Wirebot</option>
-                          <option value="PHI">Philoveracity</option>
-                          <option value="SEW">SEW Network</option>
-                        </select>
-
-                        <input type={provider.auth === 'rss_url' ? 'url' : 'password'}
-                          bind:value={connectCred}
-                          placeholder={provider.credPlaceholder || provider.credLabel || 'API key or credential'}
-                          onkeydown={(e) => {
-                            if (e.key === 'Enter' && (!provider.fields?.length || connectExtra)) connectProvider(provider);
-                            else if (e.key === 'Enter') document.getElementById('int-extra')?.focus();
-                          }} />
-
-                        {#if provider.fields?.length}
-                          {#each provider.fields as field}
-                            <input type="text" id="int-extra"
-                              bind:value={connectExtra}
-                              placeholder={field.placeholder || field.label}
-                              onkeydown={(e) => e.key === 'Enter' && connectProvider(provider)} />
-                          {/each}
-                        {/if}
-
-                        <button class="int-save" onclick={() => connectProvider(provider)}
-                          disabled={!connectCred || connectStatus === 'saving'}>
-                          {connectStatus === 'saving' ? 'Connecting...' : `Add ${provider.name}`}
-                        </button>
-                      </div>
-                    {/if}
-
-                    <!-- OAuth hint (not configured yet) -->
-                    {#if showConnectForm === provider.id && provider.auth === 'oauth' && !provider.oauthUrl}
-                      <div class="int-form">
-                        <p class="int-hint">{provider.hint}</p>
-                        <p class="int-hint" style="color: #7c7cff;">OAuth app setup required — coming soon</p>
-                      </div>
-                    {/if}
+                    <button class="int-active-remove" onclick={() => disconnectProvider(acct.id)} title="Disconnect">✕</button>
                   </div>
                 {/each}
               </div>
+            {:else}
+              <div class="int-empty">
+                <span class="int-empty-icon">🔌</span>
+                <p>No accounts connected yet</p>
+                <p class="int-empty-hint">Connect your tools to flow real data into your scoreboard</p>
+              </div>
+            {/if}
+
+            <!-- Recommended integrations (high-impact, not yet connected) -->
+            {#if PROVIDERS.filter(p => !p.comingSoon && !getConnectedProviders(p.id).length).length > 0}
+              <div class="int-rec-header">Recommended</div>
+              <div class="int-rec-grid">
+                {#each PROVIDERS.filter(p => !p.comingSoon && !getConnectedProviders(p.id).length).slice(0, 4) as provider}
+                  <button class="int-rec-card" onclick={() => { showConnectForm = provider.id; connectCred = ''; connectExtra = ''; }}>
+                    <span class="int-rec-icon">{provider.icon}</span>
+                    <span class="int-rec-name">{provider.name}</span>
+                  </button>
+                {/each}
+              </div>
+            {/if}
+
+            <!-- Setup form (shown when user taps a recommended card) -->
+            {#if showConnectForm}
+              {@const provider = PROVIDERS.find(p => p.id === showConnectForm)}
+              {#if provider}
+                <div class="int-setup-card">
+                  <div class="int-setup-header">
+                    <span>{provider.icon} Connect {provider.name}</span>
+                    <button class="int-setup-close" onclick={() => { showConnectForm = null; connectCred = ''; connectExtra = ''; }}>✕</button>
+                  </div>
+                  <p class="int-setup-desc">{provider.desc}</p>
+
+                  {#if provider.auth === 'oauth' && provider.oauthUrl}
+                    <button class="int-setup-oauth" onclick={() => connectProvider(provider)}>
+                      Connect {provider.name} →
+                    </button>
+                  {:else if provider.auth === 'oauth' && !provider.oauthUrl}
+                    <p class="int-setup-coming">OAuth connection coming soon</p>
+                  {:else}
+                    <div class="int-setup-steps">
+                      <div class="int-setup-step">
+                        <span class="int-step-num">1</span>
+                        <span>{provider.hint}</span>
+                      </div>
+                      <div class="int-setup-step">
+                        <span class="int-step-num">2</span>
+                        <span>Paste it below</span>
+                      </div>
+                    </div>
+
+                    {#if provider.webhookUrl}
+                      <div class="int-webhook-url">
+                        <span class="int-wh-label">Your webhook URL:</span>
+                        <code class="int-wh-code">{API}/v1/webhooks/{provider.id}</code>
+                      </div>
+                    {/if}
+
+                    <input type={provider.auth === 'rss_url' ? 'url' : 'password'}
+                      bind:value={connectCred}
+                      placeholder={provider.credPlaceholder || provider.credLabel || 'Paste here'}
+                      class="int-setup-input"
+                      onkeydown={(e) => {
+                        if (e.key === 'Enter' && (!provider.fields?.length || connectExtra)) connectProvider(provider);
+                        else if (e.key === 'Enter') document.getElementById('int-extra')?.focus();
+                      }} />
+
+                    {#if provider.fields?.length}
+                      {#each provider.fields as field}
+                        <input type="text" id="int-extra"
+                          bind:value={connectExtra}
+                          placeholder={field.placeholder || field.label}
+                          class="int-setup-input"
+                          onkeydown={(e) => e.key === 'Enter' && connectProvider(provider)} />
+                      {/each}
+                    {/if}
+
+                    <select class="int-setup-biz" bind:value={connectBusiness}>
+                      <option value="">All businesses</option>
+                      <option value="STA">Startempire Wire</option>
+                      <option value="WIR">Wirebot</option>
+                      <option value="PHI">Philoveracity</option>
+                      <option value="SEW">SEW Network</option>
+                    </select>
+
+                    <button class="int-setup-save" onclick={() => connectProvider(provider)}
+                      disabled={!connectCred || connectStatus === 'saving'}>
+                      {connectStatus === 'saving' ? 'Connecting...' : `Connect ${provider.name}`}
+                    </button>
+                  {/if}
+                </div>
+              {/if}
+            {/if}
+
+            <!-- Browse all (expandable) -->
+            <button class="int-browse-toggle" onclick={() => { const el = document.getElementById('int-all'); el.style.display = el.style.display === 'none' ? 'block' : 'none'; }}>
+              Browse all integrations ▾
+            </button>
+            <div id="int-all" style="display: none;">
+              {#each ['revenue', 'shipping', 'distribution', 'systems'] as lane}
+                {@const laneProviders = PROVIDERS.filter(p => p.lane === lane)}
+                <div class="int-lane-group">
+                  <div class="int-lane-header">
+                    <span class="int-lane lane-{lane}">{lane}</span>
+                  </div>
+                  {#each laneProviders as provider}
+                    {@const accounts = getConnectedProviders(provider.id)}
+                    {@const hasAccounts = accounts.length > 0}
+                    <button class="int-browse-item" class:int-connected={hasAccounts} class:int-coming={provider.comingSoon}
+                      onclick={() => { if (!provider.comingSoon) { showConnectForm = provider.id; connectCred = ''; connectExtra = ''; } }}>
+                      <span class="int-icon">{provider.icon}</span>
+                      <span class="int-browse-name">{provider.name}</span>
+                      {#if hasAccounts}
+                        <span class="int-check">✓</span>
+                      {:else if provider.comingSoon}
+                        <span class="int-soon-sm">Soon</span>
+                      {/if}
+                    </button>
+                  {/each}
+              </div>
             {/each}
+            </div>
           </div>
 
           <div class="s-group">
@@ -1558,23 +1584,122 @@
 
   .s-hint-text { font-size: 11px; color: #555; margin-bottom: 4px; }
 
-  /* Integration lane groups */
-  .int-lane-group { display: flex; flex-direction: column; gap: 6px; }
-  .int-lane-header { display: flex; align-items: center; gap: 8px; margin-top: 4px; }
-  .int-lane-count { font-size: 10px; color: #2ecc71; font-weight: 600; }
+  /* ── Connected Accounts (redesigned) ── */
 
-  /* Integration cards */
-  .int-card {
-    background: #111118; border: 1px solid #1e1e30; border-radius: 10px;
-    padding: 12px; transition: border-color 0.2s;
+  /* Active integrations list */
+  .int-active-section { display: flex; flex-direction: column; gap: 6px; }
+  .int-active-card {
+    display: flex; align-items: center; gap: 10px;
+    padding: 10px 12px; background: #111118; border: 1px solid #1a3a1a;
+    border-radius: 10px;
   }
-  .int-card.int-connected { border-color: #1a3a1a; }
-  .int-card.int-coming { opacity: 0.4; }
-  .int-row { display: flex; align-items: center; gap: 10px; }
-  .int-icon { font-size: 22px; flex-shrink: 0; width: 28px; text-align: center; }
-  .int-info { flex: 1; min-width: 0; }
-  .int-name { font-size: 13px; font-weight: 700; color: #ddd; }
-  .int-desc { font-size: 11px; color: #555; margin-top: 1px; }
+  .int-active-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+  .int-active-dot.active { background: #2ecc71; box-shadow: 0 0 6px #2ecc7140; }
+  .int-active-dot.error { background: #ff4444; }
+  .int-active-icon { font-size: 20px; flex-shrink: 0; }
+  .int-active-info { flex: 1; min-width: 0; }
+  .int-active-name { font-size: 13px; font-weight: 600; color: #ddd; }
+  .int-active-meta { font-size: 11px; color: #555; margin-top: 1px; }
+  .int-active-remove {
+    background: none; border: none; color: #333; font-size: 14px;
+    cursor: pointer; padding: 4px; flex-shrink: 0;
+  }
+  .int-active-remove:hover { color: #ff4444; }
+
+  /* Empty state */
+  .int-empty { text-align: center; padding: 24px 16px; color: #555; }
+  .int-empty-icon { font-size: 32px; display: block; margin-bottom: 8px; }
+  .int-empty p { margin: 0; font-size: 14px; }
+  .int-empty-hint { font-size: 12px !important; color: #444 !important; margin-top: 4px !important; }
+
+  /* Recommended grid */
+  .int-rec-header {
+    font-size: 11px; font-weight: 700; color: #666;
+    letter-spacing: 0.08em; text-transform: uppercase;
+    margin-top: 12px; margin-bottom: 6px;
+  }
+  .int-rec-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; }
+  .int-rec-card {
+    display: flex; align-items: center; gap: 8px;
+    padding: 12px; background: #111118; border: 1px solid #1e1e30;
+    border-radius: 10px; cursor: pointer; transition: border-color 0.2s;
+    color: inherit;
+  }
+  .int-rec-card:hover { border-color: #7c7cff40; }
+  .int-rec-icon { font-size: 20px; }
+  .int-rec-name { font-size: 12px; font-weight: 600; color: #aaa; }
+
+  /* Setup card (expanded connect form) */
+  .int-setup-card {
+    background: #111118; border: 1px solid #7c7cff30;
+    border-radius: 12px; padding: 16px; margin-top: 8px;
+  }
+  .int-setup-header {
+    display: flex; justify-content: space-between; align-items: center;
+    font-size: 14px; font-weight: 700; color: #ddd; margin-bottom: 8px;
+  }
+  .int-setup-close {
+    background: none; border: none; color: #555; font-size: 16px;
+    cursor: pointer; padding: 4px;
+  }
+  .int-setup-desc { font-size: 12px; color: #666; margin: 0 0 12px; }
+  .int-setup-steps { display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px; }
+  .int-setup-step { display: flex; align-items: flex-start; gap: 8px; font-size: 12px; color: #999; line-height: 1.5; }
+  .int-step-num {
+    width: 20px; height: 20px; border-radius: 50%;
+    background: #7c7cff15; color: #7c7cff; font-size: 10px; font-weight: 700;
+    display: flex; align-items: center; justify-content: center; flex-shrink: 0;
+  }
+  .int-setup-input {
+    width: 100%; padding: 10px 12px; background: #0a0a15;
+    border: 1px solid #2a2a40; border-radius: 8px;
+    color: #ddd; font-size: 13px; outline: none;
+    box-sizing: border-box; margin-bottom: 4px;
+  }
+  .int-setup-input:focus { border-color: #7c7cff; }
+  .int-setup-biz {
+    width: 100%; padding: 8px 10px; border-radius: 8px;
+    background: #0d0d16; border: 1px solid #222;
+    color: #aaa; font-size: 12px; margin-bottom: 8px;
+    appearance: none; -webkit-appearance: none;
+  }
+  .int-setup-save {
+    width: 100%; padding: 10px; background: #7c7cff; color: white;
+    border: none; border-radius: 8px; font-size: 13px; font-weight: 600;
+    cursor: pointer;
+  }
+  .int-setup-save:disabled { opacity: 0.4; cursor: default; }
+  .int-setup-save:active:not(:disabled) { background: #5c5cdd; }
+  .int-setup-oauth {
+    width: 100%; padding: 12px; background: #7c7cff; color: white;
+    border: none; border-radius: 8px; font-size: 13px; font-weight: 600;
+    cursor: pointer; text-align: center;
+  }
+  .int-setup-coming { font-size: 12px; color: #555; text-align: center; font-style: italic; }
+
+  /* Webhook URL display */
+  .int-webhook-url {
+    background: #0a0a15; border: 1px solid #2a2a40; border-radius: 6px;
+    padding: 8px 10px; display: flex; flex-direction: column; gap: 4px; margin-bottom: 4px;
+  }
+  .int-wh-label { font-size: 10px; color: #555; }
+  .int-wh-code {
+    font-size: 11px; color: #7c7cff; font-family: monospace;
+    word-break: break-all; user-select: all; cursor: text;
+  }
+
+  /* Browse all toggle */
+  .int-browse-toggle {
+    display: block; width: 100%; padding: 10px;
+    background: none; border: 1px solid #1e1e30; border-radius: 8px;
+    color: #555; font-size: 12px; cursor: pointer; margin-top: 10px;
+    text-align: center; transition: border-color 0.2s;
+  }
+  .int-browse-toggle:hover { border-color: #7c7cff40; color: #888; }
+
+  /* Browse all list */
+  .int-lane-group { display: flex; flex-direction: column; gap: 4px; margin-top: 8px; }
+  .int-lane-header { display: flex; align-items: center; gap: 8px; margin-top: 4px; }
   .int-lane {
     font-size: 9px; font-weight: 700; padding: 2px 8px; border-radius: 3px;
     text-transform: uppercase; letter-spacing: 0.05em;
@@ -1584,99 +1709,19 @@
   .lane-shipping { background: #2e2a1a; color: #ffaa00; }
   .lane-systems { background: #1a1a1a; color: #888; }
 
-  .int-count {
-    font-size: 10px; font-weight: 700; background: #1a3a1a; color: #2ecc71;
-    width: 16px; height: 16px; border-radius: 50%; display: inline-flex;
-    align-items: center; justify-content: center; margin-left: 2px;
+  .int-browse-item {
+    display: flex; align-items: center; gap: 10px;
+    padding: 8px 10px; background: #111118; border: 1px solid #1e1e30;
+    border-radius: 8px; cursor: pointer; transition: border-color 0.15s;
+    color: inherit; width: 100%;
   }
-
-  .int-accounts {
-    display: flex; flex-direction: column; gap: 4px;
-    margin-top: 8px; padding-top: 8px; border-top: 1px solid #1a1a2a;
-  }
-  .int-acct-row {
-    display: flex; align-items: center; gap: 6px;
-    padding: 4px 8px; background: #0d0d16; border-radius: 6px;
-  }
-  .int-acct-name {
-    font-size: 12px; color: #aaa; flex: 1; min-width: 0;
-    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-  }
-  .int-acct-remove {
-    background: none; border: none; color: #444; font-size: 12px;
-    cursor: pointer; padding: 2px 4px; flex-shrink: 0;
-  }
-  .int-acct-remove:hover { color: #ff4444; }
-  .int-biz-tag {
-    font-size: 9px; font-weight: 700; letter-spacing: 0.05em;
-    padding: 1px 6px; border-radius: 4px;
-    background: rgba(124,124,255,0.1); color: #7c7cff;
-    flex-shrink: 0;
-  }
-  .int-biz-select {
-    width: 100%; padding: 8px 10px; border-radius: 8px;
-    background: #0d0d16; border: 1px solid #222;
-    color: #aaa; font-size: 13px; margin-bottom: 4px;
-    appearance: none; -webkit-appearance: none;
-    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath d='M3 5l3 3 3-3' fill='none' stroke='%23666' stroke-width='1.5'/%3E%3C/svg%3E");
-    background-repeat: no-repeat; background-position: right 10px center;
-  }
-
-  .int-action { flex-shrink: 0; }
-  .int-btn {
-    padding: 5px 12px; border-radius: 6px; font-size: 11px; font-weight: 600;
-    cursor: pointer; border: none; transition: all 0.15s;
-  }
-  .int-connect { background: #7c7cff; color: white; }
-  .int-connect:active { background: #5c5cdd; }
-  .int-disconnect {
-    background: transparent; color: #555; border: 1px solid #2a2a3a;
-    font-size: 10px; padding: 4px 8px;
-  }
-  .int-disconnect:hover { color: #ff4444; border-color: #ff4444; }
-  .int-cancel { background: #2a2a3a; color: #888; padding: 4px 10px; }
-  .int-soon { font-size: 10px; color: #444; font-style: italic; }
-
-  .int-status-row {
-    display: flex; align-items: center; gap: 6px; margin-top: 8px;
-    padding-top: 8px; border-top: 1px solid #1a1a2a; flex-wrap: wrap;
-  }
-  .int-status-dot {
-    width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0;
-  }
-  .int-status-dot.active { background: #2ecc71; }
-  .int-status-dot.error { background: #ff4444; }
-  .int-status-text { font-size: 11px; color: #2ecc71; font-weight: 600; }
-  .int-status-text.error-text { color: #ff4444; }
-  .int-last-poll { font-size: 10px; color: #444; margin-left: auto; }
-  .int-error { font-size: 10px; color: #ff9500; width: 100%; margin-top: 4px; }
-
-  .int-form {
-    display: flex; flex-direction: column; gap: 8px; margin-top: 10px;
-    padding-top: 10px; border-top: 1px solid #1a1a2a;
-  }
-  .int-hint { font-size: 11px; color: #666; line-height: 1.5; margin: 0; }
-  .int-form input {
-    background: #0a0a15; border: 1px solid #2a2a40; border-radius: 6px;
-    padding: 8px 10px; color: #ddd; font-size: 12px; outline: none;
-  }
-  .int-form input:focus { border-color: #7c7cff; }
-  .int-save {
-    background: #7c7cff; color: white; border: none; border-radius: 6px;
-    padding: 8px; font-size: 12px; font-weight: 600; cursor: pointer;
-  }
-  .int-save:disabled { opacity: 0.4; cursor: default; }
-  .int-save:active:not(:disabled) { background: #5c5cdd; }
-
-  .int-webhook-url {
-    background: #0a0a15; border: 1px solid #2a2a40; border-radius: 6px;
-    padding: 8px 10px; display: flex; flex-direction: column; gap: 4px;
-  }
-  .int-wh-label { font-size: 10px; color: #555; }
-  .int-wh-code {
-    font-size: 11px; color: #7c7cff; font-family: monospace;
-    word-break: break-all; user-select: all; cursor: text;
-  }
+  .int-browse-item:hover { border-color: #7c7cff30; }
+  .int-browse-item.int-connected { border-color: #1a3a1a; }
+  .int-browse-item.int-coming { opacity: 0.35; cursor: default; }
+  .int-icon { font-size: 18px; flex-shrink: 0; width: 24px; text-align: center; }
+  .int-browse-name { font-size: 12px; color: #aaa; flex: 1; }
+  .int-check { color: #2ecc71; font-size: 12px; }
+  .int-soon-sm { font-size: 9px; color: #444; font-style: italic; }
 
   .s-info { font-size: 13px; opacity: 0.6; line-height: 1.6; }
   .s-links { display: flex; gap: 8px; flex-wrap: wrap; }
