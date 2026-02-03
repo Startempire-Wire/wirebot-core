@@ -892,6 +892,9 @@
                     <button class="int-active-remove" onclick={() => disconnectProvider(acct.id)} title="Disconnect">✕</button>
                   </div>
                 {/each}
+                <button class="int-add-another" onclick={() => { const el = document.getElementById('int-all'); if (el) el.style.display = 'block'; }}>
+                  + Add account
+                </button>
               </div>
             {:else}
               <div class="int-empty">
@@ -1025,7 +1028,7 @@
                       <span class="int-icon">{provider.icon}</span>
                       <span class="int-browse-name">{provider.name}</span>
                       {#if hasAccounts}
-                        <span class="int-check">✓</span>
+                        <span class="int-check">✓ {accounts.length > 1 ? accounts.length : ''}</span>
                       {:else if provider.comingSoon}
                         <span class="int-soon-sm">Soon</span>
                       {/if}
@@ -1625,6 +1628,15 @@
     cursor: pointer; padding: 4px; flex-shrink: 0;
   }
   .int-active-remove:hover { color: #ff4444; }
+
+  /* Add another account */
+  .int-add-another {
+    display: block; width: 100%; padding: 10px;
+    background: none; border: 1px dashed #1e1e30; border-radius: 10px;
+    color: #555; font-size: 12px; cursor: pointer;
+    text-align: center; transition: all 0.2s;
+  }
+  .int-add-another:hover { border-color: #7c7cff40; color: #7c7cff; }
 
   /* Empty state */
   .int-empty { text-align: center; padding: 24px 16px; color: #555; }
