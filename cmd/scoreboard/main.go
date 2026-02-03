@@ -455,7 +455,9 @@ func main() {
 	mux.HandleFunc("/v1/oauth/config", s.auth(s.handleOAuthConfig))       // GET=status, POST=store credentials
 	mux.HandleFunc("/v1/oauth/setup/github", s.auth(s.handleGitHubSetup)) // Manifest flow: redirect to GitHub
 	mux.HandleFunc("/v1/oauth/setup/github/callback", s.handleGitHubSetupCallback) // GitHub returns here with code
-	mux.HandleFunc("/v1/oauth/setup/stripe", s.auth(s.handleStripeSetup)) // Redirect to Stripe Connect setup
+	mux.HandleFunc("/v1/oauth/setup/stripe", s.auth(s.handleStripeSetup))
+	mux.HandleFunc("/v1/oauth/setup/freshbooks", s.auth(s.handleFreshBooksSetup))
+	mux.HandleFunc("/v1/oauth/setup/hubspot", s.auth(s.handleHubSpotSetup))
 
 	// Webhook receivers (use their own verification, not bearer auth)
 	mux.HandleFunc("/v1/webhooks/github", s.auth(s.handleGitHubWebhook))
@@ -474,6 +476,8 @@ func main() {
 	mux.HandleFunc("/v1/oauth/stripe/authorize", s.auth(s.handleOAuthStart))
 	mux.HandleFunc("/v1/oauth/github/authorize", s.auth(s.handleOAuthStart))
 	mux.HandleFunc("/v1/oauth/google/authorize", s.auth(s.handleOAuthStart))
+	mux.HandleFunc("/v1/oauth/freshbooks/authorize", s.auth(s.handleOAuthStart))
+	mux.HandleFunc("/v1/oauth/hubspot/authorize", s.auth(s.handleOAuthStart))
 	mux.HandleFunc("/v1/oauth/callback", s.handleOAuthCallback) // Provider redirects back here
 
 	// Checklist data for Dashboard view
@@ -3001,13 +3005,17 @@ func (s *Server) pollPlaid(integrationID, accessToken, configJSON, lastPoll stri
 //   OAUTH_GOOGLE_CLIENT_ID, OAUTH_GOOGLE_CLIENT_SECRET
 
 var (
-	oauthStripeClientID     = os.Getenv("OAUTH_STRIPE_CLIENT_ID")
-	oauthStripeClientSecret = os.Getenv("OAUTH_STRIPE_CLIENT_SECRET")
-	oauthGitHubClientID     = os.Getenv("OAUTH_GITHUB_CLIENT_ID")
-	oauthGitHubClientSecret = os.Getenv("OAUTH_GITHUB_CLIENT_SECRET")
-	oauthGoogleClientID     = os.Getenv("OAUTH_GOOGLE_CLIENT_ID")
-	oauthGoogleClientSecret = os.Getenv("OAUTH_GOOGLE_CLIENT_SECRET")
-	oauthCallbackBase       = envOr("OAUTH_CALLBACK_BASE", "https://wins.wirebot.chat")
+	oauthStripeClientID         = os.Getenv("OAUTH_STRIPE_CLIENT_ID")
+	oauthStripeClientSecret     = os.Getenv("OAUTH_STRIPE_CLIENT_SECRET")
+	oauthGitHubClientID         = os.Getenv("OAUTH_GITHUB_CLIENT_ID")
+	oauthGitHubClientSecret     = os.Getenv("OAUTH_GITHUB_CLIENT_SECRET")
+	oauthGoogleClientID         = os.Getenv("OAUTH_GOOGLE_CLIENT_ID")
+	oauthGoogleClientSecret     = os.Getenv("OAUTH_GOOGLE_CLIENT_SECRET")
+	oauthFreshBooksClientID     = os.Getenv("OAUTH_FRESHBOOKS_CLIENT_ID")
+	oauthFreshBooksClientSecret = os.Getenv("OAUTH_FRESHBOOKS_CLIENT_SECRET")
+	oauthHubSpotClientID        = os.Getenv("OAUTH_HUBSPOT_CLIENT_ID")
+	oauthHubSpotClientSecret    = os.Getenv("OAUTH_HUBSPOT_CLIENT_SECRET")
+	oauthCallbackBase           = envOr("OAUTH_CALLBACK_BASE", "https://wins.wirebot.chat")
 )
 
 type oauthProviderConfig struct {
@@ -3048,6 +3056,24 @@ func getOAuthConfig(provider string) *oauthProviderConfig {
 			AuthURL: "https://accounts.google.com/o/oauth2/v2/auth", TokenURL: "https://oauth2.googleapis.com/token",
 			Scopes: "https://www.googleapis.com/auth/youtube.readonly", Provider: "google",
 		}
+	case "freshbooks":
+		if oauthFreshBooksClientID == "" {
+			return nil
+		}
+		return &oauthProviderConfig{
+			ClientID: oauthFreshBooksClientID, ClientSecret: oauthFreshBooksClientSecret,
+			AuthURL: "https://auth.freshbooks.com/oauth/authorize", TokenURL: "https://api.freshbooks.com/auth/oauth/token",
+			Scopes: "", Provider: "freshbooks",
+		}
+	case "hubspot":
+		if oauthHubSpotClientID == "" {
+			return nil
+		}
+		return &oauthProviderConfig{
+			ClientID: oauthHubSpotClientID, ClientSecret: oauthHubSpotClientSecret,
+			AuthURL: "https://app.hubspot.com/oauth/authorize", TokenURL: "https://api.hubapi.com/oauth/v1/token",
+			Scopes: "crm.objects.deals.read crm.objects.contacts.read", Provider: "hubspot",
+		}
 	}
 	return nil
 }
@@ -3064,9 +3090,11 @@ func (s *Server) handleOAuthConfig(w http.ResponseWriter, r *http.Request) {
 	if r.Method == "GET" {
 		// Return which OAuth providers are configured
 		providers := map[string]bool{
-			"github": oauthGitHubClientID != "",
-			"stripe": oauthStripeClientID != "",
-			"google": oauthGoogleClientID != "",
+			"github":     oauthGitHubClientID != "",
+			"stripe":     oauthStripeClientID != "",
+			"google":     oauthGoogleClientID != "",
+			"freshbooks": oauthFreshBooksClientID != "",
+			"hubspot":    oauthHubSpotClientID != "",
 		}
 		json.NewEncoder(w).Encode(map[string]interface{}{
 			"providers": providers,
@@ -3106,6 +3134,12 @@ func (s *Server) handleOAuthConfig(w http.ResponseWriter, r *http.Request) {
 	case "google":
 		oauthGoogleClientID = req.ClientID
 		oauthGoogleClientSecret = req.ClientSecret
+	case "freshbooks":
+		oauthFreshBooksClientID = req.ClientID
+		oauthFreshBooksClientSecret = req.ClientSecret
+	case "hubspot":
+		oauthHubSpotClientID = req.ClientID
+		oauthHubSpotClientSecret = req.ClientSecret
 	default:
 		http.Error(w, `{"error":"unknown provider, use: github, stripe, google"}`, 400)
 		return
@@ -3298,6 +3332,99 @@ a:hover{background:#7c7cff20}</style></head>
 </div></body></html>`)
 }
 
+
+func (s *Server) handleFreshBooksSetup(w http.ResponseWriter, r *http.Request) {
+	if oauthFreshBooksClientID != "" {
+		http.Redirect(w, r, "/v1/oauth/freshbooks/authorize", 302)
+		return
+	}
+	callbackURL := oauthCallbackBase + "/v1/oauth/callback"
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	fmt.Fprintf(w, `<!DOCTYPE html>
+<html><head><title>Set Up FreshBooks</title>
+<style>body{background:#0a0a12;color:#ddd;font-family:system-ui;margin:0;padding:24px}
+.card{max-width:480px;margin:40px auto;text-align:center}h2{margin:0 0 8px}
+.sub{color:#888;font-size:14px;margin:0 0 24px}
+.steps{text-align:left;background:#111118;border:1px solid #1e1e30;border-radius:12px;padding:20px;margin:0 0 20px}
+.step{display:flex;gap:10px;margin-bottom:14px;font-size:13px;color:#aaa;line-height:1.5}.step:last-child{margin-bottom:0}
+.num{width:24px;height:24px;border-radius:50%%;background:#7c7cff15;color:#7c7cff;font-size:11px;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0}
+.cb{background:#0a0a15;border:1px solid #2a2a40;border-radius:8px;padding:10px 12px;font-family:monospace;font-size:12px;color:#7c7cff;word-break:break-all;user-select:all;cursor:pointer;margin:8px 0}
+.cb:hover{border-color:#7c7cff}
+.fields{display:flex;flex-direction:column;gap:8px;margin-top:16px}
+.fields input{padding:10px 12px;background:#0a0a15;border:1px solid #2a2a40;border-radius:8px;color:#ddd;font-size:13px;outline:none}
+.fields input:focus{border-color:#7c7cff}
+.save{width:100%%;padding:10px;background:#7c7cff;color:white;border:none;border-radius:8px;font-weight:600;font-size:13px;cursor:pointer;margin-top:4px}
+.save:hover{background:#6c6cee}.save:disabled{opacity:.4}
+.back{display:block;margin-top:20px;color:#555;font-size:12px;text-decoration:none}.back:hover{color:#888}
+</style></head>
+<body><div class="card">
+<h2>📗 Set Up FreshBooks</h2>
+<p class="sub">One-time setup — takes about 60 seconds</p>
+<div class="steps">
+<div class="step"><span class="num">1</span><span>Go to <a href="https://my.freshbooks.com/#/developer" target="_blank" style="color:#7c7cff">FreshBooks Developer Portal</a> → Create App</span></div>
+<div class="step"><span class="num">2</span><span>Set the redirect URI to:</span></div>
+<div class="cb" onclick="navigator.clipboard.writeText('%s');this.style.borderColor='#2ecc71'">%s</div>
+<div class="step"><span class="num">3</span><span>Copy the Client ID and Client Secret below</span></div>
+</div>
+<div class="fields">
+<input type="text" id="cid" placeholder="Client ID" />
+<input type="password" id="csec" placeholder="Client Secret" />
+<button class="save" id="btn" onclick="
+  var c=document.getElementById('cid').value,s=document.getElementById('csec').value;
+  if(!c||!s)return;this.disabled=true;this.textContent='Saving...';
+  fetch('/v1/oauth/config',{method:'POST',headers:{'Content-Type':'application/json','Authorization':localStorage.getItem('token')?'Bearer '+localStorage.getItem('token'):''},body:JSON.stringify({provider:'freshbooks',client_id:c,client_secret:s})}).then(function(r){return r.json()}).then(function(d){if(d.ok)window.location='/?oauth=freshbooks&oauth_status=ok';else{document.getElementById('btn').disabled=false;document.getElementById('btn').textContent=d.error||'Error'}})
+">Save & Enable Connect</button>
+</div>
+<a class="back" href="/">← Back to scoreboard</a>
+</div></body></html>`, callbackURL, callbackURL)
+}
+
+func (s *Server) handleHubSpotSetup(w http.ResponseWriter, r *http.Request) {
+	if oauthHubSpotClientID != "" {
+		http.Redirect(w, r, "/v1/oauth/hubspot/authorize", 302)
+		return
+	}
+	callbackURL := oauthCallbackBase + "/v1/oauth/callback"
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	fmt.Fprintf(w, `<!DOCTYPE html>
+<html><head><title>Set Up HubSpot</title>
+<style>body{background:#0a0a12;color:#ddd;font-family:system-ui;margin:0;padding:24px}
+.card{max-width:480px;margin:40px auto;text-align:center}h2{margin:0 0 8px}
+.sub{color:#888;font-size:14px;margin:0 0 24px}
+.steps{text-align:left;background:#111118;border:1px solid #1e1e30;border-radius:12px;padding:20px;margin:0 0 20px}
+.step{display:flex;gap:10px;margin-bottom:14px;font-size:13px;color:#aaa;line-height:1.5}.step:last-child{margin-bottom:0}
+.num{width:24px;height:24px;border-radius:50%%;background:#7c7cff15;color:#7c7cff;font-size:11px;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0}
+.cb{background:#0a0a15;border:1px solid #2a2a40;border-radius:8px;padding:10px 12px;font-family:monospace;font-size:12px;color:#7c7cff;word-break:break-all;user-select:all;cursor:pointer;margin:8px 0}
+.cb:hover{border-color:#7c7cff}
+.fields{display:flex;flex-direction:column;gap:8px;margin-top:16px}
+.fields input{padding:10px 12px;background:#0a0a15;border:1px solid #2a2a40;border-radius:8px;color:#ddd;font-size:13px;outline:none}
+.fields input:focus{border-color:#7c7cff}
+.save{width:100%%;padding:10px;background:#7c7cff;color:white;border:none;border-radius:8px;font-weight:600;font-size:13px;cursor:pointer;margin-top:4px}
+.save:hover{background:#6c6cee}.save:disabled{opacity:.4}
+.back{display:block;margin-top:20px;color:#555;font-size:12px;text-decoration:none}.back:hover{color:#888}
+</style></head>
+<body><div class="card">
+<h2>🔶 Set Up HubSpot</h2>
+<p class="sub">One-time setup — takes about 60 seconds</p>
+<div class="steps">
+<div class="step"><span class="num">1</span><span>Go to <a href="https://app.hubspot.com/developer" target="_blank" style="color:#7c7cff">HubSpot Developer Portal</a> → Create App</span></div>
+<div class="step"><span class="num">2</span><span>Under Auth tab, set redirect URI to:</span></div>
+<div class="cb" onclick="navigator.clipboard.writeText('%s');this.style.borderColor='#2ecc71'">%s</div>
+<div class="step"><span class="num">3</span><span>Copy the Client ID and Client Secret below</span></div>
+</div>
+<div class="fields">
+<input type="text" id="cid" placeholder="Client ID" />
+<input type="password" id="csec" placeholder="Client Secret" />
+<button class="save" id="btn" onclick="
+  var c=document.getElementById('cid').value,s=document.getElementById('csec').value;
+  if(!c||!s)return;this.disabled=true;this.textContent='Saving...';
+  fetch('/v1/oauth/config',{method:'POST',headers:{'Content-Type':'application/json','Authorization':localStorage.getItem('token')?'Bearer '+localStorage.getItem('token'):''},body:JSON.stringify({provider:'hubspot',client_id:c,client_secret:s})}).then(function(r){return r.json()}).then(function(d){if(d.ok)window.location='/?oauth=hubspot&oauth_status=ok';else{document.getElementById('btn').disabled=false;document.getElementById('btn').textContent=d.error||'Error'}})
+">Save & Enable Connect</button>
+</div>
+<a class="back" href="/">← Back to scoreboard</a>
+</div></body></html>`, callbackURL, callbackURL)
+}
+
 func (s *Server) handleOAuthStart(w http.ResponseWriter, r *http.Request) {
 	// Determine provider from URL path: /v1/oauth/{provider}/authorize
 	parts := strings.Split(r.URL.Path, "/")
@@ -3453,6 +3580,34 @@ func (s *Server) handleOAuthCallback(w http.ResponseWriter, r *http.Request) {
 		}
 	case "google":
 		displayName = "YouTube"
+	case "freshbooks":
+		if token, ok := tokenData["access_token"].(string); ok {
+			req, _ := http.NewRequest("GET", "https://api.freshbooks.com/auth/api/v1/users/me", nil)
+			req.Header.Set("Authorization", "Bearer "+token)
+			if resp, err := client.Do(req); err == nil {
+				var me map[string]interface{}
+				json.NewDecoder(resp.Body).Decode(&me)
+				resp.Body.Close()
+				if r, ok := me["response"].(map[string]interface{}); ok {
+					if fn, ok := r["first_name"].(string); ok {
+						ln, _ := r["last_name"].(string)
+						displayName = fmt.Sprintf("FreshBooks (%s %s)", fn, ln)
+					}
+				}
+			}
+		}
+	case "hubspot":
+		if token, ok := tokenData["access_token"].(string); ok {
+			req, _ := http.NewRequest("GET", "https://api.hubapi.com/oauth/v1/access-tokens/"+token, nil)
+			if resp, err := client.Do(req); err == nil {
+				var info map[string]interface{}
+				json.NewDecoder(resp.Body).Decode(&info)
+				resp.Body.Close()
+				if name, ok := info["hub_domain"].(string); ok {
+					displayName = fmt.Sprintf("HubSpot (%s)", name)
+				}
+			}
+		}
 	}
 
 	id := fmt.Sprintf("int-%d", time.Now().UnixNano())

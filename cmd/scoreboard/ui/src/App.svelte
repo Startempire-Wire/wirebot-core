@@ -70,14 +70,11 @@
       fields: [{ key: 'consumer_secret', label: 'Consumer Secret', placeholder: 'cs_...' },
                { key: 'store_url', label: 'Store URL', placeholder: 'https://startempirewire.com' }] },
     { id: 'freshbooks', name: 'FreshBooks', icon: '📗', lane: 'revenue',
-      desc: 'Invoices, expenses, payments — real P&L', auth: 'api_key',
-      credLabel: 'Bearer Token', credPlaceholder: 'FreshBooks Bearer Token',
-      hint: 'Get from FreshBooks → Settings → Developer Portal → Create App → Bearer Token',
-      fields: [{ key: 'account_id', label: 'Account ID', placeholder: 'Your FreshBooks Account ID' }] },
+      desc: 'Invoices, expenses, payments — real P&L', auth: 'oauth',
+      hint: 'Connect your FreshBooks account to track invoices, expenses, and payments' },
     { id: 'hubspot', name: 'HubSpot', icon: '🔶', lane: 'revenue',
-      auth: 'api_key', desc: 'CRM deals, contacts, pipeline',
-      hint: 'HubSpot → Settings → Integrations → Private Apps → Create → Copy token',
-      credLabel: 'Private App Token', credPlaceholder: 'pat-na1-...' },
+      auth: 'oauth', desc: 'CRM deals, contacts, pipeline',
+      hint: 'Connect HubSpot to track deals, contacts, and pipeline' },
     { id: 'paypal', name: 'PayPal', icon: '💰', lane: 'revenue',
       auth: 'oauth', desc: 'Payment & invoice tracking',
       hint: 'Connect PayPal to track incoming payments',
@@ -947,6 +944,16 @@
                             Set Up Stripe →
                           </button>
                           <p class="int-setup-hint">Opens Stripe to enable Connect for your account.</p>
+                        {:else if provider.id === 'freshbooks'}
+                          <button class="int-setup-oauth" onclick={() => { window.location.href = '/v1/oauth/setup/freshbooks'; }}>
+                            Set Up FreshBooks →
+                          </button>
+                          <p class="int-setup-hint">Creates a FreshBooks app for your account. One click.</p>
+                        {:else if provider.id === 'hubspot'}
+                          <button class="int-setup-oauth" onclick={() => { window.location.href = '/v1/oauth/setup/hubspot'; }}>
+                            Set Up HubSpot →
+                          </button>
+                          <p class="int-setup-hint">Creates a HubSpot app for your account. One click.</p>
                         {:else if provider.id === 'google' || provider.id === 'youtube' || provider.id === 'youtube_key'}
                           <p class="int-setup-hint">Google/YouTube connection coming soon</p>
                         {:else}
@@ -954,6 +961,16 @@
                         {/if}
                       {/if}
                     {/await}
+                  {:else if provider.auth === 'plaid'}
+                    <!-- Plaid Link — one button, zero typing -->
+                    <button class="int-setup-oauth" onclick={async () => {
+                      connectStatus = 'saving'; connectMsg = 'Opening bank connection...';
+                      showConnectForm = null;
+                      await startPlaidLink(provider);
+                    }}>
+                      🏦 Connect Bank Account →
+                    </button>
+                    <p class="int-setup-hint">Opens secure bank login. Supports 12,000+ banks — Novo, Chase, BofA, Wells Fargo, and more.</p>
                   {:else}
                     <div class="int-setup-steps">
                       <div class="int-setup-step">
