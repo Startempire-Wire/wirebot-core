@@ -730,7 +730,7 @@
       {:else if view === 'feed'}
         <Feed items={feed} pendingCount={data?.pending_count || 0} onHelp={() => showHints = true} />
       {:else if view === 'season'}
-        <Season season={data.season} {history} streak={data.streak} onHelp={() => showHints = true} />
+        <Season season={data.season} {history} streak={data.streak} onHelp={() => showHints = true} onnav={(e) => view = e.detail} />
       {:else if view === 'wrapped'}
         <Wrapped {wrapped} />
       {:else if view === 'settings'}

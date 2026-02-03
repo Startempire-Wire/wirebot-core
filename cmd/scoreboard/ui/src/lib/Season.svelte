@@ -1,5 +1,7 @@
 <script>
+  import { createEventDispatcher } from 'svelte';
   let { season, history, streak, onHelp } = $props();
+  const dispatch = createEventDispatcher();
 
   function pct(v) { return Math.round((v || 0) * 100); }
 
@@ -127,6 +129,11 @@
       {/each}
     </div>
   {/if}
+
+  <!-- Season Wrapped CTA -->
+  <button class="wrapped-btn" onclick={() => dispatch('nav', 'wrapped')}>
+    🎬 View Season Wrapped →
+  </button>
 </div>
 
 <style>
@@ -247,4 +254,21 @@
   .hr-bar-fill.low { background: #ff3232; }
   .hr-score { font-size: 12px; font-weight: 600; width: 24px; text-align: right; font-variant-numeric: tabular-nums; flex-shrink: 0; }
   .hr-result { font-size: 12px; flex-shrink: 0; }
+
+  .wrapped-btn {
+    display: block;
+    width: 100%;
+    padding: 14px;
+    background: linear-gradient(135deg, #7c7cff20, #a78bfa15);
+    border: 1px solid #7c7cff30;
+    border-radius: 12px;
+    color: #c8c8ff;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    text-align: center;
+    transition: border-color 0.2s;
+    margin-bottom: 20px;
+  }
+  .wrapped-btn:hover { border-color: #7c7cff60; }
 </style>
