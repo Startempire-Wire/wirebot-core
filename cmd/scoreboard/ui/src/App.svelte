@@ -183,6 +183,16 @@
       auth: 'oauth', desc: 'Meal & nutrition tracking',
       hint: 'MyFitnessPal, Cronometer',
       comingSoon: true },
+    // ── Documents (Business Intelligence — powers task proposals) ──
+    { id: 'gdrive', name: 'Google Drive', icon: '📁', lane: 'systems',
+      auth: 'api_key', desc: 'GSuite docs — Wirebot scans file names to auto-detect completed tasks',
+      hint: 'Authorize via gogcli: run `gog auth add you@gsuite.com` then enter your GSuite email here',
+      credLabel: 'GSuite Email', credPlaceholder: 'you@yourdomain.com',
+      fields: [{ key: 'account', label: 'Account (same email)', placeholder: 'you@yourdomain.com' }] },
+    { id: 'dropbox', name: 'Dropbox', icon: '📦', lane: 'systems',
+      auth: 'api_key', desc: 'Business docs — Wirebot scans files to auto-detect completed tasks',
+      hint: 'Dropbox → Settings → Developer → My Apps → Generate Access Token',
+      credLabel: 'Access Token', credPlaceholder: 'sl.B...' },
   ];
 
   const API = window.location.origin;

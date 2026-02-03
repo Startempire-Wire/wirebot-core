@@ -57,6 +57,7 @@
   let chatSessionId = $state(null);
   let drift = $state(null);
   let suggestions = $state([]);
+  let proposals = $state([]);
   let loading = $state(true);
   let partners = $state([]);
   let expandedTask = $state(null);
@@ -105,10 +106,13 @@
     buildSuggestions();
     loading = false;
 
-    // Load partners in background (non-blocking — may be slow)
+    // Load partners + proposals in background (non-blocking)
     authFetch('/v1/network/members?limit=8').then(mem => {
       if (mem?.members) partners = mem.members;
       if (partners.length > 0) partnersOpen = true;
+    });
+    authFetch('/v1/proposals?action=list&status=proposed').then(res => {
+      if (res?.proposals) proposals = res.proposals;
     });
   }
 
@@ -153,6 +157,23 @@
     if (s.length < 3)
       s.push({ icon: '⚡', title: 'Keep Building', text: 'You\'re making progress — keep the streak alive', action: 'score' });
     suggestions = s.slice(0, 4);
+  }
+
+  async function acceptProposal(taskId) {
+    await fetch(`${API}/v1/proposals?action=accept&id=${taskId}`, { method: 'POST', headers: headers() });
+    proposals = proposals.filter(p => p.task_id !== taskId);
+    // Reload checklist to show updated progress
+    const grouped = await authFetch(`/v1/checklist?action=grouped&stage=${stage}`);
+    if (grouped) {
+      checklist = { total: grouped.total, completed: grouped.completed, percent: grouped.percent, stage: grouped.stage };
+      allCategories = grouped.categories || [];
+      categories = allCategories;
+    }
+  }
+
+  async function rejectProposal(taskId) {
+    await fetch(`${API}/v1/proposals?action=reject&id=${taskId}`, { method: 'POST', headers: headers() });
+    proposals = proposals.filter(p => p.task_id !== taskId);
   }
 
   async function askWirebot() {
@@ -479,6 +500,30 @@
       <div class="task-empty">All caught up! 🎉</div>
     {/if}
 
+    <!-- ═══ 7b. WIREBOT PROPOSALS (auto-inferred completions) ═══ -->
+    {#if proposals.length > 0}
+      <div class="section-header"><span>📝 WIREBOT THINKS THESE ARE DONE</span></div>
+      <div class="proposals-list">
+        {#each proposals as prop}
+          <div class="proposal-card">
+            <div class="prop-header">
+              <span class="prop-title">{prop.title}</span>
+              <span class="prop-conf" title="Confidence">{Math.round(prop.confidence * 100)}%</span>
+            </div>
+            <div class="prop-body">
+              {#each prop.evidence as ev}
+                <span class="prop-evidence">{ev.startsWith('vault:') ? '📓' : ev.startsWith('gdrive:') ? '📁' : ev.startsWith('dropbox:') ? '📦' : ev.startsWith('chat:') ? '💬' : '📊'} {ev.split(':').slice(1).join(':')}</span>
+              {/each}
+            </div>
+            <div class="prop-actions">
+              <button class="prop-accept" onclick={() => acceptProposal(prop.task_id)}>✅ Confirm Done</button>
+              <button class="prop-reject" onclick={() => rejectProposal(prop.task_id)}>❌ Not Yet</button>
+            </div>
+          </div>
+        {/each}
+      </div>
+    {/if}
+
     <!-- ═══ 8. WIREBOT SUGGESTIONS ═══ -->
     <div class="section-header"><span>WIRE BOT SUGGESTIONS</span></div>
     <div class="suggestions-scroll">
@@ -664,6 +709,32 @@
   /* ─── Suggestions ─── */
   .suggestions-scroll { display: flex; gap: 10px; overflow-x: auto; padding-bottom: 4px; margin-bottom: 14px; scrollbar-width: none; }
   .suggestions-scroll::-webkit-scrollbar { display: none; }
+
+  /* ─── Proposals ─── */
+  .proposals-list { display: flex; flex-direction: column; gap: 10px; margin-bottom: 16px; }
+  .proposal-card {
+    background: linear-gradient(135deg, #1a1a2e, #16213e);
+    border: 1px solid rgba(124,124,255,0.3);
+    border-radius: 10px; padding: 12px;
+  }
+  .prop-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
+  .prop-title { font-size: 13px; font-weight: 600; color: #e8e8ff; }
+  .prop-conf { font-size: 11px; color: #7c7cff; background: rgba(124,124,255,0.1); padding: 2px 6px; border-radius: 8px; }
+  .prop-body { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 8px; }
+  .prop-evidence {
+    font-size: 11px; color: #8888aa; background: rgba(255,255,255,0.05);
+    padding: 2px 6px; border-radius: 6px; white-space: nowrap;
+    max-width: 200px; overflow: hidden; text-overflow: ellipsis;
+  }
+  .prop-actions { display: flex; gap: 8px; }
+  .prop-accept {
+    flex: 1; padding: 8px; border-radius: 8px; border: none;
+    background: rgba(0,220,130,0.15); color: #00dc82; font-size: 12px; font-weight: 600; cursor: pointer;
+  }
+  .prop-reject {
+    flex: 1; padding: 8px; border-radius: 8px; border: none;
+    background: rgba(255,80,80,0.1); color: #ff5050; font-size: 12px; font-weight: 600; cursor: pointer;
+  }
   .sug-card { flex-shrink: 0; width: 150px; padding: 12px; background: #16161e; border: 1px solid #1e1e30; border-radius: 10px; text-align: left; cursor: pointer; transition: border-color .15s; color: inherit; }
   .sug-card:hover { border-color: #7c7cff40; }
   .sug-icon { font-size: 20px; margin-bottom: 4px; }

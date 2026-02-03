@@ -22,6 +22,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -486,6 +487,7 @@ func main() {
 
 	// Checklist data for Dashboard view
 	mux.HandleFunc("/v1/checklist", s.auth(s.handleChecklist))
+	mux.HandleFunc("/v1/proposals", s.auth(s.handleProposals))
 
 	// SSO callback — receives JWT from Connect Plugin redirect
 	mux.HandleFunc("/auth/callback", s.handleSSOCallback)
@@ -5018,6 +5020,474 @@ func (s *Server) runTaskAutoDetect(tasks []interface{}, cl map[string]interface{
 	return detected
 }
 
+// ─── Task Proposal Engine ───────────────────────────────────────────────
+// For manual_confirm tasks, Wirebot drafts proposals from inferred context:
+// Obsidian vault, pairing profile, connected docs (Google Drive, Dropbox),
+// chat history, and scoreboard events.
+
+type TaskProposal struct {
+	TaskID     string   `json:"task_id"`
+	Title      string   `json:"title"`
+	Status     string   `json:"status"`     // "proposed", "accepted", "rejected"
+	Draft      string   `json:"draft"`      // Wirebot's proposed answer/evidence
+	Evidence   []string `json:"evidence"`   // Source files/docs that support the proposal
+	Confidence float64  `json:"confidence"` // 0-1 how sure Wirebot is
+	CreatedAt  string   `json:"created_at"`
+}
+
+func (s *Server) ensureProposalsTable() {
+	s.db.Exec(`CREATE TABLE IF NOT EXISTS task_proposals (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		task_id TEXT NOT NULL,
+		title TEXT NOT NULL,
+		status TEXT DEFAULT 'proposed',
+		draft TEXT NOT NULL,
+		evidence TEXT DEFAULT '[]',
+		confidence REAL DEFAULT 0.5,
+		created_at TEXT DEFAULT (datetime('now')),
+		reviewed_at TEXT,
+		UNIQUE(task_id, status)
+	)`)
+}
+
+// generateProposals scans context sources and drafts proposals for manual tasks.
+func (s *Server) generateProposals(tasks []interface{}) []TaskProposal {
+	s.ensureProposalsTable()
+	var proposals []TaskProposal
+
+	// Load Obsidian vault index for keyword matching
+	// Only build vault index every 4h (expensive for 853 files)
+	vaultIndex := s.getCachedVaultIndex()
+
+	// Load pairing profile for business context
+	profileData, _ := os.ReadFile("/data/wirebot/pairing/profile.json")
+	var profile map[string]interface{}
+	json.Unmarshal(profileData, &profile)
+
+	// Load Google Drive file index (if available)
+	driveIndex := s.loadDriveIndex()
+
+	// Load Dropbox file index (if available)
+	dropboxIndex := s.loadDropboxIndex()
+
+	for _, t := range tasks {
+		tm, ok := t.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		status, _ := tm["status"].(string)
+		if status == "completed" || status == "done" || status == "skipped" {
+			continue
+		}
+		det, _ := tm["detection"].(map[string]interface{})
+		detType, _ := det["type"].(string)
+		if detType != "manual_confirm" {
+			continue
+		}
+
+		taskID, _ := tm["id"].(string)
+		title, _ := tm["title"].(string)
+
+		// Skip if we already have a pending proposal
+		var existing int
+		s.db.QueryRow("SELECT COUNT(*) FROM task_proposals WHERE task_id=? AND status='proposed'", taskID).Scan(&existing)
+		if existing > 0 {
+			continue
+		}
+
+		// Try to draft from available sources
+		draft, evidence, confidence := s.draftProposal(title, vaultIndex, driveIndex, dropboxIndex, profile)
+		if draft == "" {
+			continue // no evidence found
+		}
+
+		proposal := TaskProposal{
+			TaskID:     taskID,
+			Title:      title,
+			Status:     "proposed",
+			Draft:      draft,
+			Evidence:   evidence,
+			Confidence: confidence,
+			CreatedAt:  time.Now().UTC().Format(time.RFC3339),
+		}
+
+		evidenceJSON, _ := json.Marshal(evidence)
+		s.db.Exec(`INSERT OR IGNORE INTO task_proposals (task_id, title, status, draft, evidence, confidence)
+			VALUES (?, ?, 'proposed', ?, ?, ?)`,
+			taskID, title, draft, string(evidenceJSON), confidence)
+
+		proposals = append(proposals, proposal)
+		log.Printf("[proposals] 📝 %s — confidence %.0f%%, %d sources", title, confidence*100, len(evidence))
+	}
+
+	return proposals
+}
+
+// Task-to-keyword mapping for vault/drive scanning
+var taskKeywords = map[string][]string{
+	"Identify Target Customer":              {"target customer", "target audience", "ideal customer", "ICP", "persona", "customer profile", "demographics"},
+	"Analyze Competitors":                   {"competitor", "competition", "market analysis", "competitive landscape", "SWOT"},
+	"Validate Problem-Solution Fit":         {"problem solution", "validation", "customer interview", "beta test", "MVP feedback", "product-market fit"},
+	"Estimate Market Size (TAM/SAM/SOM)":    {"TAM", "SAM", "SOM", "market size", "addressable market", "total market"},
+	"Write One-Page Business Plan":          {"business plan", "executive summary", "business model canvas"},
+	"Identify Key Milestones":               {"milestone", "roadmap", "timeline", "key dates", "quarterly goals"},
+	"Define Revenue Model":                  {"revenue model", "monetization", "pricing model", "subscription", "SaaS", "freemium"},
+	"Estimate Startup Costs":                {"startup cost", "initial investment", "capital requirement", "funding"},
+	"Calculate Startup Costs":               {"startup cost", "initial investment", "capital requirement"},
+	"Set Financial Goals (Year 1)":          {"financial goal", "revenue target", "year one", "annual revenue", "ARR", "MRR"},
+	"Set Pricing Strategy":                  {"pricing strategy", "pricing tier", "price point", "pricing model"},
+	"Get EIN (Tax ID)":                      {"EIN", "tax ID", "employer identification", "IRS"},
+	"Apply for EIN":                         {"EIN", "tax ID", "employer identification"},
+	"Research Required Licenses/Permits":    {"license", "permit", "business license", "regulatory", "compliance"},
+	"Create Brand Style Guide":              {"brand guide", "style guide", "brand colors", "typography", "brand identity"},
+	"Write Brand Story":                     {"brand story", "origin story", "founder story", "why we started", "mission"},
+	"Create Social Media Profiles":          {"social media", "twitter", "instagram", "linkedin", "facebook", "tiktok"},
+	"Write Brand Voice Guidelines":          {"brand voice", "tone of voice", "communication style", "messaging"},
+	"Plan Launch Marketing Campaign":        {"launch plan", "marketing campaign", "go to market", "GTM", "launch strategy"},
+	"Set Up Social Media Accounts":          {"social media", "social accounts", "twitter", "instagram", "linkedin"},
+	"Set Up Google Business Profile":        {"google business", "google my business", "GMB", "local SEO"},
+	"Define Standard Operating Procedures":  {"SOP", "standard operating", "process document", "playbook", "workflow"},
+	"Create Standard Operating Procedures":  {"SOP", "standard operating", "process document"},
+	"Set Up Customer Communication Tools":   {"customer communication", "helpdesk", "intercom", "zendesk", "support tool"},
+	"Choose Project Management Tool":        {"project management", "trello", "asana", "notion", "jira", "linear"},
+	"Create Customer Support Channel":       {"customer support", "support channel", "helpdesk", "ticketing"},
+	"Create Pricing Strategy":               {"pricing", "price point", "pricing tier", "pricing page"},
+	"Set Up Fulfillment Process":            {"fulfillment", "shipping", "delivery", "order processing"},
+	"Build Sales Pitch Deck":                {"pitch deck", "sales deck", "investor deck", "presentation"},
+	"Create Sales Materials":                {"sales material", "brochure", "one-pager", "sales sheet"},
+	"Define Sales Process":                  {"sales process", "sales funnel", "pipeline", "CRM workflow"},
+	"Create Lead Generation Strategy":       {"lead generation", "lead gen", "inbound", "outbound", "lead magnet"},
+	"Document All Key Processes":            {"process documentation", "SOP", "playbook", "knowledge base"},
+	"Identify Bottlenecks":                  {"bottleneck", "constraint", "slow point", "efficiency"},
+	"Plan for 10x Volume":                   {"scale", "10x", "scaling plan", "infrastructure", "capacity"},
+	"Expand Product Line":                   {"product line", "new product", "expansion", "product roadmap"},
+	"Enter New Markets":                     {"new market", "market expansion", "geographic expansion"},
+	"Scale Marketing Channels":              {"marketing scale", "paid ads", "content marketing", "SEO strategy"},
+	"Define First Hire Role":                {"first hire", "job description", "hiring", "role definition"},
+	"Create Hiring Process":                 {"hiring process", "interview", "recruitment", "onboarding"},
+	"Build Company Culture Doc":             {"company culture", "values", "culture document", "team values"},
+	"Create Onboarding Process":             {"onboarding", "new hire", "orientation", "training"},
+	"Set Up Onboarding Playbook":            {"onboarding playbook", "new hire", "orientation"},
+	"Build Referral Program":                {"referral program", "affiliate", "refer a friend", "word of mouth"},
+	"Implement Upsell Strategy":             {"upsell", "cross-sell", "upgrade", "premium tier"},
+	"Analyze Unit Economics":                {"unit economics", "LTV", "CAC", "ARPU", "churn rate", "lifetime value"},
+	"Identify Upsell/Cross-sell Paths":      {"upsell", "cross-sell", "upgrade path"},
+	"Build Retention Strategy":              {"retention", "churn", "loyalty", "engagement", "customer success"},
+	"Optimize Conversion Funnel":            {"conversion funnel", "conversion rate", "CRO", "A/B test"},
+	"Set Revenue Targets (Monthly)":         {"revenue target", "monthly revenue", "MRR target", "sales target"},
+	"Implement Customer Feedback Loop":      {"feedback loop", "NPS", "customer feedback", "survey", "voice of customer"},
+	"Plan Tech Stack for Scale":             {"tech stack", "infrastructure", "architecture", "scalability"},
+	"Create Feedback Loops":                 {"feedback", "NPS", "customer feedback"},
+	"Document Processes for Delegation":     {"delegation", "process document", "SOPs", "handoff"},
+	"Attend Industry Events":                {"industry event", "conference", "meetup", "networking event"},
+	"Attend/Host 1 Industry Event":          {"industry event", "conference", "meetup"},
+	"Build Strategic Partnerships":          {"strategic partner", "partnership", "collaboration", "alliance"},
+	"Identify Strategic Partners":           {"strategic partner", "partnership opportunity"},
+	"Join Professional Communities":         {"professional community", "slack group", "discord server", "forum"},
+	"Join Industry Communities":             {"industry community", "professional network"},
+}
+
+// Cached vault index + timestamp
+var cachedVaultIndex map[string][]string
+var vaultIndexBuiltAt time.Time
+var vaultIndexMu sync.Mutex
+
+func (s *Server) getCachedVaultIndex() map[string][]string {
+	vaultIndexMu.Lock()
+	defer vaultIndexMu.Unlock()
+	if cachedVaultIndex != nil && time.Since(vaultIndexBuiltAt) < 4*time.Hour {
+		return cachedVaultIndex
+	}
+	cachedVaultIndex = s.buildVaultIndex()
+	vaultIndexBuiltAt = time.Now()
+	return cachedVaultIndex
+}
+
+// buildVaultIndex indexes Obsidian vault files by keyword presence.
+// Uses word-boundary matching to avoid false positives ("EIN" shouldn't match "being").
+// Only indexes files where 2+ keywords from a task match (higher signal).
+func (s *Server) buildVaultIndex() map[string][]string {
+	index := map[string][]string{} // task title -> []filepath
+	vaultDir := "/data/wirebot/obsidian"
+
+	// Precompile regexes for each keyword set
+	taskRegexes := map[string][]*regexp.Regexp{}
+	for task, keywords := range taskKeywords {
+		var regs []*regexp.Regexp
+		for _, kw := range keywords {
+			// Word boundary match: (?i)\bkeyword\b
+			pattern := `(?i)\b` + regexp.QuoteMeta(kw) + `\b`
+			if r, err := regexp.Compile(pattern); err == nil {
+				regs = append(regs, r)
+			}
+		}
+		taskRegexes[task] = regs
+	}
+
+	filepath.Walk(vaultDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil || info.IsDir() || !strings.HasSuffix(path, ".md") {
+			return nil
+		}
+		// Skip huge files (>100KB) and common noise
+		if info.Size() > 100*1024 {
+			return nil
+		}
+		content, err := os.ReadFile(path)
+		if err != nil {
+			return nil
+		}
+		text := string(content)
+		relPath := strings.TrimPrefix(path, vaultDir+"/")
+
+		for task, regs := range taskRegexes {
+			// Require 2+ keyword matches for high confidence
+			matches := 0
+			for _, r := range regs {
+				if r.MatchString(text) {
+					matches++
+					if matches >= 2 {
+						index[task] = appendUnique(index[task], "vault:"+relPath)
+						break
+					}
+				}
+			}
+		}
+		return nil
+	})
+
+	log.Printf("[vault] Indexed %d task-file associations", len(index))
+	return index
+}
+
+func appendUnique(slice []string, item string) []string {
+	for _, s := range slice {
+		if s == item {
+			return slice
+		}
+	}
+	return append(slice, item)
+}
+
+// loadDriveIndex loads cached Google Drive file listing
+func (s *Server) loadDriveIndex() map[string][]string {
+	index := map[string][]string{}
+	data, err := os.ReadFile("/data/wirebot/integrations/gdrive_index.json")
+	if err != nil {
+		return index
+	}
+	var files []map[string]string
+	json.Unmarshal(data, &files)
+	for _, f := range files {
+		name := strings.ToLower(f["name"])
+		for task, keywords := range taskKeywords {
+			for _, kw := range keywords {
+				if strings.Contains(name, strings.ToLower(kw)) {
+					index[task] = appendUnique(index[task], "gdrive:"+f["name"])
+					break
+				}
+			}
+		}
+	}
+	return index
+}
+
+// loadDropboxIndex loads cached Dropbox file listing
+func (s *Server) loadDropboxIndex() map[string][]string {
+	index := map[string][]string{}
+	data, err := os.ReadFile("/data/wirebot/integrations/dropbox_index.json")
+	if err != nil {
+		return index
+	}
+	var files []map[string]string
+	json.Unmarshal(data, &files)
+	for _, f := range files {
+		name := strings.ToLower(f["name"])
+		path := f["path"]
+		for task, keywords := range taskKeywords {
+			for _, kw := range keywords {
+				if strings.Contains(name, strings.ToLower(kw)) {
+					index[task] = appendUnique(index[task], "dropbox:"+path)
+					break
+				}
+			}
+		}
+	}
+	return index
+}
+
+// draftProposal builds a proposal from available evidence sources
+func (s *Server) draftProposal(taskTitle string, vault, drive, dropbox map[string][]string, profile map[string]interface{}) (string, []string, float64) {
+	var allEvidence []string
+	var draftParts []string
+
+	// Check vault
+	if files, ok := vault[taskTitle]; ok && len(files) > 0 {
+		allEvidence = append(allEvidence, files...)
+		draftParts = append(draftParts, fmt.Sprintf("Found %d related document(s) in your Obsidian vault.", len(files)))
+	}
+
+	// Check Google Drive
+	if files, ok := drive[taskTitle]; ok && len(files) > 0 {
+		allEvidence = append(allEvidence, files...)
+		draftParts = append(draftParts, fmt.Sprintf("Found %d related file(s) in Google Drive.", len(files)))
+	}
+
+	// Check Dropbox
+	if files, ok := dropbox[taskTitle]; ok && len(files) > 0 {
+		allEvidence = append(allEvidence, files...)
+		draftParts = append(draftParts, fmt.Sprintf("Found %d related file(s) in Dropbox.", len(files)))
+	}
+
+	// Check chat history for task mentions
+	var chatMentions int
+	keywords := taskKeywords[taskTitle]
+	if len(keywords) > 0 {
+		for _, kw := range keywords[:min(3, len(keywords))] {
+			var cnt int
+			s.db.QueryRow("SELECT COUNT(*) FROM chat_messages WHERE role='user' AND LOWER(content) LIKE ?",
+				"%"+strings.ToLower(kw)+"%").Scan(&cnt)
+			chatMentions += cnt
+		}
+	}
+	if chatMentions > 0 {
+		allEvidence = append(allEvidence, fmt.Sprintf("chat:%d mentions", chatMentions))
+		draftParts = append(draftParts, fmt.Sprintf("You've discussed this topic %d time(s) in chat.", chatMentions))
+	}
+
+	// Check scoreboard events for related activity
+	var eventMentions int
+	if len(keywords) > 0 {
+		for _, kw := range keywords[:min(3, len(keywords))] {
+			var cnt int
+			s.db.QueryRow("SELECT COUNT(*) FROM events WHERE LOWER(artifact_title) LIKE ? AND status='approved'",
+				"%"+strings.ToLower(kw)+"%").Scan(&cnt)
+			eventMentions += cnt
+		}
+	}
+	if eventMentions > 0 {
+		allEvidence = append(allEvidence, fmt.Sprintf("events:%d related", eventMentions))
+		draftParts = append(draftParts, fmt.Sprintf("Found %d related scoreboard event(s).", eventMentions))
+	}
+
+	if len(allEvidence) == 0 {
+		return "", nil, 0
+	}
+
+	// Build confidence: more diverse sources = higher confidence
+	// Each unique source type adds confidence, not raw count
+	sourceTypes := map[string]bool{}
+	for _, e := range allEvidence {
+		parts := strings.SplitN(e, ":", 2)
+		sourceTypes[parts[0]] = true
+	}
+	confidence := math.Min(0.85, 0.25+float64(len(sourceTypes))*0.15+float64(min(len(allEvidence), 10))*0.02)
+
+	draft := fmt.Sprintf("**Wirebot detected evidence for \"%s\":**\n\n%s\n\n"+
+		"📎 Sources: %s\n\n"+
+		"_Review these sources and tap ✅ to confirm this task is done, or 📝 to refine._",
+		taskTitle,
+		strings.Join(draftParts, "\n"),
+		strings.Join(allEvidence, ", "))
+
+	return draft, allEvidence, confidence
+}
+
+// handleProposals serves the proposal API
+func (s *Server) handleProposals(w http.ResponseWriter, r *http.Request) {
+	cors(w)
+	if r.Method == "OPTIONS" {
+		return
+	}
+
+	s.ensureProposalsTable()
+	action := r.URL.Query().Get("action")
+
+	switch action {
+	case "list":
+		status := r.URL.Query().Get("status")
+		if status == "" {
+			status = "proposed"
+		}
+		rows, err := s.db.Query("SELECT task_id, title, status, draft, evidence, confidence, created_at FROM task_proposals WHERE status=? ORDER BY confidence DESC", status)
+		if err != nil {
+			json.NewEncoder(w).Encode(map[string]interface{}{"proposals": []interface{}{}, "error": err.Error()})
+			return
+		}
+		defer rows.Close()
+		var proposals []TaskProposal
+		for rows.Next() {
+			var p TaskProposal
+			var evidenceJSON string
+			rows.Scan(&p.TaskID, &p.Title, &p.Status, &p.Draft, &evidenceJSON, &p.Confidence, &p.CreatedAt)
+			json.Unmarshal([]byte(evidenceJSON), &p.Evidence)
+			proposals = append(proposals, p)
+		}
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"proposals": proposals,
+			"count":     len(proposals),
+		})
+
+	case "accept":
+		taskID := r.URL.Query().Get("id")
+		if taskID == "" || r.Method != "POST" {
+			http.Error(w, `{"error":"POST with id required"}`, 400)
+			return
+		}
+		s.db.Exec("UPDATE task_proposals SET status='accepted', reviewed_at=datetime('now') WHERE task_id=?", taskID)
+		// Also mark the checklist task as completed
+		data, _ := os.ReadFile(checklistPath)
+		var cl map[string]interface{}
+		json.Unmarshal(data, &cl)
+		tasks, _ := cl["tasks"].([]interface{})
+		for _, t := range tasks {
+			tm, _ := t.(map[string]interface{})
+			if id, _ := tm["id"].(string); id == taskID {
+				tm["status"] = "completed"
+				tm["completedAt"] = time.Now().UTC().Format(time.RFC3339)
+				tm["completedBy"] = "proposal-accepted"
+			}
+		}
+		updated, _ := json.MarshalIndent(cl, "", "  ")
+		os.WriteFile(checklistPath, updated, 0644)
+		json.NewEncoder(w).Encode(map[string]interface{}{"ok": true, "id": taskID})
+
+	case "reject":
+		taskID := r.URL.Query().Get("id")
+		if taskID == "" || r.Method != "POST" {
+			http.Error(w, `{"error":"POST with id required"}`, 400)
+			return
+		}
+		s.db.Exec("UPDATE task_proposals SET status='rejected', reviewed_at=datetime('now') WHERE task_id=?", taskID)
+		json.NewEncoder(w).Encode(map[string]interface{}{"ok": true, "id": taskID, "status": "rejected"})
+
+	case "generate":
+		// Trigger proposal generation on demand
+		if r.Method != "POST" {
+			http.Error(w, `{"error":"POST required"}`, 405)
+			return
+		}
+		data, _ := os.ReadFile(checklistPath)
+		var cl map[string]interface{}
+		json.Unmarshal(data, &cl)
+		tasks, _ := cl["tasks"].([]interface{})
+		proposals := s.generateProposals(tasks)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"generated": len(proposals),
+			"proposals": proposals,
+		})
+
+	default:
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"endpoints": []string{
+				"GET /v1/proposals?action=list&status=proposed",
+				"POST /v1/proposals?action=generate",
+				"POST /v1/proposals?action=accept&id=TASK_ID",
+				"POST /v1/proposals?action=reject&id=TASK_ID",
+			},
+		})
+	}
+}
+
 // handleChecklist serves task data for the Dashboard view.
 // Reads from the checklist.json file maintained by the gateway plugin.
 func (s *Server) handleChecklist(w http.ResponseWriter, r *http.Request) {
@@ -5550,12 +6020,20 @@ func (s *Server) runAutoDetectCron() {
 	if len(tasksRaw) == 0 {
 		return
 	}
+
+	// Phase 1: Auto-detect definitive completions
 	detected := s.runTaskAutoDetect(tasksRaw, cl)
 	if len(detected) > 0 {
 		cl["tasks"] = tasksRaw
 		updated, _ := json.MarshalIndent(cl, "", "  ")
 		os.WriteFile(checklistPath, updated, 0644)
 		log.Printf("[autodetect] Completed %d tasks automatically", len(detected))
+	}
+
+	// Phase 2: Generate proposals for manual tasks with evidence
+	proposals := s.generateProposals(tasksRaw)
+	if len(proposals) > 0 {
+		log.Printf("[proposals] Generated %d new proposals from available evidence", len(proposals))
 	}
 }
 
@@ -5664,6 +6142,10 @@ func (s *Server) pollDueIntegrations() {
 			pollErr = s.pollSendy(id, credential, config, lastPoll)
 		case "freshbooks":
 			pollErr = s.pollFreshBooks(id, credential, config, lastPoll)
+		case "gdrive":
+			pollErr = s.pollGoogleDrive(id, credential, config, lastPoll)
+		case "dropbox":
+			pollErr = s.pollDropbox(id, credential, config, lastPoll)
 		default:
 			log.Printf("Poller: unknown provider %s for integration %s", provider, id)
 		}
@@ -6643,13 +7125,6 @@ func (s *Server) pollSendy(integrationID, apiKey, configJSON, lastPoll string) e
 	return nil
 }
 
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
-
 // ─── Verification Level Score Multiplier ────────────────────────────────
 
 func verificationMultiplier(level string) float64 {
@@ -6956,6 +7431,196 @@ type ReconciliationResult struct {
 	TestEvents    []string `json:"test_events"`    // events identified as test/fake
 	Confidence    float64  `json:"confidence"`     // 0-1 how confident this is a real match
 	Status        string   `json:"status"`         // "auto", "manual_confirmed", "manual_rejected"
+}
+
+// emitIntegrationEvent is a simple helper to log an event from a poller
+func (s *Server) emitIntegrationEvent(integrationID, eventType, lane, title, detail string) {
+	id := fmt.Sprintf("evt_%d_%s", time.Now().UnixNano(), eventType[:min(8, len(eventType))])
+	s.mu.Lock()
+	s.db.Exec(`INSERT INTO events (id, event_type, lane, source, timestamp,
+		artifact_type, artifact_url, artifact_title, confidence,
+		score_delta, business_id, status, created_at)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		id, eventType, lane, "integration:"+integrationID, time.Now().UTC().Format(time.RFC3339),
+		"integration", "", title, 0.8,
+		0, "WIR", "pending", time.Now().UTC().Format(time.RFC3339))
+	s.mu.Unlock()
+}
+
+// ─── Google Drive Integration (via gogcli) ──────────────────────────────
+// Uses `gog drive` CLI for auth + listing. Indexes file names for task proposals.
+// Credentials: OAuth token stored in gogcli keychain, account email in integration config.
+
+func (s *Server) pollGoogleDrive(integrationID, credential, configJSON, lastPoll string) error {
+	var cfg map[string]string
+	json.Unmarshal([]byte(configJSON), &cfg)
+	account := cfg["account"] // e.g. "verious@startempirewire.com"
+	if account == "" {
+		account = credential // fallback: credential is the account email
+	}
+
+	log.Printf("[gdrive] Scanning Google Drive for %s", account)
+
+	// Use gogcli to list all files
+	cmd := fmt.Sprintf("gog --account %s --json drive ls --recursive --limit 500 2>/dev/null", account)
+	out, err := execCmd(cmd)
+	if err != nil {
+		// Try without recursive (might not be supported)
+		cmd = fmt.Sprintf("gog --account %s --json drive ls 2>/dev/null", account)
+		out, err = execCmd(cmd)
+		if err != nil {
+			return fmt.Errorf("gog drive ls failed: %v", err)
+		}
+	}
+
+	// Parse JSON output — gogcli outputs JSON array of files
+	var files []map[string]interface{}
+	if err := json.Unmarshal([]byte(out), &files); err != nil {
+		// Try parsing as newline-delimited JSON
+		for _, line := range strings.Split(out, "\n") {
+			line = strings.TrimSpace(line)
+			if line == "" || line == "[" || line == "]" {
+				continue
+			}
+			line = strings.TrimSuffix(line, ",")
+			var f map[string]interface{}
+			if json.Unmarshal([]byte(line), &f) == nil {
+				files = append(files, f)
+			}
+		}
+	}
+
+	// Build index
+	var indexFiles []map[string]string
+	for _, f := range files {
+		name, _ := f["name"].(string)
+		id, _ := f["id"].(string)
+		mimeType, _ := f["mimeType"].(string)
+		if name == "" {
+			continue
+		}
+		indexFiles = append(indexFiles, map[string]string{
+			"name":     name,
+			"id":       id,
+			"mimeType": mimeType,
+		})
+	}
+
+	// Save index
+	indexJSON, _ := json.MarshalIndent(indexFiles, "", "  ")
+	os.WriteFile("/data/wirebot/integrations/gdrive_index.json", indexJSON, 0644)
+
+	// Emit discovery event
+	s.emitIntegrationEvent(integrationID, "GDRIVE_SCAN", "systems",
+		fmt.Sprintf("Google Drive: %d files indexed", len(indexFiles)),
+		fmt.Sprintf("Scanned Google Drive for %s", account))
+
+	log.Printf("[gdrive] Indexed %d files from Google Drive", len(indexFiles))
+	return nil
+}
+
+// ─── Dropbox Integration (REST API) ─────────────────────────────────────
+// Uses Dropbox API v2 with OAuth access token.
+// Indexes file names for task proposals.
+
+func (s *Server) pollDropbox(integrationID, credential, configJSON, lastPoll string) error {
+	token := credential // OAuth access token
+
+	log.Printf("[dropbox] Scanning Dropbox")
+
+	// List all files via /2/files/list_folder
+	payload := map[string]interface{}{
+		"path":                       "",
+		"recursive":                  true,
+		"include_media_info":         false,
+		"include_deleted":            false,
+		"include_has_explicit_shared_members": false,
+		"limit":                      2000,
+	}
+	body, _ := json.Marshal(payload)
+
+	req, _ := http.NewRequest("POST", "https://api.dropboxapi.com/2/files/list_folder", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("dropbox list_folder failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		respBody, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("dropbox API error %d: %s", resp.StatusCode, string(respBody))
+	}
+
+	var result struct {
+		Entries []struct {
+			Tag          string `json:".tag"`
+			Name         string `json:"name"`
+			PathLower    string `json:"path_lower"`
+			PathDisplay  string `json:"path_display"`
+			ServerModified string `json:"server_modified"`
+		} `json:"entries"`
+		HasMore bool   `json:"has_more"`
+		Cursor  string `json:"cursor"`
+	}
+	json.NewDecoder(resp.Body).Decode(&result)
+
+	var indexFiles []map[string]string
+	for _, e := range result.Entries {
+		if e.Tag != "file" {
+			continue
+		}
+		indexFiles = append(indexFiles, map[string]string{
+			"name":     e.Name,
+			"path":     e.PathDisplay,
+			"modified": e.ServerModified,
+		})
+	}
+
+	// Handle pagination
+	for result.HasMore {
+		continuePayload, _ := json.Marshal(map[string]string{"cursor": result.Cursor})
+		req2, _ := http.NewRequest("POST", "https://api.dropboxapi.com/2/files/list_folder/continue", bytes.NewReader(continuePayload))
+		req2.Header.Set("Authorization", "Bearer "+token)
+		req2.Header.Set("Content-Type", "application/json")
+		resp2, err := client.Do(req2)
+		if err != nil {
+			break
+		}
+		json.NewDecoder(resp2.Body).Decode(&result)
+		resp2.Body.Close()
+		for _, e := range result.Entries {
+			if e.Tag != "file" {
+				continue
+			}
+			indexFiles = append(indexFiles, map[string]string{
+				"name":     e.Name,
+				"path":     e.PathDisplay,
+				"modified": e.ServerModified,
+			})
+		}
+	}
+
+	// Save index
+	indexJSON, _ := json.MarshalIndent(indexFiles, "", "  ")
+	os.WriteFile("/data/wirebot/integrations/dropbox_index.json", indexJSON, 0644)
+
+	// Emit discovery event
+	s.emitIntegrationEvent(integrationID, "DROPBOX_SCAN", "systems",
+		fmt.Sprintf("Dropbox: %d files indexed", len(indexFiles)),
+		fmt.Sprintf("Scanned Dropbox storage"))
+
+	log.Printf("[dropbox] Indexed %d files from Dropbox", len(indexFiles))
+	return nil
+}
+
+// execCmd runs a shell command and returns stdout
+func execCmd(cmd string) (string, error) {
+	out, err := exec.Command("bash", "-c", cmd).Output()
+	return string(out), err
 }
 
 func init() {
