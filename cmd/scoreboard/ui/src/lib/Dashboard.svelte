@@ -29,6 +29,7 @@
   ];
 
   let checklist = $state(null);
+  let categories = $state([]);  // grouped checklist data
   let dailyTasks = $state([]);
   let setupTasks = $state([]);
   let nextTask = $state(null);
@@ -42,6 +43,7 @@
   let loading = $state(true);
   let partners = $state([]);
   let expandedTask = $state(null);
+  let expandedCat = $state(null);  // which category is open
   let onboardingComplete = $state(false);
 
   const API = '';
@@ -61,31 +63,36 @@
 
   async function loadAll() {
     loading = true;
-    const [cl, dt, st, dr] = await Promise.all([
-      authFetch('/v1/checklist?action=summary'),
+    const [grouped, dt, dr, mem] = await Promise.all([
+      authFetch(`/v1/checklist?action=grouped&stage=${stage}`),
       authFetch('/v1/checklist?action=daily'),
-      authFetch(`/v1/checklist?action=list&stage=${stage}`),
       authFetch('/v1/pairing/neural-drift'),
+      authFetch('/v1/network/members?limit=8'),
     ]);
 
-    if (cl) {
-      checklist = cl;
-      nextTask = cl.next_task || null;
-      stage = cl.stage || 'launch';
-      onboardingComplete = (cl.percent || 0) >= 100;
+    if (grouped) {
+      checklist = { total: grouped.total, completed: grouped.completed, percent: grouped.percent, stage: grouped.stage };
+      nextTask = grouped.next_task || null;
+      stage = grouped.stage || 'launch';
+      categories = grouped.categories || [];
+      onboardingComplete = (grouped.percent || 0) >= 100;
+      // Extract setup tasks from categories (incomplete ones across all cats)
+      setupTasks = [];
+      for (const cat of categories) {
+        for (const t of (cat.tasks || [])) {
+          if (t.status !== 'completed' && t.status !== 'done' && t.status !== 'skipped') {
+            setupTasks.push({ ...t, _catLabel: cat.label, _catIcon: cat.icon });
+          }
+        }
+      }
     }
     if (dt?.tasks) dailyTasks = dt.tasks.slice(0, 5);
-    if (st?.tasks) setupTasks = st.tasks.filter(t => !t.completed).slice(0, 5);
     if (dr?.drift) drift = dr.drift;
 
-    // Mock partners until real network data exists
-    partners = [
-      { name: 'Network', avatar: '👤' },
-      { name: 'Growth', avatar: '👤' },
-      { name: 'Partners', avatar: '👤' },
-      { name: 'Coming', avatar: '👤' },
-      { name: 'Soon', avatar: '👤' },
-    ];
+    // Real network members from BuddyBoss
+    if (mem?.members) {
+      partners = mem.members;
+    }
 
     buildSuggestions();
     loading = false;
@@ -247,20 +254,26 @@
       </div>
     {/if}
 
-    <!-- ═══ 4. NETWORK GROWTH PARTNERS ═══ -->
+    <!-- ═══ 4. NETWORK GROWTH PARTNERS (real members) ═══ -->
     <div class="section-header">
       <span>NETWORK GROWTH PARTNERS</span>
-      <button class="connect-link" onclick={() => dispatch('nav', 'settings')}>CONNECT ➜</button>
+      <button class="connect-link" onclick={() => window.open('https://startempirewire.com/members/', '_blank')}>CONNECT ➜</button>
     </div>
     <div class="partners-row">
       {#each partners as p}
-        <div class="partner-avatar">
-          <div class="pa-circle">{p.avatar}</div>
-        </div>
+        <a class="partner-avatar" href={p.link || '#'} target="_blank" title={p.name}>
+          {#if p.avatar}
+            <img class="pa-img" src={p.avatar} alt={p.name} />
+          {:else}
+            <div class="pa-circle">{p.name?.[0] || '?'}</div>
+          {/if}
+          <span class="pa-name">{p.name?.split(' ')[0] || ''}</span>
+        </a>
       {/each}
-      <div class="partner-avatar">
+      <a class="partner-avatar" href="https://startempirewire.com/register/" target="_blank">
         <div class="pa-circle pa-add">+</div>
-      </div>
+        <span class="pa-name">Join</span>
+      </a>
     </div>
 
     <!-- ═══ 5. STAGE SELECTOR ═══ -->
@@ -304,35 +317,56 @@
       <div class="task-empty">All caught up! 🎉</div>
     {/if}
 
-    <!-- ═══ 7. BUSINESS SET UP TASKS ═══ -->
+    <!-- ═══ 7. BUSINESS SET UP TASKS (grouped by category) ═══ -->
     <div class="section-header"><span>BUSINESS SET UP TASKS</span></div>
-    {#if setupTasks.length > 0}
-      <div class="task-list">
-        {#each setupTasks as task}
-          <div class="task-item">
-            <button class="task-check" onclick={() => task.id && completeTask(task.id)}>
-              <span class="check-box"></span>
+    {#if categories.length > 0}
+      <div class="cat-list">
+        {#each categories as cat}
+          <div class="cat-group">
+            <button class="cat-header" onclick={() => { expandedCat = expandedCat === cat.id ? null : cat.id; }}>
+              <span class="cat-icon">{cat.icon}</span>
+              <span class="cat-label">{cat.label}</span>
+              <div class="cat-right">
+                <span class="cat-progress-text">{cat.completed}/{cat.total}</span>
+                <div class="cat-bar"><div class="cat-fill" style="width:{cat.percent}%"></div></div>
+                <span class="cat-chevron">{expandedCat === cat.id ? '▾' : '▸'}</span>
+              </div>
             </button>
-            <span class="task-title">{task.title || 'Create Mission Statement'}</span>
-            <div class="task-actions">
-              <button class="ta-btn">🔥</button>
-              <button class="ta-btn" onclick={() => { expandedTask = expandedTask === task.id ? null : task.id; }}>⚙️</button>
-              <button class="ta-btn">📋</button>
-            </div>
+            {#if expandedCat === cat.id}
+              <div class="cat-tasks">
+                {#each cat.tasks || [] as task}
+                  <div class="task-item" class:done={task.status === 'completed' || task.status === 'done'}>
+                    <button class="task-check" onclick={() => task.id && completeTask(task.id)}>
+                      <span class="check-box" class:checked={task.status === 'completed' || task.status === 'done'}>
+                        {task.status === 'completed' || task.status === 'done' ? '✓' : ''}
+                      </span>
+                    </button>
+                    <div class="task-body">
+                      <span class="task-title">{task.title}</span>
+                      {#if task.aiSuggestion && expandedTask === task.id}
+                        <div class="task-ai">💡 {task.aiSuggestion}</div>
+                      {/if}
+                    </div>
+                    <div class="task-actions">
+                      <button class="ta-btn" title="Details" onclick={() => { expandedTask = expandedTask === task.id ? null : task.id; }}>
+                        {expandedTask === task.id ? '▾' : '💡'}
+                      </button>
+                      {#if task.status !== 'completed' && task.status !== 'done'}
+                        <button class="ta-btn" title="Skip" onclick={async () => {
+                          await fetch(`${API}/v1/checklist?action=complete&id=${task.id}`, { method: 'POST', headers: headers() });
+                          loadAll();
+                        }}>⏭️</button>
+                      {/if}
+                    </div>
+                  </div>
+                {/each}
+              </div>
+            {/if}
           </div>
-          {#if expandedTask === task.id}
-            <div class="task-detail">
-              <div class="td-row"><span class="td-label">Category:</span> <span>{task.category || 'General'}</span></div>
-              <div class="td-row"><span class="td-label">Stage:</span> <span>{task.stage || stage}</span></div>
-              {#if task.description}
-                <div class="td-desc">{task.description}</div>
-              {/if}
-            </div>
-          {/if}
         {/each}
       </div>
     {:else}
-      <div class="task-empty">All setup tasks complete ✅</div>
+      <div class="task-empty">Loading tasks...</div>
     {/if}
 
     <!-- ═══ 8. WIREBOT SUGGESTIONS ═══ -->
@@ -426,11 +460,14 @@
   .ob-btn { background: #7c7cff20; border: none; color: #7c7cff; font-size: 11px; font-weight: 600; padding: 5px 12px; border-radius: 6px; cursor: pointer; }
   .ob-btn:hover { background: #7c7cff30; }
 
-  /* ─── Partners ─── */
-  .partners-row { display: flex; gap: 10px; overflow-x: auto; padding: 4px 0 12px; scrollbar-width: none; }
+  /* ─── Partners (real BuddyBoss members) ─── */
+  .partners-row { display: flex; gap: 12px; overflow-x: auto; padding: 4px 0 12px; scrollbar-width: none; }
   .partners-row::-webkit-scrollbar { display: none; }
-  .pa-circle { width: 44px; height: 44px; border-radius: 50%; background: #2a2a3a; display: flex; align-items: center; justify-content: center; font-size: 20px; color: #888; }
-  .pa-add { border: 2px dashed #333; background: transparent; color: #555; font-size: 18px; font-weight: 700; }
+  .partner-avatar { display: flex; flex-direction: column; align-items: center; gap: 4px; text-decoration: none; flex-shrink: 0; }
+  .pa-img { width: 44px; height: 44px; border-radius: 50%; object-fit: cover; border: 2px solid #2a2a3a; }
+  .pa-circle { width: 44px; height: 44px; border-radius: 50%; background: #2a2a3a; display: flex; align-items: center; justify-content: center; font-size: 18px; color: #888; font-weight: 700; }
+  .pa-add { border: 2px dashed #333; background: transparent; color: #555; }
+  .pa-name { font-size: 10px; color: #666; max-width: 50px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: center; }
 
   /* ─── Stage Pills ─── */
   .stage-row { display: flex; gap: 8px; margin-bottom: 14px; }
@@ -441,22 +478,32 @@
 
   /* ─── Tasks ─── */
   .task-list { display: flex; flex-direction: column; gap: 2px; margin-bottom: 8px; }
-  .task-item { display: flex; align-items: center; gap: 8px; padding: 8px 4px; border-bottom: 1px solid #1a1a28; }
-  .task-item.done { opacity: 0.5; }
-  .task-check { background: none; border: none; cursor: pointer; padding: 0; }
+  .task-item { display: flex; align-items: flex-start; gap: 8px; padding: 8px 4px; border-bottom: 1px solid #1a1a28; }
+  .task-item.done { opacity: 0.45; }
+  .task-check { background: none; border: none; cursor: pointer; padding: 0; margin-top: 1px; }
   .check-box { width: 20px; height: 20px; border: 2px solid #333; border-radius: 4px; display: flex; align-items: center; justify-content: center; font-size: 12px; color: #7c7cff; transition: all .15s; }
   .check-box.checked { background: #7c7cff20; border-color: #7c7cff; }
-  .task-title { font-size: 13px; color: #c0c0c0; flex: 1; }
-  .task-actions { display: flex; gap: 4px; }
-  .ta-btn { background: none; border: none; font-size: 13px; cursor: pointer; padding: 2px 3px; opacity: 0.5; transition: opacity .15s; }
+  .task-body { flex: 1; min-width: 0; }
+  .task-title { font-size: 13px; color: #c0c0c0; }
+  .task-ai { font-size: 11px; color: #888; margin-top: 4px; line-height: 1.5; padding: 6px 8px; background: #12121a; border-radius: 6px; border-left: 2px solid #7c7cff40; }
+  .task-actions { display: flex; gap: 2px; flex-shrink: 0; }
+  .ta-btn { background: none; border: none; font-size: 12px; cursor: pointer; padding: 2px 3px; opacity: 0.5; transition: opacity .15s; }
   .ta-btn:hover { opacity: 1; }
   .task-empty { padding: 20px; text-align: center; color: #555; font-size: 13px; }
 
-  /* Task Detail (expandable) */
-  .task-detail { padding: 8px 12px 8px 36px; background: #12121a; border-bottom: 1px solid #1a1a28; }
-  .td-row { font-size: 12px; color: #888; margin-bottom: 4px; }
-  .td-label { font-weight: 700; color: #666; }
-  .td-desc { font-size: 12px; color: #777; margin-top: 4px; line-height: 1.5; }
+  /* ─── Category Groups (like 100tasks) ─── */
+  .cat-list { display: flex; flex-direction: column; gap: 4px; margin-bottom: 12px; }
+  .cat-group { background: #16161e; border: 1px solid #1e1e30; border-radius: 10px; overflow: hidden; }
+  .cat-header { display: flex; align-items: center; gap: 8px; width: 100%; padding: 12px; background: none; border: none; color: inherit; cursor: pointer; text-align: left; }
+  .cat-header:hover { background: #1a1a28; }
+  .cat-icon { font-size: 16px; flex-shrink: 0; }
+  .cat-label { font-size: 13px; font-weight: 600; color: #d0d0d8; flex: 1; }
+  .cat-right { display: flex; align-items: center; gap: 8px; }
+  .cat-progress-text { font-size: 11px; color: #666; font-weight: 600; white-space: nowrap; }
+  .cat-bar { width: 40px; height: 4px; background: #1e1e30; border-radius: 2px; overflow: hidden; }
+  .cat-fill { height: 100%; background: #7c7cff; border-radius: 2px; transition: width .4s; }
+  .cat-chevron { font-size: 10px; color: #555; }
+  .cat-tasks { padding: 0 12px 8px; border-top: 1px solid #1a1a28; }
 
   /* ─── Suggestions ─── */
   .suggestions-scroll { display: flex; gap: 10px; overflow-x: auto; padding-bottom: 4px; margin-bottom: 14px; scrollbar-width: none; }

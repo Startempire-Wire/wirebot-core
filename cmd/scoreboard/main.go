@@ -453,6 +453,7 @@ func main() {
 	// Integrations management
 	mux.HandleFunc("/v1/integrations", s.auth(s.handleIntegrations))
 	mux.HandleFunc("/v1/integrations/", s.auth(s.handleIntegrationConfig))
+	mux.HandleFunc("/v1/network/members", s.auth(s.handleNetworkMembers)) // Real members from startempirewire.com
 	mux.HandleFunc("/v1/oauth/config", s.auth(s.handleOAuthConfig))       // GET=status, POST=store credentials
 	mux.HandleFunc("/v1/oauth/setup/github", s.auth(s.handleGitHubSetup)) // Manifest flow: redirect to GitHub
 	mux.HandleFunc("/v1/oauth/setup/github/callback", s.handleGitHubSetupCallback) // GitHub returns here with code
@@ -3103,6 +3104,68 @@ func getOAuthConfig(provider string) *oauthProviderConfig {
 // handleOAuthConfig lets operator store OAuth app credentials (client_id/secret)
 // via the UI instead of env vars. GET returns which providers are configured.
 // POST stores new credentials.
+// handleNetworkMembers fetches real members from startempirewire.com BuddyBoss API
+func (s *Server) handleNetworkMembers(w http.ResponseWriter, r *http.Request) {
+	cors(w)
+
+	limit := r.URL.Query().Get("limit")
+	if limit == "" {
+		limit = "10"
+	}
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	req, _ := http.NewRequest("GET", fmt.Sprintf("https://startempirewire.com/wp-json/buddyboss/v1/members?per_page=%s&orderby=last_activity", limit), nil)
+	resp, err := client.Do(req)
+	if err != nil {
+		json.NewEncoder(w).Encode(map[string]interface{}{"members": []interface{}{}, "error": "network unreachable"})
+		return
+	}
+	defer resp.Body.Close()
+
+	var raw []map[string]interface{}
+	json.NewDecoder(resp.Body).Decode(&raw)
+
+	// Map to clean member objects
+	var members []map[string]interface{}
+	for _, m := range raw {
+		name, _ := m["name"].(string)
+		id := m["id"]
+		// Get avatar
+		avatar := ""
+		if avatarURLs, ok := m["avatar_urls"].(map[string]interface{}); ok {
+			if full, ok := avatarURLs["full"].(string); ok {
+				avatar = full
+			} else if thumb, ok := avatarURLs["thumb"].(string); ok {
+				avatar = thumb
+			}
+		}
+		// Get profile link
+		link, _ := m["link"].(string)
+		// Get last activity
+		lastActive, _ := m["last_activity"].(string)
+		// Get member type / role
+		memberType := ""
+		if types, ok := m["member_types"].([]interface{}); ok && len(types) > 0 {
+			memberType, _ = types[0].(string)
+		}
+
+		members = append(members, map[string]interface{}{
+			"id":          id,
+			"name":        name,
+			"avatar":      avatar,
+			"link":        link,
+			"last_active": lastActive,
+			"member_type": memberType,
+		})
+	}
+
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"members": members,
+		"count":   len(members),
+		"source":  "startempirewire.com",
+	})
+}
+
 func (s *Server) handleOAuthConfig(w http.ResponseWriter, r *http.Request) {
 	cors(w)
 	if r.Method == "OPTIONS" {
@@ -4808,6 +4871,82 @@ func (s *Server) handleChecklist(w http.ResponseWriter, r *http.Request) {
 			"ok":   true,
 			"id":   taskID,
 			"note": "Task marked complete",
+		})
+	case "grouped":
+		// Return tasks grouped by category with per-category progress
+		catMap := map[string]map[string]interface{}{}
+		catOrder := []string{}
+		catLabels := map[string]string{
+			"idea-identity": "Business Identity", "idea-research": "Market Research",
+			"idea-planning": "Business Planning", "idea-finance": "Financial Planning",
+			"idea-legal": "Legal Foundation", "launch-brand": "Brand & Marketing",
+			"launch-digital": "Digital Presence", "launch-ops": "Operations Setup",
+			"launch-product": "Product/Service Ready", "launch-sales": "Sales Pipeline",
+			"growth-scale": "Scaling Operations", "growth-team": "Team Building",
+			"growth-revenue": "Revenue Optimization", "growth-systems": "Systems & Automation",
+			"growth-network": "Network & Partnerships",
+		}
+		catIcons := map[string]string{
+			"idea-identity": "🎯", "idea-research": "🔍", "idea-planning": "📋",
+			"idea-finance": "💰", "idea-legal": "⚖️", "launch-brand": "🎨",
+			"launch-digital": "🌐", "launch-ops": "⚙️", "launch-product": "📦",
+			"launch-sales": "📈", "growth-scale": "🚀", "growth-team": "👥",
+			"growth-revenue": "💎", "growth-systems": "🔧", "growth-network": "🤝",
+		}
+
+		for _, t := range filtered {
+			tm, ok := t.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			cat, _ := tm["category"].(string)
+			if cat == "" {
+				cat = "uncategorized"
+			}
+			if _, exists := catMap[cat]; !exists {
+				catMap[cat] = map[string]interface{}{
+					"id": cat, "label": catLabels[cat], "icon": catIcons[cat],
+					"tasks": []interface{}{}, "total": 0, "completed": 0,
+				}
+				if catMap[cat]["label"] == nil || catMap[cat]["label"] == "" {
+					catMap[cat]["label"] = cat
+				}
+				if catMap[cat]["icon"] == nil || catMap[cat]["icon"] == "" {
+					catMap[cat]["icon"] = "📌"
+				}
+				catOrder = append(catOrder, cat)
+			}
+			entry := catMap[cat]
+			tasks := entry["tasks"].([]interface{})
+			entry["tasks"] = append(tasks, tm)
+			entry["total"] = entry["total"].(int) + 1
+			st, _ := tm["status"].(string)
+			if st == "completed" || st == "done" {
+				entry["completed"] = entry["completed"].(int) + 1
+			}
+		}
+
+		// Build ordered result
+		var groups []interface{}
+		for _, cat := range catOrder {
+			entry := catMap[cat]
+			t := entry["total"].(int)
+			c := entry["completed"].(int)
+			p := 0
+			if t > 0 {
+				p = c * 100 / t
+			}
+			entry["percent"] = p
+			groups = append(groups, entry)
+		}
+
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"categories": groups,
+			"total":      total,
+			"completed":  completed,
+			"percent":    pct,
+			"stage":      currentStage,
+			"next_task":  nextTask,
 		})
 	default: // "list" or empty
 		json.NewEncoder(w).Encode(map[string]interface{}{
