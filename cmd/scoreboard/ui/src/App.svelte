@@ -1153,9 +1153,9 @@ Tracked with Wirebot — your AI business operating partner`;
 
                   {#if provider.auth === 'oauth'}
                     {#await fetch(`${API}/v1/oauth/config`, { headers: authHeaders() }).then(r => r.json()) then oauthCfg}
-                      {#if oauthCfg?.providers?.[provider.id === 'youtube' || provider.id === 'youtube_key' ? 'google' : provider.id]}
+                      {#if oauthCfg?.providers?.[provider.id === 'youtube' || provider.id === 'youtube_key' || provider.id === 'gdrive' ? 'google' : provider.id]}
                         <!-- OAuth configured — real connect button -->
-                        <button class="int-setup-oauth" onclick={() => authRedirect(`/v1/oauth/${provider.id === 'youtube' || provider.id === 'youtube_key' ? 'google' : provider.id}/authorize`)}>
+                        <button class="int-setup-oauth" onclick={() => authRedirect(provider.oauthUrl || `/v1/oauth/${provider.id === 'youtube' || provider.id === 'youtube_key' || provider.id === 'gdrive' ? 'google' : provider.id}/authorize`)}>
                           Connect {provider.name} →
                         </button>
                       {:else}
