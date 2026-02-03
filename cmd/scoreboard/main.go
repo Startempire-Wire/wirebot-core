@@ -452,7 +452,10 @@ func main() {
 	// Integrations management
 	mux.HandleFunc("/v1/integrations", s.auth(s.handleIntegrations))
 	mux.HandleFunc("/v1/integrations/", s.auth(s.handleIntegrationConfig))
-	mux.HandleFunc("/v1/oauth/config", s.auth(s.handleOAuthConfig)) // GET=status, POST=store credentials
+	mux.HandleFunc("/v1/oauth/config", s.auth(s.handleOAuthConfig))       // GET=status, POST=store credentials
+	mux.HandleFunc("/v1/oauth/setup/github", s.auth(s.handleGitHubSetup)) // Manifest flow: redirect to GitHub
+	mux.HandleFunc("/v1/oauth/setup/github/callback", s.handleGitHubSetupCallback) // GitHub returns here with code
+	mux.HandleFunc("/v1/oauth/setup/stripe", s.auth(s.handleStripeSetup)) // Redirect to Stripe Connect setup
 
 	// Webhook receivers (use their own verification, not bearer auth)
 	mux.HandleFunc("/v1/webhooks/github", s.auth(s.handleGitHubWebhook))
@@ -3149,6 +3152,150 @@ func (s *Server) handleOAuthConfig(w http.ResponseWriter, r *http.Request) {
 		"provider": req.Provider,
 		"message":  fmt.Sprintf("%s OAuth configured — users can now click Connect", req.Provider),
 	})
+}
+
+// handleGitHubSetup uses the GitHub App Manifest Flow to create an OAuth app
+// with zero copy-paste. Operator clicks → GitHub creates app → credentials returned.
+func (s *Server) handleGitHubSetup(w http.ResponseWriter, r *http.Request) {
+	callbackURL := oauthCallbackBase + "/v1/oauth/callback"
+	_ = oauthCallbackBase + "/v1/oauth/setup/github/callback" // available for future use
+
+	manifest := map[string]interface{}{
+		"name":               "Wirebot Scoreboard",
+		"url":                oauthCallbackBase,
+		"redirect_url":       callbackURL,
+		"callback_urls":      []string{callbackURL},
+		"setup_url":          oauthCallbackBase,
+		"hook_attributes":    map[string]interface{}{"url": oauthCallbackBase + "/v1/webhooks/github", "active": true},
+		"public":             true,
+		"default_permissions": map[string]string{"contents": "read", "metadata": "read", "pull_requests": "read"},
+		"default_events":     []string{"push", "pull_request", "release"},
+	}
+
+	manifestJSON, _ := json.Marshal(manifest)
+
+	// Generate state for CSRF
+	stateBytes := make([]byte, 16)
+	rand.Read(stateBytes)
+	state := hex.EncodeToString(stateBytes)
+
+	http.SetCookie(w, &http.Cookie{
+		Name: "github_setup_state", Value: state,
+		Path: "/", MaxAge: 600, HttpOnly: true, Secure: true, SameSite: http.SameSiteLaxMode,
+	})
+
+	// Render a form that auto-submits to GitHub
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	fmt.Fprintf(w, `<!DOCTYPE html>
+<html><head><title>Setting up GitHub...</title>
+<style>body{background:#0a0a12;color:#ddd;font-family:system-ui;display:flex;justify-content:center;align-items:center;height:100dvh;margin:0}
+.card{text-align:center;padding:32px}.spinner{width:32px;height:32px;border:3px solid #222;border-top-color:#7c7cff;border-radius:50%%;animation:spin .8s linear infinite;margin:0 auto 16px}
+@keyframes spin{to{transform:rotate(360deg)}}</style></head>
+<body><div class="card"><div class="spinner"></div><h2>Redirecting to GitHub...</h2><p>Creating Wirebot app for your account</p></div>
+<form id="f" method="post" action="https://github.com/settings/apps/new?state=%s">
+<input type="hidden" name="manifest" value='%s' />
+</form>
+<script>document.getElementById('f').submit();</script>
+</body></html>`, state, string(manifestJSON))
+}
+
+// handleGitHubSetupCallback receives the code from GitHub after app creation
+func (s *Server) handleGitHubSetupCallback(w http.ResponseWriter, r *http.Request) {
+	code := r.URL.Query().Get("code")
+	if code == "" {
+		http.Redirect(w, r, "/?oauth=github&oauth_status=fail&error=No+code+from+GitHub", 302)
+		return
+	}
+
+	// Exchange code for app credentials
+	client := &http.Client{Timeout: 15 * time.Second}
+	convURL := fmt.Sprintf("https://api.github.com/app-manifests/%s/conversions", code)
+	req, _ := http.NewRequest("POST", convURL, nil)
+	req.Header.Set("Accept", "application/json")
+	resp, err := client.Do(req)
+	if err != nil {
+		http.Redirect(w, r, "/?oauth=github&oauth_status=fail&error=GitHub+API+error", 302)
+		return
+	}
+	defer resp.Body.Close()
+
+	var appData map[string]interface{}
+	json.NewDecoder(resp.Body).Decode(&appData)
+
+	if appData["client_id"] == nil {
+		errMsg := "Unknown error"
+		if msg, ok := appData["message"].(string); ok {
+			errMsg = msg
+		}
+		http.Redirect(w, r, fmt.Sprintf("/?oauth=github&oauth_status=fail&error=%s", errMsg), 302)
+		return
+	}
+
+	clientID, _ := appData["client_id"].(string)
+	clientSecret, _ := appData["client_secret"].(string)
+	appName, _ := appData["name"].(string)
+
+	// Store credentials
+	oauthGitHubClientID = clientID
+	oauthGitHubClientSecret = clientSecret
+
+	// Persist to env file
+	envPath := os.Getenv("SCOREBOARD_ENV_PATH")
+	if envPath == "" {
+		envPath = "/run/wirebot/scoreboard.env"
+	}
+	envData, _ := os.ReadFile(envPath)
+	envStr := string(envData)
+	lines := strings.Split(envStr, "\n")
+	var newLines []string
+	idSet, secretSet := false, false
+	for _, line := range lines {
+		if strings.HasPrefix(line, "OAUTH_GITHUB_CLIENT_ID=") {
+			newLines = append(newLines, "OAUTH_GITHUB_CLIENT_ID="+clientID)
+			idSet = true
+		} else if strings.HasPrefix(line, "OAUTH_GITHUB_CLIENT_SECRET=") {
+			newLines = append(newLines, fmt.Sprintf(`OAUTH_GITHUB_CLIENT_SECRET="%s"`, clientSecret))
+			secretSet = true
+		} else {
+			newLines = append(newLines, line)
+		}
+	}
+	if !idSet {
+		newLines = append(newLines, "OAUTH_GITHUB_CLIENT_ID="+clientID)
+	}
+	if !secretSet {
+		newLines = append(newLines, fmt.Sprintf(`OAUTH_GITHUB_CLIENT_SECRET="%s"`, clientSecret))
+	}
+	os.WriteFile(envPath, []byte(strings.Join(newLines, "\n")), 0600)
+
+	log.Printf("GitHub App created via manifest: %s (client_id: %s)", appName, clientID)
+	http.Redirect(w, r, "/?oauth=github&oauth_status=ok&message=GitHub+app+created+successfully", 302)
+}
+
+// handleStripeSetup starts Stripe Connect Express onboarding
+// Operator clicks → redirected to Stripe → account connected
+func (s *Server) handleStripeSetup(w http.ResponseWriter, r *http.Request) {
+	// If already configured, just redirect to the OAuth flow
+	if oauthStripeClientID != "" {
+		http.Redirect(w, r, "/v1/oauth/stripe/authorize", 302)
+		return
+	}
+	// For Stripe, we need to check if they have an existing account
+	// Stripe doesn't have a manifest flow, but we can use Stripe Connect
+	// Standard account linking which works like OAuth once the platform is set up
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	fmt.Fprintf(w, `<!DOCTYPE html>
+<html><head><title>Stripe Setup</title>
+<style>body{background:#0a0a12;color:#ddd;font-family:system-ui;display:flex;justify-content:center;align-items:center;height:100dvh;margin:0}
+.card{text-align:center;padding:32px;max-width:400px}h2{margin:0 0 12px}p{color:#888;font-size:14px;line-height:1.6}
+a{color:#7c7cff;text-decoration:none;padding:12px 24px;border:1px solid #7c7cff;border-radius:8px;display:inline-block;margin-top:16px}
+a:hover{background:#7c7cff20}</style></head>
+<body><div class="card">
+<h2>💳 Connect Stripe</h2>
+<p>Stripe requires creating a Connect platform in your dashboard. This takes about 60 seconds.</p>
+<a href="https://dashboard.stripe.com/settings/connect" target="_blank">Open Stripe Settings →</a>
+<p style="font-size:12px;margin-top:24px;color:#555">After enabling Connect, your account's client_id will appear in the Connect settings. Come back here to finish setup.</p>
+</div></body></html>`)
 }
 
 func (s *Server) handleOAuthStart(w http.ResponseWriter, r *http.Request) {
