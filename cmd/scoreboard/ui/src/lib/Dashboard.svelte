@@ -21,6 +21,11 @@
   let { data = null, user = null, token = '', activeBusiness: parentBiz = '', pairingComplete = false, onOpenPairing = null, onNav = null } = $props();
   let localBiz = $state(parentBiz || '');  // local business filter state
 
+  // Keep local business selector in sync with parent (prevents stale UI if parentBiz changes externally)
+  $effect(() => {
+    if ((parentBiz || '') !== localBiz) localBiz = parentBiz || '';
+  });
+
   // Business = legal entity, Product = offering within a business
   // Startempire Wire (LLC) is the business. Network + Wirebot are products.
   const ENTITIES = [
@@ -28,7 +33,7 @@
     { id: 'SEW', label: 'SEW', fullName: 'Startempire Wire', icon: '🚀', type: 'business', legal: 'LLC',
       products: [
         { id: 'SEWN', label: 'SEWN', fullName: 'Startempire Wire Network', icon: '🕸', type: 'product' },
-        { id: 'WB', label: 'WB', fullName: 'Wirebot', icon: '🤖', type: 'product' },
+        { id: 'WIR', label: 'WB', fullName: 'Wirebot', icon: '🤖', type: 'product' },
       ]},
     { id: 'PVD', label: 'PVD', fullName: 'Philoveracity Design', icon: '📘', type: 'business', legal: 'Sole Prop', products: [] },
   ];

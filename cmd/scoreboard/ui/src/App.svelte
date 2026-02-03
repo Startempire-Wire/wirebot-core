@@ -1,5 +1,5 @@
 <script>
-  import { onMount } from 'svelte';
+  import { onMount, tick } from 'svelte';
   import Dashboard from './lib/Dashboard.svelte';
   import Score from './lib/Score.svelte';
   import Feed from './lib/Feed.svelte';
@@ -22,14 +22,6 @@
   let error = $state(null);
   let lastUpdate = $state('');
 
-  // ── Multi-Business Context ──
-  const BUSINESSES = [
-    { id: '', label: 'All Businesses', icon: '🌐', color: '#7c7cff' },
-    { id: 'SEW', label: 'Startempire Wire', icon: '🚀', color: '#ffaa00' },
-    { id: 'WB', label: 'Wirebot', icon: '🤖', color: '#7c7cff' },
-    { id: 'PVD', label: 'Philoveracity Design', icon: '📘', color: '#2ecc71' },
-    { id: 'SEW', label: 'SEW Network', icon: '🕸', color: '#ff7c7c' },
-  ];
   let activeBusiness = $state(''); // '' = all businesses
   let showFab = $state(false); // kept for backward compat with Dashboard dispatch
   let showHints = $state(false);
@@ -154,6 +146,25 @@ Tracked with Wirebot — your AI business operating partner`;
   let connectExtra = $state(''); // channel_id, feed URL, etc.
   let connectStatus = $state(null); // null | 'saving' | 'ok' | 'fail'
   let connectMsg = $state('');
+  let setupCardEl = $state(null);
+
+  function openConnect(providerId) {
+    showConnectForm = providerId;
+    connectCred = '';
+    connectExtra = '';
+    connectBusiness = activeBusiness || '';
+  }
+
+  function oauthProviderKey(providerId) {
+    return (providerId === 'youtube' || providerId === 'youtube_key' || providerId === 'gdrive') ? 'google' : providerId;
+  }
+
+  $effect(() => {
+    if (!showConnectForm) return;
+    tick().then(() => {
+      setupCardEl?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
+  });
 
   // Integration registry — extensible catalog of connectable services
   // Every service connects from the UI. No server-side auto-magic.
@@ -1065,7 +1076,6 @@ Tracked with Wirebot — your AI business operating partner`;
           <!-- ── Connected Accounts ── -->
           <div class="s-group">
             <label>Connected Accounts</label>
-            <div style="font-size:10px;color:#666;margin:4px 0;">DEBUG: {integrations.length} integrations, {Object.keys(groupedIntegrations).length} groups</div>
 
             {#if connectStatus}
               <div class="token-status" class:ok={connectStatus === 'ok'} class:fail={connectStatus === 'fail'} class:saving={connectStatus === 'saving'}>
@@ -1083,7 +1093,7 @@ Tracked with Wirebot — your AI business operating partner`;
                       <span class="int-group-icon">{prov.icon}</span>
                       <span class="int-group-name">{prov.name}</span>
                       <span class="int-group-count">{accounts.length}</span>
-                      <button class="int-group-add" onclick={(e) => { e.preventDefault(); e.stopPropagation(); showConnectForm = providerKey; }} title="Add another">+</button>
+                      <button class="int-group-add" onclick={(e) => { e.preventDefault(); e.stopPropagation(); openConnect(providerKey); }} title="Add another">+</button>
                     </summary>
                     <div class="int-group-children">
                       {#each accounts as acct}
@@ -1132,7 +1142,7 @@ Tracked with Wirebot — your AI business operating partner`;
               <div class="int-rec-header">Recommended</div>
               <div class="int-rec-grid">
                 {#each PROVIDERS.filter(p => !p.comingSoon && !getConnectedProviders(p.id).length).slice(0, 4) as provider}
-                  <button class="int-rec-card" onclick={() => { showConnectForm = provider.id; connectCred = ''; connectExtra = ''; }}>
+                  <button class="int-rec-card" onclick={() => openConnect(provider.id)}>
                     <span class="int-rec-icon">{provider.icon}</span>
                     <span class="int-rec-name">{provider.name}</span>
                   </button>
@@ -1144,7 +1154,7 @@ Tracked with Wirebot — your AI business operating partner`;
             {#if showConnectForm}
               {@const provider = PROVIDERS.find(p => p.id === showConnectForm)}
               {#if provider}
-                <div class="int-setup-card">
+                <div class="int-setup-card" bind:this={setupCardEl}>
                   <div class="int-setup-header">
                     <span>{provider.icon} Connect {provider.name}</span>
                     <button class="int-setup-close" onclick={() => { showConnectForm = null; connectCred = ''; connectExtra = ''; }}>✕</button>
@@ -1153,9 +1163,9 @@ Tracked with Wirebot — your AI business operating partner`;
 
                   {#if provider.auth === 'oauth'}
                     {#await fetch(`${API}/v1/oauth/config`, { headers: authHeaders() }).then(r => r.json()) then oauthCfg}
-                      {#if oauthCfg?.providers?.[provider.id === 'youtube' || provider.id === 'youtube_key' || provider.id === 'gdrive' ? 'google' : provider.id]}
+                      {#if oauthCfg?.providers?.[oauthProviderKey(provider.id)]}
                         <!-- OAuth configured — real connect button -->
-                        <button class="int-setup-oauth" onclick={() => authRedirect(provider.oauthUrl || `/v1/oauth/${provider.id === 'youtube' || provider.id === 'youtube_key' || provider.id === 'gdrive' ? 'google' : provider.id}/authorize`)}>
+                        <button class="int-setup-oauth" onclick={() => provider.oauthUrl ? startOAuth(provider) : authRedirect(`/v1/oauth/${oauthProviderKey(provider.id)}/authorize`)}>
                           Connect {provider.name} →
                         </button>
                       {:else}
@@ -1268,7 +1278,7 @@ Tracked with Wirebot — your AI business operating partner`;
                     {@const accounts = getConnectedProviders(provider.id)}
                     {@const hasAccounts = accounts.length > 0}
                     <button class="int-browse-item" class:int-connected={hasAccounts} class:int-coming={provider.comingSoon}
-                      onclick={() => { if (!provider.comingSoon) { showConnectForm = provider.id; connectCred = ''; connectExtra = ''; } }}>
+                      onclick={() => { if (!provider.comingSoon) { openConnect(provider.id); const el = document.getElementById('int-all'); if (el) el.style.display = 'none'; } }}>
                       <span class="int-icon">{provider.icon}</span>
                       <span class="int-browse-name">{provider.name}</span>
                       {#if hasAccounts}
