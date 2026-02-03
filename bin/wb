@@ -1,0 +1,1284 @@
+#!/usr/bin/env bash
+# wb — Wirebot CLI
+# Sovereign AI operating partner for solopreneurs ⚡
+#
+# Shortcut interface to the Wirebot tool suite running on the OpenClaw gateway.
+# All commands hit the gateway HTTP API at 127.0.0.1:18789.
+
+set -euo pipefail
+
+TOKEN="65b918ba-baf5-4996-8b53-6fb0f662a0c3"
+GW="http://127.0.0.1:18789"
+SYNCD="http://127.0.0.1:8201"
+
+# ── Helpers ──────────────────────────────────────────────────────────────
+
+MEMORY_LOG="/home/wirebot/clawd/memory/cli.jsonl"
+PAIRING_FILE="/home/wirebot/clawd/pairing.json"
+
+# ── Pairing State ────────────────────────────────────────────────────────
+
+# Check pairing and emit nudge if incomplete
+# Returns: 0 if paired, 1 if not paired
+check_pairing() {
+  local cmd="${1:-}"
+  if [ ! -f "$PAIRING_FILE" ]; then
+    emit_pairing_nudge "$cmd" "no file"
+    return 1
+  fi
+
+  local paired score phase remaining dismissed_until
+  paired=$(python3 -c "import json; print(json.load(open('$PAIRING_FILE')).get('paired', False))" 2>/dev/null)
+  
+  if [ "$paired" = "True" ]; then
+    return 0
+  fi
+
+  # Check if nudge was dismissed for this session
+  dismissed_until=$(python3 -c "import json; print(json.load(open('$PAIRING_FILE')).get('nudge_dismissed_until') or '')" 2>/dev/null)
+  if [ -n "$dismissed_until" ]; then
+    local now_epoch dismissed_epoch
+    now_epoch=$(date +%s)
+    dismissed_epoch=$(date -d "$dismissed_until" +%s 2>/dev/null || echo 0)
+    if [ "$now_epoch" -lt "$dismissed_epoch" ]; then
+      return 1  # Dismissed, don't nudge but still unpaired
+    fi
+  fi
+
+  score=$(python3 -c "import json; print(json.load(open('$PAIRING_FILE')).get('score', 0))" 2>/dev/null)
+  phase=$(python3 -c "import json; print(json.load(open('$PAIRING_FILE')).get('phase', 0))" 2>/dev/null)
+  remaining=$(python3 -c "import json; print(len(json.load(open('$PAIRING_FILE')).get('questions_remaining', [])))" 2>/dev/null)
+
+  emit_pairing_nudge "$cmd" "$score" "$phase" "$remaining"
+  return 1
+}
+
+emit_pairing_nudge() {
+  local cmd="$1" score="${2:-0}" phase="${3:-0}" remaining="${4:-22}"
+  
+  echo ""
+  echo "⚠️  PAIRING INCOMPLETE (score: ${score}% — ${remaining} questions remaining)"
+  
+  # Contextual hint based on command
+  case "$cmd" in
+    status|next|daily)
+      echo "   I'm working with limited context. My recommendations will be"
+      echo "   much sharper once I know your business."
+      ;;
+    recall|remember|state)
+      echo "   Memory is shallow without pairing. I'll remember more"
+      echo "   about you and your business after we pair."
+      ;;
+    complete|skip|add)
+      echo "   The checklist is generic right now. Pairing lets me"
+      echo "   calibrate it to YOUR business."
+      ;;
+    *)
+      echo "   I can help more when I know your story."
+      ;;
+  esac
+  
+  echo ""
+  echo "   → Run: wb pair        (start pairing conversation)"
+  echo "   → Run: wb pair skip   (dismiss for this session)"
+}
+
+# Log every CLI interaction to memory (append-only JSONL)
+# Also async-store significant actions to Mem0 for cross-surface recall
+log_interaction() {
+  local cmd="$1" detail="${2:-}" result="${3:-}"
+  local ts
+  ts=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+
+  # Always append to local JSONL log (instant, no network)
+  mkdir -p "$(dirname "$MEMORY_LOG")"
+  python3 -c "
+import json, sys
+entry = {'ts': sys.argv[1], 'cmd': sys.argv[2], 'detail': sys.argv[3], 'result': sys.argv[4][:500]}
+print(json.dumps(entry))
+" "$ts" "$cmd" "$detail" "$result" >> "$MEMORY_LOG" 2>/dev/null || true
+
+  # For significant actions (complete, skip, add, remember, stage change),
+  # also store to Mem0 async so it's available across all surfaces
+  case "$cmd" in
+    complete|skip|add|remember|stage)
+      (curl -sS -X POST http://127.0.0.1:8200/v1/store \
+        -H "Content-Type: application/json" \
+        -d "$(python3 -c "
+import json, sys
+text = f'CLI [{sys.argv[1]}] {sys.argv[2]}: {sys.argv[3]}'
+print(json.dumps({'text': text, 'namespace': 'wirebot_verious', 'category': 'cli_action'}))
+" "$ts" "$cmd" "$detail")" > /dev/null 2>&1 &)
+      ;;
+  esac
+}
+
+invoke() {
+  local tool="$1" args="$2"
+  local output
+  output=$(curl -sS "$GW/tools/invoke" \
+    -H "Content-Type: application/json" \
+    -H "Authorization: Bearer $TOKEN" \
+    -d "{\"tool\": \"$tool\", \"args\": $args}" 2>&1)
+
+  # Parse and display
+  echo "$output" | python3 -c "
+import json, sys
+try:
+    r = json.load(sys.stdin)
+    if r.get('ok'):
+        for c in r.get('result',{}).get('content',[]):
+            print(c.get('text',''))
+    else:
+        print('Error:', r.get('error',{}).get('message','unknown'))
+except Exception as e:
+    print(f'Parse error: {e}')
+    print(sys.stdin.read())
+"
+
+  # Return raw output for memory logging
+  echo "$output"
+}
+
+# Wrapper: invoke + log
+invoke_and_log() {
+  local cmd="$1" detail="$2" tool="$3" args="$4"
+  local raw_output display_output
+
+  raw_output=$(curl -sS "$GW/tools/invoke" \
+    -H "Content-Type: application/json" \
+    -H "Authorization: Bearer $TOKEN" \
+    -d "{\"tool\": \"$tool\", \"args\": $args}" 2>&1)
+
+  # Display
+  display_output=$(echo "$raw_output" | python3 -c "
+import json, sys
+try:
+    r = json.load(sys.stdin)
+    if r.get('ok'):
+        lines = []
+        for c in r.get('result',{}).get('content',[]):
+            lines.append(c.get('text',''))
+        print('\n'.join(lines))
+    else:
+        print('Error:', r.get('error',{}).get('message','unknown'))
+except Exception as e:
+    print(f'Parse error: {e}')
+" 2>&1)
+
+  echo "$display_output"
+
+  # Log
+  log_interaction "$cmd" "$detail" "$display_output"
+}
+
+json_escape() {
+  echo "$*" | python3 -c "import json,sys; print(json.dumps(sys.stdin.read().strip()))"
+}
+
+# ── Commands ─────────────────────────────────────────────────────────────
+
+case "${1:-help}" in
+
+  # ── Pairing ──────────────────────────────────────────────────────────
+
+  pair)
+    case "${2:-}" in
+      status)
+        if [ ! -f "$PAIRING_FILE" ]; then
+          echo "⚠️  No pairing file found. Run: wb pair"
+          exit 1
+        fi
+        python3 -c "
+import json
+with open('$PAIRING_FILE') as f:
+    p = json.load(f)
+score = p.get('score', 0)
+paired = p.get('paired', False)
+answered = len(p.get('questions_answered', []))
+remaining = len(p.get('questions_remaining', []))
+total = answered + remaining
+accounts = len(p.get('connected_accounts', []))
+inferences = p.get('inference_count', 0)
+
+if paired:
+    level = 'Bonded' if score >= 81 else 'Trusted' if score >= 61 else 'Partner' if score >= 31 else 'Acquaintance'
+    print(f'⚡ PAIRED — Score: {score}% ({level})')
+else:
+    phase = p.get('phase', 0)
+    phase_names = {0: 'Not started', 1: 'Identity', 2: 'Business', 3: 'Personality', 4: 'Locking'}
+    print(f'⚠️  UNPAIRED — Score: {score}% (Phase {phase}: {phase_names.get(phase, \"?\")})')
+
+print(f'   Questions: {answered}/{total} answered')
+if remaining > 0:
+    print(f'   Remaining: {remaining} questions')
+print(f'   Connected accounts: {accounts}')
+print(f'   Inferences made: {inferences}')
+print()
+print('Score breakdown:')
+print(f'   Identity (Q1-10):    {\"✓\" if p.get(\"phase1_complete\") else \"○\"} {min(answered, 10)}/10')
+print(f'   Business (Q11-18):   {\"✓\" if p.get(\"phase2_complete\") else \"○\"} {max(0, min(answered - 10, 8))}/8')
+print(f'   Personality (Q19-22):{\"✓\" if p.get(\"phase3_complete\") else \"○\"} {max(0, min(answered - 18, 4))}/4')
+print(f'   Accounts:            {accounts} connected')
+print(f'   Depth:               {inferences} inferences')
+"
+        ;;
+      skip)
+        # Dismiss nudge for 4 hours
+        dismiss_until=$(date -u -d "+4 hours" +%Y-%m-%dT%H:%M:%SZ)
+        python3 -c "
+import json
+with open('$PAIRING_FILE', 'r') as f:
+    p = json.load(f)
+p['nudge_dismissed_until'] = '$dismiss_until'
+with open('$PAIRING_FILE', 'w') as f:
+    json.dump(p, f, indent=2)
+print('Pairing nudge dismissed for 4 hours.')
+print('I\\'ll ask again later — or run: wb pair    when you\\'re ready.')
+"
+        ;;
+      reset)
+        echo "⚠️  This will erase ALL personalization and return to unpaired state."
+        echo "   Type 'CONFIRM RESET' to proceed:"
+        read -r confirm
+        if [ "$confirm" = "CONFIRM RESET" ]; then
+          python3 -c "
+import json, time
+p = {
+    'paired': False, 'score': 0, 'phase': 0,
+    'phase1_complete': False, 'phase2_complete': False,
+    'phase3_complete': False, 'phase4_complete': False,
+    'questions_answered': [],
+    'questions_remaining': ['Q1','Q2','Q3','Q4','Q5','Q6','Q7','Q8','Q9','Q10','Q11','Q12','Q13','Q14','Q15','Q16','Q17','Q18','Q19','Q20','Q21','Q22'],
+    'connected_accounts': [], 'inference_count': 0,
+    'last_nudge': None, 'nudge_dismissed_until': None,
+    'created_at': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
+    'updated_at': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
+}
+with open('$PAIRING_FILE', 'w') as f:
+    json.dump(p, f, indent=2)
+print('⚡ Pairing reset. All personalization cleared.')
+print('   Run: wb pair    to start fresh.')
+"
+        else
+          echo "Reset cancelled."
+        fi
+        ;;
+      "")
+        echo "⚡ Wirebot Pairing"
+        echo ""
+        echo "Pairing is a conversation — not a form. I'll ask questions"
+        echo "to understand who you are, what you're building, and how"
+        echo "I can best help you."
+        echo ""
+        echo "This works best through the chat interface (dashboard or API)."
+        echo "For CLI, use the gateway directly:"
+        echo ""
+        echo '  curl -sS http://127.0.0.1:18789/v1/chat/completions \'
+        echo '    -H "Content-Type: application/json" \'
+        echo "    -H \"Authorization: Bearer $TOKEN\" \\"
+        echo '    -d '"'"'{"messages":[{"role":"user","content":"Let'\''s start pairing"}]}'"'"
+        echo ""
+        echo "Or check status:  wb pair status"
+        echo "Dismiss nudge:    wb pair skip"
+        echo "Reset pairing:    wb pair reset"
+        ;;
+      *)
+        echo "Usage: wb pair [status|skip|reset]"
+        ;;
+    esac
+    ;;
+
+  # ── Profile (v2 Pairing Engine) ─────────────────────────────────────
+
+  profile)
+    case "${2:-}" in
+      ""|effective)
+        curl -sS "http://127.0.0.1:8100/v1/pairing/profile/effective" \
+          -H "Authorization: Bearer $TOKEN" 2>/dev/null | python3 -c "
+import json, sys
+e = json.load(sys.stdin)
+print('🧬 FOUNDER PROFILE')
+print()
+score = e.get('pairing_score', 0)
+level = e.get('level', 'Initializing')
+acc = e.get('accuracy', 0) * 100
+print(f'  Score: {score}/100 ({level})  Accuracy: {acc:.0f}%')
+print()
+labels = {'action_style':'⚡ Action Style','disc':'💬 Communication','energy':'🔋 Energy Topology','risk':'🎲 Risk Disposition','cognitive':'🧠 Cognitive Style'}
+for key, label in labels.items():
+    dims = e.get(key, {})
+    if dims:
+        vals = ' '.join(f'{k}={v:.1f}' for k,v in sorted(dims.items(), key=lambda x:-x[1]))
+        print(f'  {label}: {vals}')
+    else:
+        print(f'  {label}: (not assessed)')
+# Complement
+comp = e.get('complement', {})
+items = sorted([(k,v) for k,v in comp.items() if isinstance(v,float) and v > 0], key=lambda x:-x[1])[:3]
+if items:
+    print()
+    print('  🤖 Wirebot Focus:')
+    for k,v in items:
+        print(f'    {k.replace(\"_\",\" \").title()}: {v*100:.0f}%')
+# Calibration
+cal = e.get('calibration', {})
+comm = cal.get('communication', {})
+if comm:
+    print()
+    lead = comm.get('lead_with', '?')
+    tone = 'casual' if comm.get('tone_formality',0.5) < 0.3 else 'formal' if comm.get('tone_formality',0.5) > 0.7 else 'balanced'
+    print(f'  🎛️ Calibration: lead={lead} tone={tone}')
+" 2>/dev/null
+        ;;
+      accuracy)
+        curl -sS "http://127.0.0.1:8100/v1/pairing/accuracy" \
+          -H "Authorization: Bearer $TOKEN" 2>/dev/null | python3 -c "
+import json, sys
+d = json.load(sys.stdin)
+print('📈 ACCURACY')
+print(f'  Current: {d[\"overall_accuracy\"]*100:.1f}%')
+print(f'  Days active: {d.get(\"days_active\",0):.0f}')
+print()
+print('  Trajectory:')
+for k, v in d.get('trajectory', {}).items():
+    mark = ' ←' if k == 'current' else ''
+    print(f'    {k:8s} {v*100:.0f}%{mark}')
+print()
+imps = d.get('improvements', [])
+if imps:
+    print('  🚀 Boost accuracy:')
+    for i in imps:
+        print(f'    {i[\"action\"]} ({i[\"boost\"]})')
+" 2>/dev/null
+        ;;
+      drift)
+        curl -sS "http://127.0.0.1:8100/v1/pairing/drift" \
+          -H "Authorization: Bearer $TOKEN" 2>/dev/null | python3 -c "
+import json, sys
+d = json.load(sys.stdin)
+print('📊 DRIFT READINGS')
+for name, dims in d.get('drift_readings', {}).items():
+    if dims:
+        print(f'  {name}:')
+        for dim, info in dims.items():
+            sev = info.get('severity','normal')
+            icon = '🟢' if sev == 'normal' else '🟡' if sev == 'mild' else '🔴'
+            print(f'    {icon} {dim}: drift={info.get(\"drift\",0):.2f} α={info.get(\"alpha\",0):.2f}')
+windows = d.get('context_windows', {})
+if windows:
+    print()
+    print('  Active Context Windows:')
+    for w, info in windows.items():
+        print(f'    🎯 {w}: activation={info.get(\"activation\",0):.2f}')
+" 2>/dev/null
+        ;;
+      complement)
+        curl -sS "http://127.0.0.1:8100/v1/pairing/complement" \
+          -H "Authorization: Bearer $TOKEN" 2>/dev/null | python3 -c "
+import json, sys
+d = json.load(sys.stdin)
+print('🤖 COMPLEMENT VECTOR')
+print('  Where Wirebot focuses to fill your gaps:')
+print()
+for item in sorted(d.get('sorted',[]), key=lambda x:-x.get('allocation',0)):
+    a = item.get('allocation',0)
+    if a > 0:
+        bar = '█' * int(a * 30)
+        print(f'  {item[\"name\"]:14s} {bar} {a*100:.0f}%')
+" 2>/dev/null
+        ;;
+      evidence)
+        limit="${3:-20}"
+        curl -sS "http://127.0.0.1:8100/v1/pairing/evidence?limit=$limit" \
+          -H "Authorization: Bearer $TOKEN" 2>/dev/null | python3 -c "
+import json, sys
+d = json.load(sys.stdin)
+print(f'📊 EVIDENCE LOG ({d[\"total\"]} total)')
+for ev in d.get('evidence', []):
+    ts = ev.get('timestamp','')[:19]
+    sig = ev.get('signal_type','?')
+    icon = {'message':'💬','event':'📦','assessment':'📝','approval':'✅','document':'📄','account':'🔗'}.get(sig,'🔹')
+    print(f'  {icon} {ts} [{sig}] {ev.get(\"summary\",\"\")}')
+" 2>/dev/null
+        ;;
+      formulas)
+        curl -sS "http://127.0.0.1:8100/v1/pairing/formulas" \
+          -H "Authorization: Bearer $TOKEN" 2>/dev/null | python3 -m json.tool 2>/dev/null
+        ;;
+      insights)
+        curl -sS "http://127.0.0.1:8100/v1/pairing/insights" \
+          -H "Authorization: Bearer $TOKEN" 2>/dev/null | python3 -c "
+import json, sys
+d = json.load(sys.stdin)
+print('🔍 INSIGHTS')
+gaps = d.get('self_perception_gaps', {})
+if gaps:
+    print('  Self-Perception Gaps:')
+    for dim, info in gaps.items():
+        delta = info.get('delta', 0)
+        interp = info.get('interpretation', '')
+        icon = '🟢' if abs(delta) < 1 else '🟡' if abs(delta) < 2 else '🔴'
+        print(f'    {icon} {dim}: δ={delta:+.1f} ({interp})')
+contexts = d.get('active_contexts', [])
+if contexts:
+    print()
+    print('  Active Contexts:')
+    for ctx in contexts:
+        print(f'    🎯 {ctx[\"window\"]}: {ctx.get(\"description\",\"\")}')
+summary = d.get('chat_summary', '')
+if summary:
+    print()
+    print(f'  Chat Context Summary:')
+    for line in summary.split('\\n'):
+        print(f'    {line}')
+" 2>/dev/null
+        ;;
+      reset)
+        read -p "Reset entire profile? Type RESET_PROFILE to confirm: " confirm
+        if [ "$confirm" = "RESET_PROFILE" ]; then
+          curl -sS -X DELETE "http://127.0.0.1:8100/v1/pairing/reset" \
+            -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+            -d '{"confirm":"RESET_PROFILE"}' 2>/dev/null | python3 -m json.tool
+        else
+          echo "Aborted."
+        fi
+        ;;
+      *)
+        echo "Usage: wb profile [effective|accuracy|drift|complement|evidence|formulas|insights|reset]"
+        ;;
+    esac
+    ;;
+
+  # ── Multi-Business ──────────────────────────────────────────────────
+
+  overview)
+    invoke_and_log "overview" "operator overview" wirebot_checklist '{"action":"overview"}'
+    check_pairing "status" || true
+    ;;
+
+  businesses|biz)
+    invoke_and_log "businesses" "list businesses" wirebot_checklist '{"action":"businesses"}'
+    ;;
+
+  focus)
+    [ -z "${2:-}" ] && echo "Usage: wb focus <business-name>" && exit 1
+    # Track context switch in scoreboard
+    (curl -sS "http://127.0.0.1:8100/v1/events" \
+      -H "Content-Type: application/json" \
+      -H "Authorization: Bearer $TOKEN" \
+      -d "{\"event_type\":\"CONTEXT_SWITCH\",\"lane\":\"systems\",\"source\":\"wb-focus\",\"artifact_title\":\"Focus switched to: $2\",\"confidence\":1.0}" \
+      > /dev/null 2>&1 &)
+    name=$(json_escape "$2")
+    invoke_and_log "focus" "focus:$2" wirebot_checklist "{\"action\":\"focus\",\"businessName\":$name}"
+    ;;
+
+  add-business)
+    shift
+    [ -z "${1:-}" ] && echo "Usage: wb add-business <name> [--stage idea|launch|growth] [--priority primary|secondary|supporting] [--domain example.com]" && exit 1
+    name=$(json_escape "$1"); shift
+    stage=""; priority=""; domain=""
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        --stage) stage="$2"; shift 2 ;;
+        --priority) priority="$2"; shift 2 ;;
+        --domain) domain="$2"; shift 2 ;;
+        *) shift ;;
+      esac
+    done
+    args="{\"action\":\"add-business\",\"businessName\":$name"
+    [ -n "$stage" ] && args="$args,\"stage\":\"$stage\""
+    [ -n "$priority" ] && args="$args,\"businessPriority\":\"$priority\""
+    [ -n "$domain" ] && args="$args,\"domain\":\"$domain\""
+    args="$args}"
+    invoke_and_log "add-business" "$name" wirebot_checklist "$args"
+    # Auto-push INFRASTRUCTURE_ACTIVATED event to scoreboard
+    (curl -sS "http://127.0.0.1:8100/v1/events" \
+      -H "Content-Type: application/json" \
+      -H "Authorization: Bearer $TOKEN" \
+      -d "{\"event_type\":\"INFRASTRUCTURE_ACTIVATED\",\"lane\":\"systems\",\"source\":\"wb-add-business\",\"artifact_title\":\"Business registered: $name\",\"confidence\":0.90}" \
+      > /dev/null 2>&1 &)
+    ;;
+
+  # ── Checklist ────────────────────────────────────────────────────────
+
+  status)
+    invoke_and_log "status" "checklist status" wirebot_checklist '{"action":"status"}'
+    check_pairing "status" || true
+    ;;
+
+  next)
+    invoke_and_log "next" "next task" wirebot_checklist '{"action":"next"}'
+    check_pairing "next" || true
+    ;;
+
+  daily)
+    invoke_and_log "daily" "daily standup" wirebot_checklist '{"action":"daily"}'
+    check_pairing "daily" || true
+    ;;
+
+  complete)
+    [ -z "${2:-}" ] && echo "Usage: wb complete <task-id>" && exit 1
+    invoke_and_log "complete" "task:$2" wirebot_checklist "{\"action\":\"complete\",\"taskId\":\"$2\"}"
+    # Auto-push TASK_COMPLETED event to scoreboard
+    (curl -sS "http://127.0.0.1:8100/v1/events" \
+      -H "Content-Type: application/json" \
+      -H "Authorization: Bearer $TOKEN" \
+      -d "{\"event_type\":\"TASK_COMPLETED\",\"lane\":\"shipping\",\"source\":\"wb-complete\",\"artifact_title\":\"Task $2 completed\",\"confidence\":0.85}" \
+      > /dev/null 2>&1 &)
+    ;;
+
+  skip)
+    [ -z "${2:-}" ] && echo "Usage: wb skip <task-id>" && exit 1
+    invoke_and_log "skip" "task:$2" wirebot_checklist "{\"action\":\"skip\",\"taskId\":\"$2\"}"
+    ;;
+
+  add)
+    shift
+    [ -z "${1:-}" ] && echo "Usage: wb add <title> [--stage idea|launch|growth] [--category <cat>] [--priority critical|high|medium|low]" && exit 1
+    title="$1"; shift
+    stage=""; priority=""; category=""
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        --stage) stage="$2"; shift 2 ;;
+        --priority) priority="$2"; shift 2 ;;
+        --category) category="$2"; shift 2 ;;
+        *) shift ;;
+      esac
+    done
+    args="{\"action\":\"add\",\"title\":\"$title\""
+    [ -n "$stage" ] && args="$args,\"stage\":\"$stage\""
+    [ -n "$priority" ] && args="$args,\"priority\":\"$priority\""
+    [ -n "$category" ] && args="$args,\"category\":\"$category\""
+    args="$args}"
+    invoke_and_log "add" "$title" wirebot_checklist "$args"
+    ;;
+
+  list)
+    stage="${2:-}"
+    if [ -n "$stage" ]; then
+      invoke_and_log "list" "stage:$stage" wirebot_checklist "{\"action\":\"list\",\"stage\":\"$stage\"}"
+    else
+      invoke_and_log "list" "all" wirebot_checklist '{"action":"list"}'
+    fi
+    ;;
+
+  detail)
+    [ -z "${2:-}" ] && echo "Usage: wb detail <task-id>" && exit 1
+    invoke_and_log "detail" "task:$2" wirebot_checklist "{\"action\":\"detail\",\"taskId\":\"$2\"}"
+    ;;
+
+  stage)
+    [ -z "${2:-}" ] && echo "Usage: wb stage <idea|launch|growth>" && exit 1
+    invoke_and_log "stage" "$2" wirebot_checklist "{\"action\":\"set-stage\",\"stage\":\"$2\"}"
+    ;;
+
+  # ── Memory ───────────────────────────────────────────────────────────
+
+  recall|search)
+    shift
+    [ -z "${1:-}" ] && echo "Usage: wb recall <query>" && exit 1
+    query=$(json_escape "$*")
+    invoke_and_log "recall" "$*" wirebot_recall "{\"query\":$query}"
+    check_pairing "recall" || true
+    ;;
+
+  remember)
+    shift
+    [ -z "${1:-}" ] && echo "Usage: wb remember <fact>" && exit 1
+    fact=$(json_escape "$*")
+    invoke_and_log "remember" "$*" wirebot_remember "{\"fact\":$fact}"
+    ;;
+
+  state)
+    block="${2:-}"
+    if [ -n "$block" ]; then
+      invoke_and_log "state" "block:$block" wirebot_business_state "{\"action\":\"read\",\"block\":\"$block\"}"
+    else
+      invoke_and_log "state" "all" wirebot_business_state '{"action":"read"}'
+    fi
+    ;;
+
+  # ── System ───────────────────────────────────────────────────────────
+
+  health)
+    echo "── Gateway ──"
+    gw_health=$(curl -sS --max-time 3 "$GW/__openclaw__/health" 2>/dev/null) && \
+      echo "  Status: running (port 18789)" || echo "  Status: DOWN"
+    echo ""
+    echo "── Memory Sync Daemon ──"
+    curl -sS --max-time 3 "$SYNCD/health" 2>/dev/null | python3 -c "
+import json, sys
+d = json.load(sys.stdin)
+print(f\"  Status:       {d.get('status','?')}\")
+print(f\"  Cache facts:  {d.get('cache_facts',0)}\")
+print(f\"  Cache blocks: {d.get('cache_blocks',0)}\")
+print(f\"  Total syncs:  {d.get('syncs_total',0)}\")
+print(f\"  Uptime:       {d.get('uptime','?')}\")
+" 2>/dev/null || echo "  Status: DOWN"
+    echo ""
+    echo "── Mem0 ──"
+    curl -sS --max-time 3 "http://127.0.0.1:8200/health" 2>/dev/null | python3 -c "
+import json, sys
+d = json.load(sys.stdin)
+print(f\"  Status:   running (port 8200)\")
+print(f\"  Memories: {d.get('memories','?')}\")
+print(f\"  Embedder: {d.get('embedder','?')}\")
+" 2>/dev/null || echo "  Status: DOWN"
+    echo ""
+    echo "── Letta ──"
+    LETTA_AGENT="agent-82610d14-ec65-4d10-9ec2-8c479848cea9"
+    letta_health=$(curl -sS --max-time 3 "http://127.0.0.1:8283/v1/health" 2>/dev/null) && {
+      echo "  Status: running (port 8283)"
+      curl -sS --max-time 5 "http://127.0.0.1:8283/v1/agents/$LETTA_AGENT" 2>/dev/null | python3 -c "
+import json, sys
+try:
+    d = json.load(sys.stdin)
+    ec = d.get('embedding_config', {})
+    blocks = d.get('memory', {}).get('blocks', [])
+    labels = ', '.join(b.get('label','?') for b in blocks)
+    print(f\"  Blocks:   {len(blocks)} [{labels}]\")
+    print(f\"  Embedder: {ec.get('embedding_model','?')} ({ec.get('embedding_dim','?')} dims)\")
+except: pass
+" 2>/dev/null
+      arch_count=$(curl -sS --max-time 5 "http://127.0.0.1:8283/v1/agents/$LETTA_AGENT/archival-memory" 2>/dev/null | python3 -c "
+import json,sys; d=json.loads(sys.stdin.read()); print(len(d) if isinstance(d,list) else 0)
+" 2>/dev/null || echo "?")
+      echo "  Archival: ${arch_count} passages"
+    } || echo "  Status: DOWN"
+    echo ""
+    echo "── Scoreboard ──"
+    curl -sS --max-time 3 "http://127.0.0.1:8100/v1/score?token=$TOKEN" 2>/dev/null | python3 -c "
+import json, sys
+try:
+    d = json.load(sys.stdin)
+    s = d.get('score', {})
+    print(f\"  Status:  running (port 8100)\")
+    print(f\"  Score:   {s.get('execution_score',0)}/100\")
+    print(f\"  Ships:   {s.get('ships_count',0)} today\")
+except: print('  Status: DOWN')
+" 2>/dev/null || echo "  Status: DOWN"
+    echo ""
+    echo "── Cloudflare Tunnel ──"
+    systemctl is-active cloudflared-wirebot > /dev/null 2>&1 && \
+      echo "  Status: active (helm.wirebot.chat)" || echo "  Status: DOWN"
+    ;;
+
+  services)
+    printf "%-30s %s\n" "SERVICE" "STATUS"
+    printf "%-30s %s\n" "-------" "------"
+    for svc in openclaw-gateway mem0-wirebot wirebot-memory-syncd wirebot-scoreboard cloudflared-wirebot; do
+      status=$(systemctl is-active "$svc" 2>/dev/null || echo "inactive")
+      printf "%-30s %s\n" "$svc" "$status"
+    done
+    letta=$(podman ps --format '{{.Names}} {{.Status}}' 2>/dev/null | grep letta || echo "not running")
+    printf "%-30s %s\n" "letta-wirebot (podman)" "$letta"
+    ;;
+
+  logs)
+    lines="${2:-50}"
+    tail -n "$lines" /home/wirebot/logs/openclaw-gateway.log
+    ;;
+
+  cache)
+    shift
+    [ -z "${1:-}" ] && echo "Usage: wb cache <query>" && exit 1
+    query=$(python3 -c "import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1]))" "$*")
+    curl -sS "$SYNCD/cache/search?q=$query" 2>/dev/null | python3 -c "
+import json, sys
+d = json.load(sys.stdin)
+results = d.get('results', [])
+print(f'Cache results: {len(results)} (age: {d.get(\"age_ms\",\"?\")}ms)')
+for r in results:
+    print(f'  [{r[\"source\"]}] {r[\"text\"][:120]}')
+"
+    ;;
+
+  memory)
+    echo "── Memory System Summary ──"
+    echo ""
+    # Mem0
+    mem0_count=$(curl -sS --max-time 3 "http://127.0.0.1:8200/health" 2>/dev/null | python3 -c "
+import json,sys
+d=json.load(sys.stdin)
+print(d.get('memories',0))
+" 2>/dev/null || echo "?")
+    echo "  Mem0:          ${mem0_count} facts (fastembed, 768 dims)"
+    # Letta
+    LETTA_AGENT="agent-82610d14-ec65-4d10-9ec2-8c479848cea9"
+    curl -sS --max-time 5 "http://127.0.0.1:8283/v1/agents/$LETTA_AGENT" 2>/dev/null | python3 -c "
+import json,sys
+d=json.load(sys.stdin)
+blocks=d.get('memory',{}).get('blocks',[])
+total_chars=sum(len(b.get('value','')) for b in blocks)
+labels=', '.join(b.get('label','?') for b in blocks)
+print(f'  Letta blocks:  {len(blocks)} ({total_chars} chars) [{labels}]')
+" 2>/dev/null || echo "  Letta:         DOWN"
+    arch_count=$(curl -sS --max-time 5 "http://127.0.0.1:8283/v1/agents/$LETTA_AGENT/archival-memory" 2>/dev/null | python3 -c "
+import json,sys; d=json.loads(sys.stdin.read()); print(len(d) if isinstance(d,list) else 0)
+" 2>/dev/null || echo "?")
+    echo "  Letta archival: ${arch_count} passages (OpenRouter embeddings, 1536 dims)"
+    # Sync daemon
+    curl -sS --max-time 3 "$SYNCD/health" 2>/dev/null | python3 -c "
+import json,sys
+d=json.load(sys.stdin)
+print(f'  Hot cache:     {d.get(\"cache_facts\",0)} facts + {d.get(\"cache_blocks\",0)} blocks (60s refresh)')
+" 2>/dev/null || echo "  Hot cache:     DOWN"
+    # Nightly sync
+    next_sync=$(crontab -l -u wirebot 2>/dev/null | grep memory-sync | awk '{print $1,$2,$3,$4,$5}')
+    echo "  Nightly sync:  cron ${next_sync:-not set}"
+    echo ""
+    echo "  Layers: memory-core (files) → Mem0 (facts) → Letta (state+archival)"
+    echo "  Recall: wb recall <query> searches all 3 in parallel"
+    ;;
+
+  sync)
+    echo "Running memory sync..."
+    su - wirebot -s /bin/bash -c "/data/wirebot/bin/memory-sync.sh" 2>&1
+    echo "Done."
+    ;;
+
+  # ── Scoreboard ─────────────────────────────────────────────────────
+
+  score)
+    date="${2:-}"
+    url="http://127.0.0.1:8100/v1/score?token=$TOKEN"
+    [ -n "$date" ] && url="$url&date=$date"
+    curl -sS "$url" 2>/dev/null | python3 -c "
+import json, sys
+d = json.load(sys.stdin)
+s = d.get('score', {})
+print(f'⚡ EXECUTION SCORE: {s.get(\"execution_score\", 0)}')
+print(f'  SHIPPING:     {s.get(\"shipping_score\",0)}/40')
+print(f'  DISTRIBUTION: {s.get(\"distribution_score\",0)}/25')
+print(f'  REVENUE:      {s.get(\"revenue_score\",0)}/20')
+print(f'  SYSTEMS:      {s.get(\"systems_score\",0)}/15')
+print(f'  Ships today:  {s.get(\"ships_count\",0)}')
+intent = s.get('intent','')
+if intent: print(f'  Intent:       🎯 {intent}')
+won = '✅ WIN' if s.get('won') else '❌ LOSS' if s.get('execution_score',0) > 0 else '⏳ IN PROGRESS'
+print(f'  Result:       {won}')
+st = d.get('streak',{})
+print(f'  Streak:       🔥 {st.get(\"current\",0)} days (best: {st.get(\"best\",0)})')
+sea = d.get('season',{})
+print(f'  Season:       {sea.get(\"name\",\"?\")} — Day {sea.get(\"days_elapsed\",0)} — {sea.get(\"record\",\"\")}')
+" 2>/dev/null || echo "Error: scoreboard API unreachable"
+    log_interaction "score" "$date" ""
+    ;;
+
+  streak)
+    curl -sS "http://127.0.0.1:8100/v1/score?token=$TOKEN" 2>/dev/null | python3 -c "
+import json, sys
+d = json.load(sys.stdin)
+st = d.get('streak',{})
+print(f'🔥 Ship Streak: {st.get(\"current\",0)} days')
+print(f'🏆 Best Streak: {st.get(\"best\",0)} days')
+last = st.get('last_ship','')
+if last: print(f'🚀 Last Ship:   {last}')
+date = st.get('last_ship_date','')
+if date: print(f'📅 Last Date:   {date}')
+" 2>/dev/null || echo "Error: scoreboard API unreachable"
+    ;;
+
+  season)
+    curl -sS "http://127.0.0.1:8100/v1/season?token=$TOKEN" 2>/dev/null | python3 -c "
+import json, sys
+s = json.load(sys.stdin)
+total = s.get('days_elapsed',0) + s.get('days_remaining',0)
+pct = round(s.get('days_elapsed',0) / total * 100) if total > 0 else 0
+bar = '█' * (pct // 5) + '░' * (20 - pct // 5)
+print(f'🏆 {s.get(\"name\",\"Season\")} — Season {s.get(\"number\",1)}')
+print(f'   {s.get(\"start_date\",\"?\")} → {s.get(\"end_date\",\"?\")}')
+print(f'   Progress: [{bar}] {pct}%')
+print(f'   Day {s.get(\"days_elapsed\",0)} of {total} ({s.get(\"days_remaining\",0)} remaining)')
+print(f'   Record: {s.get(\"record\",\"0W-0L\")}')
+print(f'   Avg Score: {s.get(\"avg_score\",0)}')
+theme = s.get('theme','')
+if theme: print(f'   \"{theme}\"')
+" 2>/dev/null || echo "Error: scoreboard API unreachable"
+    ;;
+
+  feed)
+    limit="${2:-15}"
+    curl -sS "http://127.0.0.1:8100/v1/feed?limit=$limit&token=$TOKEN" 2>/dev/null | python3 -c "
+import json, sys
+from datetime import datetime
+d = json.load(sys.stdin)
+items = d.get('items',[])
+if not items:
+    print('No events yet. Push events via: wb ship \"<title>\"')
+    sys.exit(0)
+print(f'📋 Activity Feed ({len(items)} events)')
+print('─' * 50)
+for i in items:
+    ts = i.get('timestamp','')[:16].replace('T',' ')
+    icon = i.get('icon','📌')
+    title = i.get('title','') or i.get('type','')
+    delta = i.get('score_delta',0)
+    lane = i.get('lane','')
+    print(f'{icon} +{delta:2d}  {title[:40]:<40s} [{lane}] {ts}')
+" 2>/dev/null || echo "Error: scoreboard API unreachable"
+    ;;
+
+  ship)
+    [ -z "${2:-}" ] && echo "Usage: wb ship \"<title>\" [--lane shipping|distribution|systems] [--url <artifact-url>]" && exit 1
+    title="$2"
+    lane="shipping"
+    url=""
+    shift 2
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --lane) lane="$2"; shift 2 ;;
+        --url) url="$2"; shift 2 ;;
+        *) shift ;;
+      esac
+    done
+    result=$(curl -sS "http://127.0.0.1:8100/v1/events" \
+      -H "Content-Type: application/json" \
+      -H "Authorization: Bearer $TOKEN" \
+      -d "$(python3 -c "
+import json, sys
+evt = {'event_type': 'FEATURE_SHIPPED', 'lane': sys.argv[1], 'source': 'wb-cli',
+       'artifact_title': sys.argv[2], 'confidence': 0.9}
+if sys.argv[3]: evt['artifact_url'] = sys.argv[3]
+print(json.dumps(evt))
+" "$lane" "$title" "$url")" 2>/dev/null)
+    echo "$result" | python3 -c "
+import json, sys
+d = json.load(sys.stdin)
+if d.get('ok'):
+    print(f'🚀 SHIPPED: {\"$title\"}')
+    print(f'   +{d.get(\"score_delta\",0)} points → Score: {d.get(\"new_daily_score\",0)}')
+    st = d.get('streak',{})
+    print(f'   🔥 Streak: {st.get(\"current\",0)} days')
+else:
+    print(f'Error: {d}')
+" 2>/dev/null
+    log_interaction "ship" "$title" "$result"
+    ;;
+
+  intent)
+    [ -z "${2:-}" ] && {
+      curl -sS "http://127.0.0.1:8100/v1/intent?token=$TOKEN" 2>/dev/null | python3 -c "
+import json, sys
+d = json.load(sys.stdin)
+intent = d.get('intent','')
+if intent: print(f'🎯 Today: {intent}')
+else: print('No intent declared. Use: wb intent \"Ship the scoreboard\"')
+" 2>/dev/null
+      exit 0
+    }
+    text="$2"
+    curl -sS "http://127.0.0.1:8100/v1/intent" \
+      -H "Content-Type: application/json" \
+      -H "Authorization: Bearer $TOKEN" \
+      -d "{\"intent\": $(python3 -c "import json; print(json.dumps('$text'))")}" 2>/dev/null | python3 -c "
+import json, sys
+d = json.load(sys.stdin)
+if d.get('ok'): print(f'🎯 Intent locked: {d.get(\"intent\",\"\")}')
+else: print(f'Error: {d}')
+" 2>/dev/null
+    log_interaction "intent" "$text" ""
+    ;;
+
+  audit)
+    lane="${2:-}"
+    url="http://127.0.0.1:8100/v1/audit?limit=30&token=$TOKEN"
+    [ -n "$lane" ] && url="$url&lane=$lane"
+    curl -sS "$url" 2>/dev/null | python3 -c "
+import json, sys
+d = json.load(sys.stdin)
+rows = d.get('audit',[])
+if not rows:
+    print('No audit records.')
+    sys.exit(0)
+print(f'📊 Audit Trail ({len(rows)} records)')
+print(f'{\"ID\":<20s} {\"Type\":<22s} {\"Lane\":<12s} {\"Pts\":>4s} {\"Source\":<12s} {\"Title\":<30s}')
+print('─' * 100)
+for r in rows:
+    print(f'{r[\"id\"][:18]:<20s} {r[\"event_type\"]:<22s} {r[\"lane\"]:<12s} {r[\"score_delta\"]:>+4d} {r[\"source\"]:<12s} {(r.get(\"artifact_title\",\"\") or \"\")[:30]:<30s}')
+" 2>/dev/null || echo "Error: scoreboard API unreachable"
+    ;;
+
+  submit)
+    [ -z "${2:-}" ] && echo "Usage: wb submit \"<title>\" [--lane shipping|distribution|systems] [--url <url>]" && exit 1
+    title="$2"
+    lane="shipping"
+    url=""
+    shift 2
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --lane) lane="$2"; shift 2 ;;
+        --url) url="$2"; shift 2 ;;
+        *) shift ;;
+      esac
+    done
+    curl -sS "http://127.0.0.1:8100/v1/events" \
+      -H "Content-Type: application/json" \
+      -H "Authorization: Bearer $TOKEN" \
+      -d "$(python3 -c "
+import json, sys
+evt = {'event_type': 'FEATURE_SHIPPED', 'lane': sys.argv[1], 'source': 'wb-submit',
+       'artifact_title': sys.argv[2], 'confidence': 0.85, 'status': 'pending'}
+if sys.argv[3]: evt['artifact_url'] = sys.argv[3]
+print(json.dumps(evt))
+" "$lane" "$title" "$url")" 2>/dev/null | python3 -c "
+import json, sys
+d = json.load(sys.stdin)
+if d.get('ok'):
+    print(f'⏳ SUBMITTED (pending approval): {\"$title\"}')
+    print(f'   Potential: +{d.get(\"score_delta\",0)} points')
+    print(f'   ID: {d.get(\"event_id\",\"\")}')
+    print(f'   Approve: wb approve {d.get(\"event_id\",\"\")}')
+else:
+    print(f'Error: {d}')
+" 2>/dev/null
+    log_interaction "submit" "$title" ""
+    ;;
+
+  pending)
+    curl -sS "http://127.0.0.1:8100/v1/pending?token=$TOKEN" 2>/dev/null | python3 -c "
+import json, sys
+d = json.load(sys.stdin)
+items = d.get('pending',[])
+if not items:
+    print('✅ No pending events — all clear')
+    sys.exit(0)
+print(f'⏳ Pending Events ({len(items)} awaiting approval)')
+print('─' * 70)
+for p in items:
+    print(f'  {p[\"id\"]}')
+    print(f'    {p.get(\"artifact_title\",\"\")} [{p[\"lane\"]}] +{p[\"potential_points\"]}pts')
+    print(f'    Source: {p[\"source\"]}  Confidence: {p.get(\"confidence\",0):.0%}')
+    print(f'    → wb approve {p[\"id\"]}')
+    print(f'    → wb reject  {p[\"id\"]}')
+    print()
+" 2>/dev/null || echo "Error: scoreboard API unreachable"
+    ;;
+
+  approve)
+    [ -z "${2:-}" ] && echo "Usage: wb approve <event-id>" && exit 1
+    curl -sS -X POST "http://127.0.0.1:8100/v1/events/$2/approve?token=$TOKEN" 2>/dev/null | python3 -c "
+import json, sys
+d = json.load(sys.stdin)
+if d.get('ok'):
+    print(f'✅ APPROVED: {d.get(\"event_id\",\"\")}')
+    print(f'   +{d.get(\"score_delta\",0)} points → Score: {d.get(\"new_daily_score\",0)}')
+else:
+    print(f'Error: {d.get(\"error\",d)}')
+" 2>/dev/null
+    log_interaction "approve" "$2" ""
+    ;;
+
+  reject)
+    [ -z "${2:-}" ] && echo "Usage: wb reject <event-id>" && exit 1
+    curl -sS -X POST "http://127.0.0.1:8100/v1/events/$2/reject?token=$TOKEN" 2>/dev/null | python3 -c "
+import json, sys
+d = json.load(sys.stdin)
+if d.get('ok'):
+    print(f'❌ REJECTED: {d.get(\"event_id\",\"\")}')
+else:
+    print(f'Error: {d.get(\"error\",d)}')
+" 2>/dev/null
+    log_interaction "reject" "$2" ""
+    ;;
+
+  discover)
+    /data/wirebot/bin/wb-discover "${2:-status}" "${3:-}"
+    ;;
+
+  projects)
+    curl -sS "http://127.0.0.1:8100/v1/projects" 2>/dev/null | python3 -c "
+import json, sys
+d = json.load(sys.stdin)
+print(f'  PROJECTS ({d[\"count\"]}) — {d[\"pending_total\"]} pending total')
+print()
+for p in d['projects']:
+    icon = {'approved':'✅','rejected':'❌'}.get(p['status'],'⏳')
+    auto = ' [auto]' if p.get('auto_approve') else ''
+    print(f'  {icon} {p[\"name\"]:20s} pending={p[\"pending\"]:3d}  approved={p[\"approved\"]:3d}  total={p[\"total_events\"]:3d}{auto}')
+" 2>/dev/null
+    ;;
+
+  approve-project)
+    [ -z "${2:-}" ] && echo "Usage: wb approve-project <name>" && exit 1
+    curl -sS -X POST "http://127.0.0.1:8100/v1/projects/$2/approve?token=$TOKEN" 2>/dev/null | python3 -c "
+import json, sys
+d = json.load(sys.stdin)
+if d.get('ok'):
+    print(f'✅ PROJECT APPROVED: {d[\"project\"]} ({d[\"events_affected\"]} events scored)')
+else:
+    print(f'Error: {d.get(\"error\",d)}')
+" 2>/dev/null
+    # Remember in Wirebot memory
+    curl -sS -X POST "http://127.0.0.1:18789/tools/invoke" \
+      -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+      -d "{\"tool\":\"wirebot_remember\",\"args\":{\"text\":\"Approved project $2 for scoreboard auto-scoring. Future commits will auto-approve.\",\"category\":\"project_approval\"}}" --max-time 5 >/dev/null 2>&1 || true
+    ;;
+
+  reject-project)
+    [ -z "${2:-}" ] && echo "Usage: wb reject-project <name>" && exit 1
+    curl -sS -X POST "http://127.0.0.1:8100/v1/projects/$2/reject?token=$TOKEN" 2>/dev/null | python3 -c "
+import json, sys
+d = json.load(sys.stdin)
+if d.get('ok'):
+    print(f'❌ PROJECT REJECTED: {d[\"project\"]} ({d[\"events_affected\"]} events rejected)')
+else:
+    print(f'Error: {d.get(\"error\",d)}')
+" 2>/dev/null
+    curl -sS -X POST "http://127.0.0.1:18789/tools/invoke" \
+      -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+      -d "{\"tool\":\"wirebot_remember\",\"args\":{\"text\":\"Rejected project $2 from scoreboard scoring. Future commits will be ignored.\",\"category\":\"project_approval\"}}" --max-time 5 >/dev/null 2>&1 || true
+    ;;
+
+  lock)
+    date="${2:-}"
+    body='{}'
+    [ -n "$date" ] && body="{\"date\":\"$date\"}"
+    curl -sS -X POST "http://127.0.0.1:8100/v1/lock" \
+      -H "Content-Type: application/json" \
+      -H "Authorization: Bearer $TOKEN" \
+      -d "$body" 2>/dev/null | python3 -c "
+import json, sys
+d = json.load(sys.stdin)
+if d.get('ok'):
+    won = '✅ WIN' if d.get('won') else '❌ LOSS'
+    print(f'🔒 Score locked for {d.get(\"date\",\"today\")}')
+    print(f'   Final Score: {d.get(\"final_score\",0)} — {won}')
+    print(f'   Ships: {d.get(\"ships\",0)}')
+    intent = d.get('intent','')
+    if intent:
+        ful = '✅' if d.get('intent_fulfilled') else '❌'
+        print(f'   Intent: {intent} {ful}')
+    st = d.get('streak',{})
+    print(f'   Streak: 🔥 {st.get(\"current\",0)} (best: {st.get(\"best\",0)})')
+    print(f'   Record: {d.get(\"record\",\"\")}')
+else:
+    print(f'Error: {d}')
+" 2>/dev/null
+    log_interaction "lock" "$date" ""
+    ;;
+
+  card)
+    type="${2:-daily}"
+    echo "📤 Social card: http://127.0.0.1:8100/v1/card/$type"
+    echo "   Public URL: https://wins.wirebot.chat/v1/card/$type"
+    echo "   Embed: <img src=\"https://wins.wirebot.chat/v1/card/$type\" />"
+    ;;
+
+  scoreboard|wins)
+    echo "🌐 wins.wirebot.chat"
+    echo ""
+    curl -sS "http://127.0.0.1:8100/v1/scoreboard" 2>/dev/null | python3 -c "
+import json, sys
+d = json.load(sys.stdin)
+sig = d.get('signal','?')
+sig_icon = '🟢' if sig=='green' else '🟡' if sig=='yellow' else '🔴'
+print(f'{sig_icon} {d.get(\"score\",0)} — {\"WINNING\" if sig==\"green\" else \"PRESSURE\" if sig==\"yellow\" else \"STALLING\"}')
+print(f'🔥 Streak: {d.get(\"streak\",{}).get(\"current\",0)}  🏆 Best: {d.get(\"streak\",{}).get(\"best\",0)}  📊 {d.get(\"record\",\"\")}  🚀 Ships: {d.get(\"ship_today\",0)}')
+print(f'⚡ {d.get(\"possession\",\"—\")}')
+l = d.get('lanes',{})
+print(f'SHIP {l.get(\"shipping\",0):>2d}/40  DIST {l.get(\"distribution\",0):>2d}/25  REV {l.get(\"revenue\",0):>2d}/20  SYS {l.get(\"systems\",0):>2d}/15')
+sea = d.get('season',{})
+print(f'{sea.get(\"name\",\"\")} — {d.get(\"season_day\",\"\")}')
+" 2>/dev/null || echo "Error: scoreboard API unreachable"
+    ;;
+
+  # ── Advanced ──────────────────────────────────────────────────────────
+
+  raw)
+    [ -z "${2:-}" ] || [ -z "${3:-}" ] && echo "Usage: wb raw <tool> '<json-args>'" && exit 1
+    invoke_and_log "raw" "$2 $3" "$2" "$3"
+    ;;
+
+  # ── Pillars (quick reference) ───────────────────────────────────────
+
+  pillars)
+    cat << 'PILLARS'
+⚡ The 12 Pillars — Wirebot Operating Philosophy
+
+  TIER 1 — FOUNDATION (non-negotiable)
+    1. Calm                      Composed under any conditions
+    2. Rigor                     Every detail verified
+    3. Radical Truth (Diplomatic) Say what needs saying, respectfully
+
+  TIER 2 — STRATEGIC (shape every decision)
+    4. Deep Clarity              Dig to the spirit before full bore
+    5. Protect What's Built      Map downside, flag irreversible
+    6. Sequencing + Timing       Right order, right moment
+
+  TIER 3 — EXECUTION (how you move)
+    7. Maximum Leverage           80/20, force multipliers, compound
+    8. Resourceful + Proactive    Find a way, keep moving
+    9. Persistent Beyond Reason   Nothing drops, ever
+
+  TIER 4 — SUSTAIN (keep the engine running)
+   10. Operator Sustainability   Push hard AND protect the person
+   11. Learn From Everything     Patterns, post-mortems, self-correct
+   12. Communication as Strategy Voice fidelity, relationship intelligence
+PILLARS
+    ;;
+
+  # ── Drift System ──────────────────────────────────────────────────────
+  drift)
+    curl -sS "http://127.0.0.1:8100/v1/pairing/neural-drift" \
+      -H "Authorization: Bearer $TOKEN" 2>/dev/null | python3 -c "
+import json, sys
+d = json.load(sys.stdin)
+dr = d.get('drift', {})
+sig = dr.get('signal','?')
+icons = {'deep_sync':'🟢','in_drift':'🔵','drifting':'🟡','weak':'🟠','disconnected':'🔴'}
+icon = icons.get(sig, '⚪')
+print(f'{icon} NEURAL DRIFT: {dr.get(\"score\",0)}/100 ({sig.upper().replace(\"_\",\" \")})')
+print(f'  Intent alignment:  {dr.get(\"intent_alignment\",0):.0%}')
+print(f'  Action latency:    {dr.get(\"action_latency\",0):.0%}')
+print(f'  Stall gap:         {dr.get(\"stall_gap\",0):.0%}')
+print(f'  Response flow:     {dr.get(\"response_flow\",0):.0%}')
+print(f'  Override rate:     {dr.get(\"override_rate\",0):.0%}')
+print(f'  Modesty reflex:    {dr.get(\"modesty_reflex\",0):.0%} ({\"open\" if dr.get(\"modesty_reflex\",1)<0.4 else \"guarded\"})')
+hs = dr.get('handshake_streak',0)
+if hs: print(f'  🤝 Handshake streak: {hs} days')
+r = dr.get('rabbit',{})
+if r.get('active'):
+    print(f'  🐇 R.A.B.I.T. ACTIVE: {r.get(\"type\",\"?\")} (intensity {r.get(\"intensity\",0):.0%})')
+    print(f'     {r.get(\"message\",\"\")}')
+gd = dr.get('ghost_drift',{})
+if gd.get('silent_days',0) > 0:
+    print(f'  👻 Ghost Drift: {gd[\"silent_days\"]}d silent, habits={\"persisting\" if gd.get(\"habit_persistence\",0)>0.5 else \"fading\"}')
+print()
+print(d.get('summary',''))
+" 2>/dev/null || echo "Error: scoreboard unreachable"
+    ;;
+
+  handshake)
+    curl -sS -X POST "http://127.0.0.1:8100/v1/pairing/handshake" \
+      -H "Authorization: Bearer $TOKEN" 2>/dev/null | python3 -c "
+import json, sys
+d = json.load(sys.stdin)
+print(f'⚡ {d.get(\"message\",\"Handshake recorded\")}')
+print(f'  Drift Score: {d.get(\"drift_score\",0)}/100 ({d.get(\"drift_signal\",\"?\")})')
+print(f'  Streak: {d.get(\"handshake_streak\",0)} days')
+" 2>/dev/null || echo "Error: scoreboard unreachable"
+    ;;
+
+  rabbit)
+    curl -sS "http://127.0.0.1:8100/v1/pairing/neural-drift" \
+      -H "Authorization: Bearer $TOKEN" 2>/dev/null | python3 -c "
+import json, sys
+d = json.load(sys.stdin)
+r = d.get('drift',{}).get('rabbit',{})
+if r.get('active'):
+    print(f'🐇 R.A.B.I.T. ACTIVE — {r.get(\"type\",\"?\")}')
+    print(f'  Intensity: {r.get(\"intensity\",0):.0%}')
+    print(f'  {r.get(\"message\",\"\")}')
+else:
+    print('✅ No rabbit detected. You\\'re focused.')
+" 2>/dev/null || echo "Error: scoreboard unreachable"
+    ;;
+
+  # ── Help ─────────────────────────────────────────────────────────────
+
+  help|-h|--help|*)
+    cat << 'HELP'
+wb — Wirebot CLI ⚡
+Sovereign AI operating partner for solopreneurs
+
+PAIRING
+  wb pair                   Start the pairing conversation (or show instructions)
+  wb pair status            Show pairing score, phases, what's missing
+  wb pair skip              Dismiss pairing nudge for 4 hours
+  wb pair reset             Revoke pairing and clear all personalization
+
+BUSINESSES
+  wb overview               Operator-level view — all businesses, health, focus recommendation
+  wb businesses             List all businesses with health scores (alias: wb biz)
+  wb focus <name>           Switch active business context
+  wb add-business <name>    Add a new business (--stage, --priority, --domain)
+
+CHECKLIST
+  wb status                 Show business setup progress for active business
+  wb next                   Get the next recommended task based on stage + priority
+  wb daily                  Today's stand-up: what's due, what's blocked, what's next
+  wb complete <id>          Mark a task as done (by task ID)
+  wb skip <id>              Skip a task (marks skipped, won't appear in next/daily)
+  wb add <title> [flags]    Add a custom task to the checklist
+                              --stage idea|launch|growth    (default: current stage)
+                              --category <category-name>    (e.g., "Legal", "Marketing")
+                              --priority critical|high|medium|low  (default: medium)
+  wb list [stage]           List all tasks, optionally filtered by stage
+  wb detail <id>            Show full details for a specific task
+  wb stage <stage>          Set the current business stage (idea → launch → growth)
+
+MEMORY
+  wb recall <query>         Search all memory layers in parallel:
+                            Mem0 facts + Letta blocks + Letta archival docs (~200ms)
+  wb remember <fact>        Store a durable fact in long-term memory
+                            LLM extracts and indexes the fact (~1.9s, async)
+  wb state [block]          Read business state (all blocks, or specific: goals,
+                            business_stage, kpis, human)
+  wb cache <query>          Search the hot cache directly (<1ms, substring match)
+  wb memory                 Memory system summary (fact count, blocks, archival, sync)
+  wb sync                   Manually trigger memory sync (Mem0→MEMORY.md, Letta→BUSINESS_STATE.md)
+
+SYSTEM
+  wb health                 Full health check: gateway, sync daemon, Mem0, Letta, scoreboard, tunnel
+  wb services               Show systemd service status for all Wirebot components
+  wb logs [n]               Show last n lines of gateway log (default: 50)
+  wb pillars                Display the 12 Operating Pillars quick reference
+
+SCOREBOARD (wins.wirebot.chat)
+  wb score [date]           Today's execution score + lane breakdown
+  wb streak                 Current + best ship streak
+  wb season                 Season progress, record, avg score
+  wb feed [n]               Activity feed (last n events, default 15)
+  wb ship "<title>"         Log a ship event (+points) [--lane, --url]
+  wb submit "<title>"       Submit gated event (pending approval) [--lane, --url]
+  wb pending                List events awaiting approval
+  wb approve <event-id>     Approve a pending event (now scores)
+  wb reject <event-id>      Reject a pending event (removed from scoring)
+  wb intent "<text>"        Declare today's shipping intent (or show current)
+  wb discover scan          Scan VPS for git repositories
+  wb discover watch         Check repos for new commits (cron job)
+  wb discover status        Show tracked repos and pending events
+  wb discover backfill [n]  Discover commits from last n days
+  wb projects               List all discovered projects with approval status
+  wb approve-project <name> Approve project — bulk-approve + auto-approve future
+  wb reject-project <name>  Reject project — bulk-reject + skip future commits
+  wb lock [date]            Lock EOD score, check intent fulfillment
+  wb audit [lane]           Full audit trail with score derivation
+  wb scoreboard             Quick scoreboard view (alias: wb wins)
+  wb card daily|weekly|season  Open social share card (SVG)
+
+ADVANCED
+  wb raw <tool> '<args>'    Invoke any registered gateway tool with raw JSON args
+                            Tools: wirebot_recall, wirebot_remember,
+                                   wirebot_business_state, wirebot_checklist
+
+EXAMPLES
+  wb status                         # "Idea stage: 1/22 complete (5%)"
+  wb next                           # "→ Register Business Entity (Legal, high priority)"
+  wb complete biz-entity            # "✓ Register Business Entity marked complete"
+  wb add "Set up Stripe" --stage launch --priority high
+  wb recall "membership tiers"      # Searches all memory layers
+  wb remember "Wirebot beta launch target: March 2026"
+  wb state goals                    # Show current goals block from Letta
+  wb cache "wirebot"                # Sub-ms hot cache search
+  wb health                         # Full system health dashboard
+  wb raw wirebot_checklist '{"action":"list","stage":"idea"}'
+
+PATHS
+  wb:         /usr/local/bin/wb
+  wirebot:    /usr/local/bin/wirebot → /data/wirebot/bin/wirebot (OpenClaw wrapper)
+  Gateway:    http://127.0.0.1:18789 (OpenClaw, systemd: openclaw-gateway)
+  Scoreboard: http://127.0.0.1:8100 (systemd: wirebot-scoreboard)
+  Tunnel:     helm.wirebot.chat → gateway / wins.wirebot.chat → scoreboard
+  Mem0:       http://127.0.0.1:8200 (systemd: mem0-wirebot)
+  Letta:      http://127.0.0.1:8283 (podman: letta-wirebot)
+  Sync:       http://127.0.0.1:8201 (systemd: wirebot-memory-syncd)
+  Logs:       /home/wirebot/logs/openclaw-gateway.log
+  Config:     /data/wirebot/users/verious/openclaw.json
+  Workspace:  /home/wirebot/clawd/
+HELP
+    ;;
+
+esac

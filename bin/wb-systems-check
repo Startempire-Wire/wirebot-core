@@ -1,0 +1,53 @@
+#!/bin/bash
+# wb-systems-check — Daily systems audit for scoreboard
+# Runs as cron, posts events for infra health
+
+SCOREBOARD_URL="http://127.0.0.1:8100/v1/events"
+TOKEN="${SCOREBOARD_TOKEN:-65b918ba-baf5-4996-8b53-6fb0f662a0c3}"
+
+post_event() {
+    local etype="$1" lane="$2" delta="$3" title="$4"
+    curl -s -X POST "$SCOREBOARD_URL" \
+        -H "Authorization: Bearer $TOKEN" \
+        -H "Content-Type: application/json" \
+        -d "{\"event_type\":\"$etype\",\"lane\":\"$lane\",\"source\":\"automated\",\"score_delta\":$delta,\"artifact_title\":\"$title\"}" \
+        --max-time 5 >/dev/null 2>&1
+}
+
+# 1. Check SSL certificates expiry
+DOMAINS="startempirewire.com startempirewire.network wins.wirebot.chat helm.wirebot.chat"
+SSL_OK=0
+SSL_TOTAL=0
+for domain in $DOMAINS; do
+    SSL_TOTAL=$((SSL_TOTAL + 1))
+    expiry=$(echo | openssl s_client -servername "$domain" -connect "$domain:443" 2>/dev/null | openssl x509 -noout -enddate 2>/dev/null | cut -d= -f2)
+    if [ -n "$expiry" ]; then
+        expiry_epoch=$(date -d "$expiry" +%s 2>/dev/null)
+        now_epoch=$(date +%s)
+        days_left=$(( (expiry_epoch - now_epoch) / 86400 ))
+        if [ "$days_left" -gt 7 ]; then
+            SSL_OK=$((SSL_OK + 1))
+        else
+            post_event "SSL_EXPIRING" "systems" 0 "⚠️ SSL cert for $domain expires in ${days_left}d"
+        fi
+    fi
+done
+if [ "$SSL_OK" -eq "$SSL_TOTAL" ]; then
+    post_event "SSL_CHECK" "systems" 1 "🔒 All $SSL_TOTAL SSL certs valid"
+fi
+
+# 2. Check disk usage
+DISK_PCT=$(df -h / | awk 'NR==2{print $5}' | tr -d '%')
+if [ "$DISK_PCT" -lt 80 ]; then
+    post_event "DISK_CHECK" "systems" 1 "💾 Disk: ${DISK_PCT}% used — healthy"
+elif [ "$DISK_PCT" -lt 90 ]; then
+    post_event "DISK_WARNING" "systems" 0 "⚠️ Disk: ${DISK_PCT}% used — getting full"
+fi
+
+# 3. Check integration pollers are active
+ACTIVE_INTEGRATIONS=$(sqlite3 /data/wirebot/scoreboard/events.db "SELECT COUNT(*) FROM integrations WHERE status='active'" 2>/dev/null || echo 0)
+if [ "$ACTIVE_INTEGRATIONS" -gt 0 ]; then
+    post_event "INTEGRATION_CHECK" "systems" 1 "🔌 $ACTIVE_INTEGRATIONS integrations active and polling"
+fi
+
+echo "Systems check complete: SSL=$SSL_OK/$SSL_TOTAL, Disk=${DISK_PCT}%, Integrations=$ACTIVE_INTEGRATIONS"

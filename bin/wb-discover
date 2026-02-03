@@ -1,0 +1,528 @@
+#!/usr/bin/env bash
+# ─── Scoreboard Discovery Engine ─────────────────────────────────────────────
+# Watches local git repos for new commits, classifies them, and submits
+# as PENDING events to the scoreboard. Operator approves what counts.
+#
+# Usage:
+#   wb-discover scan              # Find all git repos on VPS
+#   wb-discover watch             # Check registered repos for new commits (cron)
+#   wb-discover status            # Show tracked repos and pending events
+#   wb-discover backfill [days]   # Discover commits from last N days (default: 1)
+#
+# All discovered events land as PENDING. Wirebot notifies operator.
+# ──────────────────────────────────────────────────────────────────────────────
+
+set -uo pipefail
+# Note: no -e (errexit) — git commands may fail on dubious ownership, 
+# missing remotes, etc. We handle errors inline.
+
+DISCOVERY_DIR="/data/wirebot/discovery"
+PROJECTS_FILE="$DISCOVERY_DIR/projects.yaml"
+WATERMARKS_FILE="$DISCOVERY_DIR/watermarks.json"
+PREFERENCES_FILE="$DISCOVERY_DIR/preferences.json"
+SCOREBOARD_URL="http://127.0.0.1:8100"
+SCOREBOARD_TOKEN="65b918ba-baf5-4996-8b53-6fb0f662a0c3"
+LOG_FILE="/data/wirebot/discovery/discovery.log"
+
+mkdir -p "$DISCOVERY_DIR"
+
+# ─── Logging ──────────────────────────────────────────────────────────────────
+
+log() {
+    local msg="[$(date '+%Y-%m-%d %H:%M:%S %Z')] $*"
+    echo "$msg" >> "$LOG_FILE"
+    echo "$msg"
+}
+
+# ─── YAML Parser (minimal — reads our projects.yaml format) ──────────────────
+
+parse_projects() {
+    # Outputs: path|name|business|github per line
+    awk '
+    /^  - path:/ { path=$3 }
+    /^    name:/ { name=$2 }
+    /^    business:/ { biz=$2 }
+    /^    github:/ { 
+        gh=$2; 
+        if (gh == "null") gh=""; 
+        if (path != "") print path "|" name "|" biz "|" gh;
+    }
+    /^    dedup_with:/ { next }
+    ' "$PROJECTS_FILE"
+}
+
+# ─── Watermark Management ────────────────────────────────────────────────────
+
+get_watermark() {
+    local repo_path="$1"
+    python3 -c "
+import json,sys
+with open('$WATERMARKS_FILE') as f:
+    wm = json.load(f)
+print(wm.get('$repo_path', ''))
+" 2>/dev/null || echo ""
+}
+
+set_watermark() {
+    local repo_path="$1" sha="$2"
+    python3 -c "
+import json
+with open('$WATERMARKS_FILE') as f:
+    wm = json.load(f)
+wm['$repo_path'] = '$sha'
+with open('$WATERMARKS_FILE', 'w') as f:
+    json.dump(wm, f, indent=2)
+"
+}
+
+# ─── Commit Classification ───────────────────────────────────────────────────
+# Returns: SKIP|NOISE|MICRO|STANDARD|MACRO and a score
+
+classify_commit() {
+    local msg="$1" files_changed="${2:-0}" is_tag="${3:-false}"
+    local msg_lower
+    msg_lower=$(echo "$msg" | tr '[:upper:]' '[:lower:]')
+
+    # SKIP: merge commits, empty
+    if echo "$msg_lower" | grep -qE "^merge (branch|pull|remote|tag)|^merge commit"; then
+        echo "SKIP|0|merge"
+        return
+    fi
+
+    # MACRO: tags/releases
+    if [ "$is_tag" = "true" ]; then
+        echo "MACRO|8|release"
+        return
+    fi
+
+    # MACRO: large changes (10+ files)
+    if [ "$files_changed" -ge 10 ]; then
+        echo "MACRO|5|large-change"
+        return
+    fi
+
+    # NOISE: wip, fixup, squash, trigger
+    if echo "$msg_lower" | grep -qE "^wip[: ]|^fixup!|^squash!|chore: trigger|chore: bump version"; then
+        echo "NOISE|0|wip"
+        return
+    fi
+
+    # MICRO: docs, typo, readme, style, minor chore
+    if echo "$msg_lower" | grep -qE "^docs:|^typo|readme|^style:|^chore:"; then
+        echo "MICRO|1|docs-or-chore"
+        return
+    fi
+
+    # STANDARD: feat, fix, test, perf, refactor (meaningful)
+    if echo "$msg_lower" | grep -qE "^feat:|^fix:|^test:|^perf:|^refactor:"; then
+        echo "STANDARD|2|feature-work"
+        return
+    fi
+
+    # Default: treat as STANDARD if it has substance
+    if [ "$files_changed" -ge 3 ]; then
+        echo "STANDARD|2|multi-file"
+        return
+    fi
+
+    # Small unclassified commit
+    echo "MICRO|1|unclassified"
+}
+
+# ─── Diminishing Returns Calculator ──────────────────────────────────────────
+# commits 1-3: full value, 4-6: 50%, 7+: 0
+# Daily cap: 8 pts per repo
+
+apply_diminishing_returns() {
+    local base_score="$1" commit_index="$2"
+    if [ "$commit_index" -le 3 ]; then
+        echo "$base_score"
+    elif [ "$commit_index" -le 6 ]; then
+        echo $(( base_score / 2 ))
+    else
+        echo "0"
+    fi
+}
+
+# ─── Submit Event to Scoreboard ──────────────────────────────────────────────
+
+submit_event() {
+    submit_event_with_status "$1" "$2" "$3" "$4" "$5" "$6" "$7" "$8" "${9:-WEAK}" "pending"
+}
+
+submit_event_with_status() {
+    local event_type="$1" lane="$2" title="$3" source="$4"
+    local artifact_url="$5" business_id="$6" score_delta="$7"
+    local metadata="$8" verification_level="${9:-WEAK}" status="${10:-pending}"
+
+    # Use stdin pipe for title to avoid shell quoting issues with apostrophes etc
+    python3 -c "
+import json, sys
+title = sys.stdin.read().strip()
+meta = {}
+try:
+    meta = json.loads(sys.argv[8])
+except:
+    pass
+print(json.dumps({
+    'event_type': sys.argv[1],
+    'lane': sys.argv[2],
+    'source': sys.argv[3],
+    'artifact_url': sys.argv[4],
+    'artifact_title': title,
+    'business_id': sys.argv[5],
+    'confidence': 0.8,
+    'verification_level': sys.argv[6],
+    'status': sys.argv[9],
+    'metadata': meta
+}))
+" "$event_type" "$lane" "$source" "$artifact_url" "$business_id" "$verification_level" "$score_delta" "$metadata" "$status" <<< "$title" | \
+    curl -s -X POST "$SCOREBOARD_URL/v1/events" \
+        -H "Authorization: Bearer $SCOREBOARD_TOKEN" \
+        -H "Content-Type: application/json" \
+        -d @- --max-time 5 2>/dev/null
+}
+
+# ─── SCAN Command ────────────────────────────────────────────────────────────
+
+cmd_scan() {
+    log "Scanning VPS for git repositories..."
+    local scan_dirs=("/home/wirebot" "/data/wirebot" "/tmp/startempire-wire-network-ext" "/tmp/sewn-connect" "/home/startempirentwk/public_html/wp-content/plugins" "/home/startempirewire/public_html/wp-content/plugins")
+    local count=0
+
+    echo "═══════════════════════════════════════════════════════════════"
+    echo "  SCOREBOARD PROJECT DISCOVERY SCAN"
+    echo "═══════════════════════════════════════════════════════════════"
+    echo ""
+
+    for scan_dir in "${scan_dirs[@]}"; do
+        [ -d "$scan_dir" ] || continue
+        while IFS= read -r gitdir; do
+            local repo_path
+            repo_path=$(dirname "$gitdir")
+            
+            # Skip node_modules, .nvm internals, vendor dirs
+            if echo "$repo_path" | grep -qE "node_modules|\.nvm/versions|vendor/|\.cache"; then
+                continue
+            fi
+
+            local remote branch last_commit recent_count
+            remote=$(git -C "$repo_path" remote get-url origin 2>/dev/null || echo "local-only")
+            branch=$(git -C "$repo_path" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")
+            last_commit=$(git -C "$repo_path" log -1 --format="%h %s" 2>/dev/null || echo "empty")
+            recent_count=$(git -C "$repo_path" log --oneline --since="7 days ago" 2>/dev/null | wc -l)
+
+            count=$((count + 1))
+            printf "  %-50s %s\n" "$repo_path" "[$branch]"
+            printf "    Remote: %s\n" "$remote"
+            printf "    Last 7d: %d commits | Last: %s\n" "$recent_count" "$last_commit"
+            echo ""
+        done < <(find "$scan_dir" -maxdepth 5 -name ".git" -type d 2>/dev/null)
+    done
+
+    echo "═══════════════════════════════════════════════════════════════"
+    echo "  Found $count repositories"
+    echo "  Registry: $PROJECTS_FILE"
+    echo "  Edit to add/remove projects or change business mapping"
+    echo "═══════════════════════════════════════════════════════════════"
+    log "Scan complete: $count repos found"
+}
+
+# ─── WATCH Command (main cron logic) ─────────────────────────────────────────
+
+cmd_watch() {
+    local since_flag="${1:---since=5 minutes ago}"
+    log "Watch cycle starting..."
+
+    local total_new=0 total_submitted=0
+    local daily_points_json="{}"
+
+    # Cache project approval statuses once per watch cycle (not per commit)
+    local project_statuses
+    project_statuses=$(curl -s "$SCOREBOARD_URL/v1/projects" --max-time 3 2>/dev/null | \
+        python3 -c "
+import json,sys
+try:
+    d=json.load(sys.stdin)
+    for p in d.get('projects',[]):
+        print(p['name'] + '=' + p.get('status','pending'))
+except:
+    pass
+" 2>/dev/null || echo "")
+
+    while IFS='|' read -r repo_path repo_name business github_repo; do
+        [ -d "$repo_path/.git" ] || continue
+
+        local watermark
+        watermark=$(get_watermark "$repo_path")
+
+        # Get new commits since watermark (or last 5 min if no watermark)
+        local commits
+        if [ -n "$watermark" ]; then
+            commits=$(git -C "$repo_path" log --format="%H|%s|%an" "$watermark..HEAD" 2>/dev/null || true)
+        else
+            commits=$(git -C "$repo_path" log --format="%H|%s|%an" "$since_flag" 2>/dev/null || true)
+        fi
+
+        [ -z "$commits" ] && continue
+
+        # Check for new tags since watermark
+        local new_tags=""
+        if [ -n "$watermark" ]; then
+            new_tags=$(git -C "$repo_path" tag --contains "$watermark" 2>/dev/null | head -5 || true)
+        fi
+
+        local commit_index=0
+        local repo_day_pts=0
+
+        while IFS='|' read -r sha msg author; do
+            [ -z "$sha" ] && continue
+            total_new=$((total_new + 1))
+            commit_index=$((commit_index + 1))
+
+            # Count files changed
+            local files_changed
+            files_changed=$(git -C "$repo_path" diff --name-only "${sha}^" "$sha" 2>/dev/null | wc -l || echo "0")
+
+            # Check if this SHA is a tagged commit
+            local is_tag="false"
+            if echo "$new_tags" | grep -q "$(git -C "$repo_path" tag --points-at "$sha" 2>/dev/null | head -1)"; then
+                is_tag="true"
+            fi
+
+            # Classify
+            local classification
+            classification=$(classify_commit "$msg" "$files_changed" "$is_tag")
+            local class score_class reason
+            class=$(echo "$classification" | cut -d'|' -f1)
+            score_class=$(echo "$classification" | cut -d'|' -f2)
+            reason=$(echo "$classification" | cut -d'|' -f3)
+
+            # Skip merges entirely
+            if [ "$class" = "SKIP" ]; then
+                continue
+            fi
+
+            # Apply diminishing returns
+            local effective_score
+            effective_score=$(apply_diminishing_returns "$score_class" "$commit_index")
+
+            # Daily cap check (8 pts per repo per day)
+            if [ $((repo_day_pts + effective_score)) -gt 8 ]; then
+                effective_score=$((8 - repo_day_pts))
+                [ "$effective_score" -lt 0 ] && effective_score=0
+            fi
+            repo_day_pts=$((repo_day_pts + effective_score))
+
+            # Determine event type and lane
+            local event_type="CODE_COMMITTED" lane="shipping"
+            case "$class" in
+                MACRO)
+                    if [ "$is_tag" = "true" ]; then
+                        event_type="PRODUCT_RELEASE"
+                    else
+                        event_type="FEATURE_SHIPPED"
+                    fi
+                    ;;
+                STANDARD)
+                    event_type="FEATURE_SHIPPED"
+                    ;;
+                MICRO)
+                    if echo "$reason" | grep -q "docs"; then
+                        event_type="DOCS_PUBLISHED"
+                        lane="distribution"
+                    else
+                        event_type="CODE_COMMITTED"
+                    fi
+                    ;;
+                NOISE)
+                    event_type="CODE_COMMITTED"
+                    effective_score=0
+                    ;;
+            esac
+
+            # Build artifact URL
+            local artifact_url=""
+            if [ -n "$github_repo" ] && [ "$github_repo" != "null" ]; then
+                artifact_url="https://github.com/$github_repo/commit/$sha"
+            fi
+
+            # Build metadata (use heredoc to avoid shell quoting issues)
+            local metadata
+            metadata=$(python3 << METAEOF
+import json
+print(json.dumps({
+    "sha": "$sha",
+    "repo": "$repo_name",
+    "repo_path": "$repo_path",
+    "author": "$author",
+    "files_changed": $files_changed,
+    "class": "$class",
+    "reason": "$reason",
+    "commit_index": $commit_index,
+    "effective_score": $effective_score,
+    "base_score": $score_class,
+    "diminishing": $commit_index > 3
+}))
+METAEOF
+)
+
+            # Check if this project is auto-approved (from cached statuses)
+            local project_status="pending"
+            if echo "$project_statuses" | grep -q "^${repo_name}=approved"; then
+                project_status="approved"
+            elif echo "$project_statuses" | grep -q "^${repo_name}=rejected"; then
+                project_status="rejected"
+            fi
+
+            # If project is approved → auto-approve events. If rejected → skip entirely.
+            local event_status="pending"
+            if [ "$project_status" = "approved" ]; then
+                event_status="approved"
+            elif [ "$project_status" = "rejected" ]; then
+                continue  # Skip this commit entirely
+            fi
+
+            # Submit to scoreboard
+            local title="[$repo_name] $msg"
+            local result
+            result=$(submit_event_with_status "$event_type" "$lane" "$title" "git-discovery" \
+                "$artifact_url" "$business" "$effective_score" "$metadata" "WEAK" "$event_status")
+
+            if echo "$result" | grep -q '"ok":true'; then
+                total_submitted=$((total_submitted + 1))
+                local event_id
+                event_id=$(echo "$result" | python3 -c "import json,sys; print(json.load(sys.stdin).get('event_id',''))" 2>/dev/null || echo "")
+                local status_label="PENDING"
+                [ "$event_status" = "approved" ] && status_label="AUTO-APPROVED"
+                log "  $status_label: [$class] $title (${effective_score}pts) → $event_id"
+            fi
+
+        done <<< "$commits"
+
+        # Update watermark to HEAD
+        local head_sha
+        head_sha=$(git -C "$repo_path" rev-parse HEAD 2>/dev/null)
+        if [ -n "$head_sha" ]; then
+            set_watermark "$repo_path" "$head_sha"
+        fi
+
+    done < <(parse_projects)
+
+    log "Watch complete: $total_new new commits, $total_submitted events submitted (all PENDING)"
+
+    # If we found new events, notify operator via Wirebot
+    if [ "$total_submitted" -gt 0 ]; then
+        notify_operator "$total_submitted"
+    fi
+}
+
+# ─── BACKFILL Command ────────────────────────────────────────────────────────
+
+cmd_backfill() {
+    local days="${1:-1}"
+    log "Backfilling last $days days..."
+
+    # Reset watermarks so watch processes everything
+    echo "{}" > "$WATERMARKS_FILE"
+
+    # Run watch with a since flag
+    cmd_watch "--since=$days days ago"
+}
+
+# ─── STATUS Command ──────────────────────────────────────────────────────────
+
+cmd_status() {
+    echo "═══════════════════════════════════════════════════════════════"
+    echo "  SCOREBOARD DISCOVERY STATUS"
+    echo "═══════════════════════════════════════════════════════════════"
+    echo ""
+
+    # Show tracked projects
+    echo "  TRACKED PROJECTS:"
+    while IFS='|' read -r repo_path repo_name business github_repo; do
+        local watermark
+        watermark=$(get_watermark "$repo_path")
+        local wm_short="${watermark:0:8}"
+        [ -z "$wm_short" ] && wm_short="(not yet)"
+        
+        local exists="✓"
+        [ ! -d "$repo_path/.git" ] && exists="✗"
+
+        printf "    %s %-20s [%s] watermark: %s\n" "$exists" "$repo_name" "$business" "$wm_short"
+    done < <(parse_projects)
+
+    echo ""
+
+    # Show pending events count
+    local pending_count
+    pending_count=$(curl -s "$SCOREBOARD_URL/v1/events?status=pending" \
+        -H "Authorization: Bearer $SCOREBOARD_TOKEN" --max-time 3 2>/dev/null | \
+        python3 -c "import json,sys; d=json.load(sys.stdin); print(len(d.get('items',d.get('events',[]))))" 2>/dev/null || echo "?")
+
+    echo "  PENDING EVENTS: $pending_count"
+    echo ""
+
+    # Show recent log
+    echo "  RECENT LOG:"
+    tail -5 "$LOG_FILE" 2>/dev/null | sed 's/^/    /'
+    echo ""
+    echo "═══════════════════════════════════════════════════════════════"
+}
+
+# ─── NOTIFY OPERATOR ─────────────────────────────────────────────────────────
+# Uses Wirebot gateway to proactively message operator about pending events
+
+notify_operator() {
+    local count="$1"
+
+    # Post to Wirebot's remember tool — creates a memory + can trigger notification
+    curl -s -X POST "http://127.0.0.1:18789/tools/invoke" \
+        -H "Authorization: Bearer $SCOREBOARD_TOKEN" \
+        -H "Content-Type: application/json" \
+        -d "$(python3 -c "
+import json
+print(json.dumps({
+    'tool': 'wirebot_remember',
+    'args': {
+        'text': f'Discovery engine found $count new commits across projects. {$count} events pending your approval at wins.wirebot.chat. Use wb pending to review, wb approve <id> to approve.',
+        'category': 'discovery_notification'
+    }
+}))
+")" --max-time 5 >/dev/null 2>&1 || true
+
+    log "Notified operator: $count pending events"
+}
+
+# ─── Main ────────────────────────────────────────────────────────────────────
+
+case "${1:-help}" in
+    scan)
+        cmd_scan
+        ;;
+    watch)
+        cmd_watch
+        ;;
+    status)
+        cmd_status
+        ;;
+    backfill)
+        cmd_backfill "${2:-1}"
+        ;;
+    help|--help|-h)
+        echo "Usage: wb-discover <command>"
+        echo ""
+        echo "Commands:"
+        echo "  scan              Scan VPS for git repositories"
+        echo "  watch             Check for new commits (run via cron)"
+        echo "  status            Show tracked repos and pending events"
+        echo "  backfill [days]   Discover commits from last N days"
+        echo ""
+        echo "Config: $PROJECTS_FILE"
+        echo "Log:    $LOG_FILE"
+        ;;
+    *)
+        echo "Unknown command: $1 (try: wb-discover help)"
+        exit 1
+        ;;
+esac
