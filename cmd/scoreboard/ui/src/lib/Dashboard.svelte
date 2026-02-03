@@ -531,9 +531,9 @@
   .avatar-img { width: 40px; height: 40px; border-radius: 50%; object-fit: cover; border: 2px solid #2a2a3a; }
 
   /* ─── Business Filter (hierarchical) ─── */
-  .biz-row { display: flex; gap: 5px; overflow-x: auto; margin-bottom: 6px; scrollbar-width: none; -webkit-overflow-scrolling: touch; flex-wrap: wrap; }
+  .biz-row { display: flex; gap: 5px; overflow-x: auto; margin-bottom: 6px; scrollbar-width: none; -webkit-overflow-scrolling: touch; flex-wrap: nowrap; }
   .biz-row::-webkit-scrollbar { display: none; }
-  .biz-chip { display: flex; align-items: center; gap: 3px; padding: 5px 10px; border-radius: 20px; font-size: 11px; font-weight: 600; background: #16161e; border: 1px solid #1e1e30; color: #666; cursor: pointer; white-space: nowrap; transition: all .2s; }
+  .biz-chip { display: flex; align-items: center; gap: 3px; padding: 5px 10px; border-radius: 20px; font-size: 11px; font-weight: 600; background: #16161e; border: 1px solid #1e1e30; color: #666; cursor: pointer; white-space: nowrap; transition: all .2s; flex-shrink: 0; }
   .biz-chip:hover { border-color: #7c7cff40; color: #aaa; }
   .biz-chip.active { background: #7c7cff15; border-color: #7c7cff; color: #7c7cff; }
   .biz-chip.child { padding-left: 6px; font-size: 10px; border-style: dashed; }
