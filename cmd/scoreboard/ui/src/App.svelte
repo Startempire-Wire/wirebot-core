@@ -307,7 +307,7 @@ Tracked with Wirebot — your AI business operating partner`;
     // Store return state so callback knows what we're connecting
     localStorage.setItem('wb_oauth_provider', provider.id);
     // Redirect to server OAuth initiation endpoint
-    window.location.href = `${API}${provider.oauthUrl}`;
+    authRedirect(`${API}${provider.oauthUrl}`);
   }
 
   // ── Plaid Link ──
@@ -534,6 +534,14 @@ Tracked with Wirebot — your AI business operating partner`;
   function authHeaders() {
     const token = getToken();
     return token ? { 'Authorization': `Bearer ${token}` } : {};
+  }
+
+  // For browser redirects that can't send headers - include token in URL
+  function authRedirect(url) {
+    const token = getToken();
+    const sep = url.includes('?') ? '&' : '?';
+    const fullUrl = token ? `${url}${sep}token=${encodeURIComponent(token)}` : url;
+    window.location.href = fullUrl;
   }
 
   // ── Login via Ring Leader (per bigpicture.mdx auth flow) ──
@@ -1115,28 +1123,28 @@ Tracked with Wirebot — your AI business operating partner`;
                     {#await fetch(`${API}/v1/oauth/config`, { headers: authHeaders() }).then(r => r.json()) then oauthCfg}
                       {#if oauthCfg?.providers?.[provider.id === 'youtube' || provider.id === 'youtube_key' ? 'google' : provider.id]}
                         <!-- OAuth configured — real connect button -->
-                        <button class="int-setup-oauth" onclick={() => { window.location.href = `/v1/oauth/${provider.id === 'youtube' || provider.id === 'youtube_key' ? 'google' : provider.id}/authorize`; }}>
+                        <button class="int-setup-oauth" onclick={() => authRedirect(`/v1/oauth/${provider.id === 'youtube' || provider.id === 'youtube_key' ? 'google' : provider.id}/authorize`)}>
                           Connect {provider.name} →
                         </button>
                       {:else}
                         <!-- Not configured — one-click setup -->
                         {#if provider.id === 'github'}
-                          <button class="int-setup-oauth" onclick={() => { window.location.href = '/v1/oauth/setup/github'; }}>
+                          <button class="int-setup-oauth" onclick={() => authRedirect('/v1/oauth/setup/github')}>
                             Set Up GitHub →
                           </button>
                           <p class="int-setup-hint">Creates a GitHub app for your account automatically. One click.</p>
                         {:else if provider.id === 'stripe'}
-                          <button class="int-setup-oauth" onclick={() => { window.location.href = '/v1/oauth/setup/stripe'; }}>
+                          <button class="int-setup-oauth" onclick={() => authRedirect('/v1/oauth/setup/stripe')}>
                             Set Up Stripe →
                           </button>
                           <p class="int-setup-hint">Opens Stripe to enable Connect for your account.</p>
                         {:else if provider.id === 'freshbooks'}
-                          <button class="int-setup-oauth" onclick={() => { window.location.href = '/v1/oauth/setup/freshbooks'; }}>
+                          <button class="int-setup-oauth" onclick={() => authRedirect('/v1/oauth/setup/freshbooks')}>
                             Set Up FreshBooks →
                           </button>
                           <p class="int-setup-hint">Creates a FreshBooks app for your account. One click.</p>
                         {:else if provider.id === 'hubspot'}
-                          <button class="int-setup-oauth" onclick={() => { window.location.href = '/v1/oauth/setup/hubspot'; }}>
+                          <button class="int-setup-oauth" onclick={() => authRedirect('/v1/oauth/setup/hubspot')}>
                             Set Up HubSpot →
                           </button>
                           <p class="int-setup-hint">Creates a HubSpot app for your account. One click.</p>
