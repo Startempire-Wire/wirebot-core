@@ -18,7 +18,7 @@
   import { createEventDispatcher } from 'svelte';
   const dispatch = createEventDispatcher();
 
-  let { data = null, user = null, token = '', activeBusiness: parentBiz = '', pairingComplete = false } = $props();
+  let { data = null, user = null, token = '', activeBusiness: parentBiz = '', pairingComplete = false, onOpenPairing = null } = $props();
   let localBiz = $state(parentBiz || '');  // local business filter state
 
   // Business = legal entity, Product = offering within a business
@@ -276,7 +276,7 @@
 
     <!-- ═══ PAIRING ASSESSMENT CTA (prominent, only when incomplete) ═══ -->
     {#if !pairingComplete}
-      <button class="pairing-cta-card" onclick={() => dispatch('openPairing')}>
+      <button class="pairing-cta-card" onclick={() => { if (onOpenPairing) onOpenPairing(); else dispatch('openPairing'); }}>
         <div class="pcc-left">
           <div class="pcc-icon">🧬</div>
           <div class="pcc-text">

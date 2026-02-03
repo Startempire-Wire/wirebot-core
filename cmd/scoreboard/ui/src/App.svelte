@@ -750,6 +750,7 @@
       {#if view === 'dashboard'}
         <Dashboard {data} user={loggedInUser} token={getToken()} {activeBusiness}
           pairingComplete={selfReportCount > 0}
+          onOpenPairing={() => showPairing = true}
           onnav={(e) => view = e.detail}
           onopenFab={() => showChat = true}
           onopenPairing={() => showPairing = true}
