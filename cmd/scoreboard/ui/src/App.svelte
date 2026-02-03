@@ -1063,7 +1063,7 @@
                     <select class="int-setup-biz" bind:value={connectBusiness}>
                       <option value="">All businesses</option>
                       <option value="SEW">Startempire Wire</option>
-                      <option value="SWN">Startempire Wire Network</option>
+                      <option value="SEWN">Startempire Wire Network</option>
                       <option value="WIR">Wirebot</option>
                       <option value="PVD">Philoveracity Design</option>
                       <option value="SEW">SEW Network</option>
