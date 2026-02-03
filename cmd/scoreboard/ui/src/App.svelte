@@ -12,6 +12,7 @@
   import PairingFlow from './lib/PairingFlow.svelte';
 
   let view = $state('dashboard');
+  let viewHistory = $state(['dashboard']); // SPA navigation stack
   let data = $state(null);
   let feed = $state([]);
   let history = $state([]);
@@ -40,6 +41,27 @@
   let eqAcc = $state(0);
   let selfReportCount = $state(0);
   let showFirstVisit = $state(false);
+
+  // ── SPA Navigation with Back Button Support ──
+  function navigateTo(newView) {
+    if (newView === view) return;
+    viewHistory = [...viewHistory, newView];
+    view = newView;
+    history.pushState({ view: newView, idx: viewHistory.length - 1 }, '', `#${newView}`);
+  }
+  function handlePopState(e) {
+    if (e.state?.view) {
+      view = e.state.view;
+      // Pop from our stack too
+      if (viewHistory.length > 1) {
+        viewHistory = viewHistory.slice(0, -1);
+      }
+    } else if (viewHistory.length > 1) {
+      // No state but we have history — go back
+      viewHistory = viewHistory.slice(0, -1);
+      view = viewHistory[viewHistory.length - 1];
+    }
+  }
   let tokenStatus = $state(null);  // null | 'ok' | 'fail' | 'saving'
   let tokenMsg = $state('');
   let loginUser = $state('');
@@ -405,12 +427,12 @@
       if (oauthStatus === 'ok') {
         connectStatus = 'ok';
         connectMsg = `✓ ${oauthProvider} connected`;
-        view = 'settings';
+        navigateTo('settings');
         loadIntegrations();
       } else {
         connectStatus = 'fail';
         connectMsg = `✗ ${oauthProvider}: ${params.get('error') || 'connection failed'}`;
-        view = 'settings';
+        navigateTo('settings');
       }
       localStorage.removeItem('wb_oauth_provider');
       setTimeout(() => { connectStatus = null; }, 5000);
@@ -460,7 +482,7 @@
         tokenStatus = 'ok';
         tokenMsg = `✓ Connected as ${data.user.display_name} (${data.user.tier})`;
         setTimeout(() => { tokenStatus = null; }, 4000);
-        view = 'score';
+        navigateTo('dashboard');
         fetchAll();
         loadIntegrations();
       } else {
@@ -483,7 +505,9 @@
     feed = [];
     history = [];
     wrapped = null;
-    view = 'score';
+    view = 'dashboard';
+    viewHistory = ['dashboard'];
+    history.replaceState({ view: 'dashboard', idx: 0 }, '', '#dashboard');
   }
 
   function restoreSession() {
@@ -659,6 +683,10 @@
     const to = TAB_ORDER.indexOf(next);
     const direction = to > from ? 'forward' : 'back';
 
+    // Push to browser history for back button support
+    viewHistory = [...viewHistory, next];
+    window.history.pushState({ view: next, idx: viewHistory.length - 1 }, '', `#${next}`);
+
     // Use View Transitions API if available (Chrome 111+, Safari 18+)
     if (document.startViewTransition) {
       document.documentElement.dataset.direction = direction;
@@ -697,7 +725,13 @@
     if (!localStorage.getItem('wb_visited')) {
       showFirstVisit = true;
     }
-    return () => clearInterval(interval);
+    // SPA history: set initial state and listen for back button
+    history.replaceState({ view: 'dashboard', idx: 0 }, '', '#dashboard');
+    window.addEventListener('popstate', handlePopState);
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener('popstate', handlePopState);
+    };
   });
 
   function dismissFirstVisit() {
@@ -751,8 +785,8 @@
         <Dashboard {data} user={loggedInUser} token={getToken()} {activeBusiness}
           pairingComplete={selfReportCount > 0}
           onOpenPairing={() => showPairing = true}
-          onNav={(v) => view = v}
-          onnav={(e) => view = e.detail}
+          onNav={(v) => navigateTo(v)}
+          onnav={(e) => navigateTo(e.detail)}
           onopenFab={() => showChat = true}
           onopenPairing={() => showPairing = true}
           onbusinessChange={(e) => { activeBusiness = e.detail; fetchAll(); }} />
@@ -762,7 +796,7 @@
         <Feed items={feed} pendingCount={data?.pending_count || 0} onHelp={() => showHints = true}
           {activeBusiness} onBusinessChange={(biz) => { activeBusiness = biz; fetchAll(); }} />
       {:else if view === 'season'}
-        <Season season={data.season} {history} streak={data.streak} onHelp={() => showHints = true} onnav={(e) => view = e.detail} />
+        <Season season={data.season} {history} streak={data.streak} onHelp={() => showHints = true} onnav={(e) => navigateTo(e.detail)} />
       {:else if view === 'wrapped'}
         <Wrapped {wrapped} />
       {:else if view === 'settings'}
@@ -1249,7 +1283,7 @@
 
     <!-- Pending badge -->
     {#if data.pending_count > 0}
-      <button class="pending-badge" onclick={() => view = 'feed'}>
+      <button class="pending-badge" onclick={() => navigateTo('feed')}>
         ⏳ {data.pending_count} pending
       </button>
     {/if}

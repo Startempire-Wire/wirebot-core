@@ -65,6 +65,9 @@
   let deferTarget = $state(null);  // task ID being deferred
   let deferMode = $state('time');
   let deferValue = $state('1w');
+  let expandedEvidence = $state(null);  // "taskId:evIdx" for expanded snippet
+  let expandedContext = $state('');     // full context from API
+  let loadingContext = $state(false);
   let partnersOpen = $state(false); // collapsed by default (empty)
   let onboardingComplete = $state(false);
   let stageLoading = $state(false);
@@ -165,6 +168,81 @@
     if (s.length < 3)
       s.push({ icon: '⚡', title: 'Keep Building', text: 'You\'re making progress — keep the streak alive', action: 'score' });
     suggestions = s.slice(0, 4);
+  }
+
+  // Expand snippet to show more surrounding context
+  async function expandSnippet(taskId, evIdx, ev) {
+    const key = `${taskId}:${evIdx}`;
+    if (expandedEvidence === key) {
+      expandedEvidence = null;
+      expandedContext = '';
+      return;
+    }
+    expandedEvidence = key;
+    expandedContext = '';
+    loadingContext = true;
+
+    try {
+      // Fetch more context from the source file
+      const res = await fetch(`${API}/v1/proposals?action=context&file=${encodeURIComponent(ev.file)}&section=${encodeURIComponent(ev.section || '')}`, {
+        headers: headers()
+      });
+      const data = await res.json();
+      expandedContext = data.context || ev.snippet;
+    } catch {
+      expandedContext = ev.snippet || 'Could not load context';
+    }
+    loadingContext = false;
+  }
+
+  // Mark evidence as "not related" — Wirebot learns to ignore similar matches
+  async function markNotRelated(taskId, ev, scope = 'snippet') {
+    try {
+      await fetch(`${API}/v1/proposals?action=feedback`, {
+        method: 'POST',
+        headers: { ...headers(), 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          task_id: taskId,
+          file: ev.file,
+          section: ev.section,
+          snippet: ev.snippet,
+          keywords: ev.keywords,
+          feedback: 'not_related',
+          scope: scope  // 'snippet' = this specific match, 'file' = all matches from this file, 'task' = entire task proposal
+        })
+      });
+      // Remove this evidence from the proposal locally
+      proposals = proposals.map(p => {
+        if (p.task_id === taskId) {
+          const newEvidence = p.evidence.filter(e => e !== ev);
+          // If no evidence left, remove proposal entirely
+          if (newEvidence.length === 0) return null;
+          return { ...p, evidence: newEvidence };
+        }
+        return p;
+      }).filter(Boolean);
+    } catch (e) {
+      console.error('Feedback failed:', e);
+    }
+  }
+
+  // Mark entire proposal as not related — Wirebot learns about this task
+  async function markProposalNotRelated(taskId) {
+    try {
+      await fetch(`${API}/v1/proposals?action=feedback`, {
+        method: 'POST',
+        headers: { ...headers(), 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          task_id: taskId,
+          feedback: 'not_related',
+          scope: 'task'
+        })
+      });
+      // Remove proposal locally
+      proposals = proposals.filter(p => p.task_id !== taskId);
+    } catch (e) {
+      console.error('Feedback failed:', e);
+    }
   }
 
   async function deferTask(taskId, source = 'checklist') {
@@ -619,21 +697,47 @@
               </div>
             {/if}
             <div class="prop-evidence-list">
-              {#each prop.evidence as ev}
-                <div class="prop-ev-item">
+              {#each prop.evidence as ev, evIdx}
+                {@const evKey = `${prop.task_id}:${evIdx}`}
+                <div class="prop-ev-item" class:expanded={expandedEvidence === evKey}>
                   <div class="prop-ev-header">
                     <span class="prop-ev-icon">{ev.source === 'vault' ? '📓' : ev.source === 'gdrive' ? '📁' : ev.source === 'dropbox' ? '📦' : ev.source === 'chat' ? '💬' : '📊'}</span>
                     <span class="prop-ev-file">{ev.file?.split('/').pop() || ev.file}</span>
                     {#if ev.section}
                       <span class="prop-ev-section">§ {ev.section}</span>
                     {/if}
+                    <button class="ev-expand" title="Show more context" onclick={() => expandSnippet(prop.task_id, evIdx, ev)}>
+                      {expandedEvidence === evKey ? '▾' : '▸'}
+                    </button>
                   </div>
                   {#if ev.snippet}
-                    <div class="prop-ev-snippet">"{ev.snippet}"</div>
+                    <div class="prop-ev-snippet" onclick={() => expandSnippet(prop.task_id, evIdx, ev)}>
+                      {#if expandedEvidence === evKey && expandedContext}
+                        {#if loadingContext}
+                          <span class="ev-loading">Loading...</span>
+                        {:else}
+                          {expandedContext}
+                        {/if}
+                      {:else}
+                        "{ev.snippet}"
+                      {/if}
+                    </div>
                   {/if}
+                  <div class="ev-feedback">
+                    <button class="ev-not-related" title="This snippet is not related — Wirebot will learn" onclick={(e) => { e.stopPropagation(); markNotRelated(prop.task_id, ev, 'snippet'); }}>
+                      ❌ Not related
+                    </button>
+                  </div>
                 </div>
               {/each}
             </div>
+            {#if prop.evidence?.length > 0}
+              <div class="prop-all-unrelated">
+                <button class="all-unrelated-btn" onclick={() => markProposalNotRelated(prop.task_id)}>
+                  🚫 None of these are related
+                </button>
+              </div>
+            {/if}
             <div class="prop-actions">
               <button class="prop-accept" onclick={() => acceptProposal(prop.task_id)}>✅ Done</button>
               <button class="prop-defer" onclick={() => { deferTarget = prop.task_id; deferMode = 'time'; deferValue = '1w'; }}>⏳ Defer</button>
@@ -921,9 +1025,35 @@
   .prop-ev-section { font-size: 11px; color: #7c7cff; font-style: italic; }
   .prop-ev-snippet {
     font-size: 11px; color: #999; margin-top: 4px; line-height: 1.4;
-    font-style: italic; padding-left: 20px;
+    font-style: italic; padding-left: 20px; cursor: pointer;
     overflow: hidden; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical;
+    transition: all 0.2s ease;
   }
+  .prop-ev-item.expanded .prop-ev-snippet {
+    -webkit-line-clamp: unset; max-height: none;
+    background: rgba(0,0,0,0.3); padding: 10px; border-radius: 6px;
+    white-space: pre-wrap; font-style: normal;
+  }
+  .ev-expand {
+    background: none; border: none; color: #666; font-size: 12px;
+    cursor: pointer; padding: 2px 6px; margin-left: auto;
+  }
+  .ev-expand:hover { color: #7c7cff; }
+  .ev-feedback { display: flex; justify-content: flex-end; margin-top: 4px; }
+  .ev-not-related {
+    background: none; border: 1px solid rgba(255,80,80,0.2); color: #ff5050;
+    font-size: 9px; padding: 2px 6px; border-radius: 4px; cursor: pointer;
+    opacity: 0.6; transition: opacity 0.2s;
+  }
+  .ev-not-related:hover { opacity: 1; background: rgba(255,80,80,0.1); }
+  .ev-loading { color: #666; }
+  .prop-all-unrelated { margin-bottom: 10px; }
+  .all-unrelated-btn {
+    width: 100%; padding: 6px; border-radius: 6px;
+    background: rgba(255,80,80,0.05); border: 1px dashed rgba(255,80,80,0.2);
+    color: #aa5555; font-size: 11px; cursor: pointer;
+  }
+  .all-unrelated-btn:hover { background: rgba(255,80,80,0.1); color: #ff5050; }
   .prop-actions { display: flex; gap: 6px; }
   .prop-accept, .prop-defer, .prop-reject {
     flex: 1; padding: 8px; border-radius: 8px; border: none;

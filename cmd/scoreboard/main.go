@@ -5064,6 +5064,128 @@ type ProposalEvidence struct {
 }
 
 // generateProposals scans context sources and drafts proposals for manual tasks.
+// fetchExpandedContext reads more lines around a section from a vault file
+func (s *Server) fetchExpandedContext(filePath, section string) string {
+	// Resolve path relative to vault root
+	vaultRoot := "/data/wirebot/obsidian"
+	fullPath := filepath.Join(vaultRoot, filePath)
+	if !strings.HasPrefix(fullPath, vaultRoot) {
+		return "Invalid path"
+	}
+
+	content, err := os.ReadFile(fullPath)
+	if err != nil {
+		// Try direct path (for non-vault files)
+		content, err = os.ReadFile(filePath)
+		if err != nil {
+			return fmt.Sprintf("Could not read file: %s", filePath)
+		}
+	}
+
+	lines := strings.Split(string(content), "\n")
+	if section == "" {
+		// No section — return first ~50 lines
+		if len(lines) > 50 {
+			return strings.Join(lines[:50], "\n") + "\n\n[... truncated ...]"
+		}
+		return string(content)
+	}
+
+	// Find the section heading and return ~30 lines around it
+	sectionLower := strings.ToLower(section)
+	for i, line := range lines {
+		if strings.Contains(strings.ToLower(line), sectionLower) && strings.HasPrefix(strings.TrimSpace(line), "#") {
+			start := i
+			end := i + 30
+			if end > len(lines) {
+				end = len(lines)
+			}
+			return strings.Join(lines[start:end], "\n")
+		}
+	}
+
+	// Section not found — return around first mention
+	for i, line := range lines {
+		if strings.Contains(strings.ToLower(line), sectionLower) {
+			start := i - 5
+			if start < 0 {
+				start = 0
+			}
+			end := i + 25
+			if end > len(lines) {
+				end = len(lines)
+			}
+			return strings.Join(lines[start:end], "\n")
+		}
+	}
+
+	return string(content)[:min(2000, len(content))]
+}
+
+// recordProposalFeedback stores user feedback for learning
+func (s *Server) recordProposalFeedback(taskID, file, section, snippet string, keywords []string, feedback, scope string) {
+	// Create feedback table if not exists
+	s.db.Exec(`CREATE TABLE IF NOT EXISTS proposal_feedback (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		task_id TEXT,
+		file TEXT,
+		section TEXT,
+		snippet TEXT,
+		keywords TEXT,
+		feedback TEXT,
+		scope TEXT,
+		created_at TEXT
+	)`)
+
+	kw, _ := json.Marshal(keywords)
+	s.db.Exec(`INSERT INTO proposal_feedback
+		(task_id, file, section, snippet, keywords, feedback, scope, created_at)
+		VALUES (?,?,?,?,?,?,?,?)`,
+		taskID, file, section, snippet, string(kw), feedback, scope, time.Now().UTC().Format(time.RFC3339))
+
+	log.Printf("[feedback] 📝 %s feedback for task %s: file=%s, scope=%s", feedback, taskID, file, scope)
+
+	// Update proposal status if scope is "task"
+	if scope == "task" {
+		s.db.Exec("UPDATE task_proposals SET status='rejected', reviewed_at=datetime('now') WHERE task_id=?", taskID)
+	}
+
+	// Store in Mem0 for long-term learning
+	go s.storeInMem0("feedback:"+feedback, map[string]interface{}{
+		"task_id":  taskID,
+		"file":     file,
+		"section":  section,
+		"keywords": keywords,
+		"feedback": feedback,
+		"scope":    scope,
+	})
+}
+
+// storeInMem0 persists memory for long-term learning
+func (s *Server) storeInMem0(category string, data map[string]interface{}) {
+	mem0URL := "http://127.0.0.1:8200/v1/memory"
+	text, _ := json.Marshal(data)
+	payload := map[string]interface{}{
+		"text":     fmt.Sprintf("[%s] %s", category, string(text)),
+		"user_id":  "verious",
+		"metadata": data,
+	}
+	body, _ := json.Marshal(payload)
+
+	req, _ := http.NewRequest("POST", mem0URL, bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		log.Printf("[mem0] Failed to store memory: %v", err)
+		return
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == 200 {
+		log.Printf("[mem0] ✓ Stored feedback memory")
+	}
+}
+
 func (s *Server) generateProposals(tasks []interface{}) []TaskProposal {
 	s.ensureProposalsTable()
 	var proposals []TaskProposal
@@ -5072,11 +5194,22 @@ func (s *Server) generateProposals(tasks []interface{}) []TaskProposal {
 	driveIndex := s.loadDriveIndex()
 	dropboxIndex := s.loadDropboxIndex()
 
+	// Load feedback exclusions — Wirebot learns from user decisions
+	excludedFiles := s.getExcludedFiles()
+	excludedTasks := s.getExcludedTasks()
+
 	for _, t := range tasks {
 		tm, ok := t.(map[string]interface{})
 		if !ok {
 			continue
 		}
+		taskID, _ := tm["id"].(string)
+
+		// Skip tasks user marked as "not related"
+		if excludedTasks[taskID] {
+			continue
+		}
+
 		status, _ := tm["status"].(string)
 		if status == "completed" || status == "done" || status == "skipped" || status == "deferred" {
 			continue
@@ -5087,7 +5220,7 @@ func (s *Server) generateProposals(tasks []interface{}) []TaskProposal {
 			continue
 		}
 
-		taskID, _ := tm["id"].(string)
+		// taskID already extracted above for exclusion check
 		title, _ := tm["title"].(string)
 		businessID, _ := tm["business_id"].(string)
 
@@ -5097,7 +5230,7 @@ func (s *Server) generateProposals(tasks []interface{}) []TaskProposal {
 			continue
 		}
 
-		evidence := s.gatherEvidence(title, vaultIndex, driveIndex, dropboxIndex)
+		evidence := s.gatherEvidence(title, taskID, vaultIndex, driveIndex, dropboxIndex, excludedFiles)
 		if len(evidence) == 0 {
 			continue
 		}
@@ -5137,14 +5270,57 @@ func (s *Server) generateProposals(tasks []interface{}) []TaskProposal {
 }
 
 // gatherEvidence collects rich evidence from all sources for a task
-func (s *Server) gatherEvidence(taskTitle string, vault map[string][]VaultEvidence, drive, dropbox map[string][]string) []ProposalEvidence {
+// getExcludedFiles returns files/task combos that user marked as "not related"
+func (s *Server) getExcludedFiles() map[string]map[string]bool {
+	// Map: task_id -> file -> excluded
+	excluded := make(map[string]map[string]bool)
+	rows, err := s.db.Query(`SELECT task_id, file, scope FROM proposal_feedback
+		WHERE feedback='not_related' AND (scope='file' OR scope='snippet')`)
+	if err != nil {
+		return excluded
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var taskID, file, scope string
+		rows.Scan(&taskID, &file, &scope)
+		if excluded[taskID] == nil {
+			excluded[taskID] = make(map[string]bool)
+		}
+		excluded[taskID][file] = true
+	}
+	return excluded
+}
+
+// getExcludedTasks returns tasks the user rejected entirely
+func (s *Server) getExcludedTasks() map[string]bool {
+	excluded := make(map[string]bool)
+	rows, err := s.db.Query(`SELECT DISTINCT task_id FROM proposal_feedback
+		WHERE feedback='not_related' AND scope='task'`)
+	if err != nil {
+		return excluded
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var taskID string
+		rows.Scan(&taskID)
+		excluded[taskID] = true
+	}
+	return excluded
+}
+
+func (s *Server) gatherEvidence(taskTitle, taskID string, vault map[string][]VaultEvidence, drive, dropbox map[string][]string, excludedFiles map[string]map[string]bool) []ProposalEvidence {
 	var evidence []ProposalEvidence
 	seen := map[string]bool{} // dedup by file
+	taskExclusions := excludedFiles[taskID]
 
 	// Vault evidence (richest — has section + snippet)
 	if entries, ok := vault[taskTitle]; ok {
 		for _, ve := range entries {
 			if seen[ve.File] {
+				continue
+			}
+			// Skip files user marked as not related
+			if taskExclusions != nil && taskExclusions[ve.File] {
 				continue
 			}
 			seen[ve.File] = true
@@ -5711,6 +5887,43 @@ func (s *Server) handleProposals(w http.ResponseWriter, r *http.Request) {
 			"ok": true, "id": taskID, "status": "deferred",
 			"mode": mode, "value": value, "deferred_until": deferredUntil,
 		})
+
+	case "context":
+		// Fetch more surrounding context from a source file
+		filePath := r.URL.Query().Get("file")
+		section := r.URL.Query().Get("section")
+		if filePath == "" {
+			http.Error(w, `{"error":"file required"}`, 400)
+			return
+		}
+		context := s.fetchExpandedContext(filePath, section)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"context": context,
+			"file":    filePath,
+			"section": section,
+		})
+
+	case "feedback":
+		// User feedback: mark evidence as not related — Wirebot learns
+		if r.Method != "POST" {
+			http.Error(w, `{"error":"POST required"}`, 405)
+			return
+		}
+		var fb struct {
+			TaskID   string   `json:"task_id"`
+			File     string   `json:"file"`
+			Section  string   `json:"section"`
+			Snippet  string   `json:"snippet"`
+			Keywords []string `json:"keywords"`
+			Feedback string   `json:"feedback"` // "not_related", "helpful", etc.
+			Scope    string   `json:"scope"`    // "snippet", "file", "task"
+		}
+		if err := json.NewDecoder(r.Body).Decode(&fb); err != nil {
+			http.Error(w, `{"error":"invalid JSON"}`, 400)
+			return
+		}
+		s.recordProposalFeedback(fb.TaskID, fb.File, fb.Section, fb.Snippet, fb.Keywords, fb.Feedback, fb.Scope)
+		json.NewEncoder(w).Encode(map[string]interface{}{"ok": true, "feedback": fb.Feedback, "scope": fb.Scope})
 
 	case "generate":
 		// Trigger proposal generation on demand
