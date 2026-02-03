@@ -23,7 +23,7 @@
   const BUSINESSES = [
     { id: '', label: 'All Businesses', icon: '🌐', color: '#7c7cff' },
     { id: 'SEW', label: 'Startempire Wire Network', icon: '⚡', color: '#ffaa00' },
-    { id: 'WIR', label: 'Wirebot', icon: '🤖', color: '#7c7cff' },
+    { id: 'WB', label: 'Wirebot', icon: '🤖', color: '#7c7cff' },
     { id: 'PVD', label: 'Philoveracity Design', icon: '📘', color: '#2ecc71' },
     { id: 'SEW', label: 'SEW Network', icon: '🕸', color: '#ff7c7c' },
   ];

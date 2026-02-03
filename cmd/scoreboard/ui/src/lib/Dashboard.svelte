@@ -27,7 +27,7 @@
     { id: '', label: 'All', icon: '🌐', type: 'all' },
     { id: 'SEW', label: 'Startempire Wire Network', icon: '⚡', type: 'business', legal: 'LLC',
       products: [
-        { id: 'WIR', label: 'Wirebot', icon: '🤖', type: 'product' },
+        { id: 'WB', label: 'Wirebot', icon: '🤖', type: 'product' },
       ]},
     { id: 'PVD', label: 'Philoveracity Design', icon: '📘', type: 'business', legal: 'Sole Prop', products: [] },
   ];
