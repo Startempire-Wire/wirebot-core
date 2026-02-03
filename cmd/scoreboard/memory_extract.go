@@ -45,12 +45,12 @@ DOCUMENT: %s
 ---
 
 RULES:
-1. Extract ONLY facts that are explicitly stated, NOT inferred
-2. Each fact must have a direct quote from the document as context
-3. Confidence: 0.9+ for explicit statements, 0.7-0.9 for clear implications, skip anything below 0.7
+1. Extract facts about the author - inference is OK if supported by quoted text
+2. Each fact MUST have a direct quote (2-4 sentences) from the document as evidence
+3. Confidence: 0.9+ for explicit ("I live in X"), 0.7-0.9 for supported inference ("moved to Corona last year" → lives in Corona)
 4. Focus on: location, work, preferences, relationships, goals, habits, beliefs
-5. Do NOT extract general knowledge or opinions about external topics
-6. The quote must be 2-4 actual sentences from the document
+5. Do NOT extract general knowledge or opinions about external topics (only facts about the AUTHOR)
+6. NO GUESSING - if you can't quote evidence from the document, don't extract it
 
 OUTPUT FORMAT (JSON array):
 [
@@ -151,10 +151,11 @@ CONVERSATION:
 ---
 
 RULES:
-1. Only extract facts the USER explicitly stated about themselves
-2. Include the actual user message as the quote
-3. Confidence 0.9+ for direct statements ("I live in X"), 0.7-0.9 for clear context
-4. Do NOT extract what the assistant said or assumed
+1. Extract facts about the USER - inference OK if supported by their actual words
+2. Include the actual user message as the quote (evidence)
+3. Confidence 0.9+ for direct statements ("I live in X"), 0.7-0.9 for supported inference
+4. Do NOT extract what the assistant said or assumed - only what the USER stated
+5. NO GUESSING - if the user didn't say it, don't extract it
 
 OUTPUT FORMAT (JSON array):
 [
