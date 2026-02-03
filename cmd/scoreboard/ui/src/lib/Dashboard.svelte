@@ -25,11 +25,11 @@
   // Startempire Wire Network IS the network — not a separate entity
   const ENTITIES = [
     { id: '', label: 'All', icon: '🌐', type: 'all' },
-    { id: 'STA', label: 'Startempire Wire Network', icon: '⚡', type: 'business', legal: 'LLC',
+    { id: 'SEW', label: 'Startempire Wire Network', icon: '⚡', type: 'business', legal: 'LLC',
       products: [
         { id: 'WIR', label: 'Wirebot', icon: '🤖', type: 'product' },
       ]},
-    { id: 'PHI', label: 'Philoveracity', icon: '📘', type: 'business', legal: 'Sole Prop', products: [] },
+    { id: 'PVD', label: 'Philoveracity Design', icon: '📘', type: 'business', legal: 'Sole Prop', products: [] },
   ];
 
   // Flat list for iteration (with nesting info)
@@ -273,7 +273,7 @@
         <div class="biz-context">
           {active?.icon} {active?.label}
           {#if active?.type === 'product'}
-            <span class="biz-ctx-type">Product under {ENTITIES.find(e => e.id === active?.parent)?.label || 'Startempire Wire'}</span>
+            <span class="biz-ctx-type">Product under {ENTITIES.find(e => e.id === active?.parent)?.label || 'Startempire Wire Network'}</span>
           {:else if active?.legal}
             <span class="biz-ctx-type">{active.legal}</span>
           {/if}
@@ -374,7 +374,7 @@
             <div class="pa-circle pa-add pe-pulse">+</div>
           </div>
           <p class="pe-text">No growth partners yet</p>
-          <p class="pe-hint">Connect with members on Startempire Wire, then designate them as growth partners.</p>
+          <p class="pe-hint">Connect with members on Startempire Wire Network, then designate them as growth partners.</p>
           <a class="pe-btn" href="https://startempirewire.com/members/" target="_blank">Find Partners →</a>
         </div>
       {/if}
