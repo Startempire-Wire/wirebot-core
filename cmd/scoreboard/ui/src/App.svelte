@@ -732,7 +732,11 @@
   <div class="app">
     <div class="content">
       {#if view === 'dashboard'}
-        <Dashboard {data} user={loggedInUser} token={getToken()} onnav={(e) => view = e.detail} onopenFab={() => showFab = true} />
+        <Dashboard {data} user={loggedInUser} token={getToken()} {activeBusiness}
+          onnav={(e) => view = e.detail}
+          onopenFab={() => showFab = true}
+          onopenPairing={() => showPairing = true}
+          onbusinessChange={(e) => { activeBusiness = e.detail; fetchAll(); }} />
       {:else if view === 'score'}
         <Score {data} {lastUpdate} onHelp={() => showHints = true} user={loggedInUser} onPairing={() => showPairing = true} />
       {:else if view === 'feed'}
