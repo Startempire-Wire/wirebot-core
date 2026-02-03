@@ -22,7 +22,7 @@
   let localBiz = $state(parentBiz || '');  // local business filter state
 
   // Business = legal entity, Product = offering within a business
-  // Startempire Wire Network IS the network — not a separate entity
+  // Startempire Wire (LLC) is the business. Network + Wirebot are products.
   const ENTITIES = [
     { id: '', label: 'All', icon: '🌐', type: 'all' },
     { id: 'SEW', label: 'SEW', fullName: 'Startempire Wire', icon: '🚀', type: 'business', legal: 'LLC',
@@ -274,7 +274,7 @@
         <div class="biz-context">
           {active?.icon} {active?.fullName || active?.label}
           {#if active?.type === 'product'}
-            <span class="biz-ctx-type">Product under {ENTITIES.find(e => e.id === active?.parent)?.fullName || 'Startempire Wire Network'}</span>
+            <span class="biz-ctx-type">Product under {ENTITIES.find(e => e.id === active?.parent)?.fullName || 'Startempire Wire'}</span>
           {:else if active?.legal}
             <span class="biz-ctx-type">{active.legal}</span>
           {/if}
@@ -375,7 +375,7 @@
             <div class="pa-circle pa-add pe-pulse">+</div>
           </div>
           <p class="pe-text">No growth partners yet</p>
-          <p class="pe-hint">Connect with members on Startempire Wire Network, then designate them as growth partners.</p>
+          <p class="pe-hint">Connect with members on Startempire Wire, then designate them as growth partners.</p>
           <a class="pe-btn" href="https://startempirewire.com/members/" target="_blank">Find Partners →</a>
         </div>
       {/if}
