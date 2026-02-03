@@ -1064,39 +1064,56 @@ Tracked with Wirebot — your AI business operating partner`;
               </div>
             {/if}
 
-            <!-- Active integrations (what's already working) -->
+            <!-- Active integrations grouped by provider type -->
             {#if integrations.length > 0}
-              <div class="int-active-section">
-                {#each integrations as acct}
-                  {@const prov = PROVIDERS.find(p => p.id === acct.provider) || { icon: '🔗', name: acct.provider }}
-                  <div class="int-active-card">
-                    <span class="int-active-dot" class:active={acct.status === 'active'} class:error={acct.status === 'error'}></span>
-                    <span class="int-active-icon">{prov.icon}</span>
-                    <div class="int-active-info">
-                      <div class="int-active-name">
-                        {acct.display_name || prov.name}
-                        {#if acct.business_id}
-                          <span class="int-biz-badge">{acct.business_id}</span>
-                        {/if}
-                      </div>
-                      <div class="int-active-meta">
-                        {#if acct.status === 'active'}
-                          ✓ Connected
-                        {:else if acct.status === 'error'}
-                          ⚠ Error
-                        {:else}
-                          {acct.status}
-                        {/if}
-                        {#if acct.last_used_at}
-                          · Last sync {new Date(acct.last_used_at).toLocaleDateString()}
-                        {/if}
-                      </div>
+              {@const grouped = integrations.reduce((acc, acct) => {
+                const key = acct.provider;
+                if (!acc[key]) acc[key] = [];
+                acc[key].push(acct);
+                return acc;
+              }, {})}
+              <div class="int-grouped-section">
+                {#each Object.entries(grouped) as [providerKey, accounts]}
+                  {@const prov = PROVIDERS.find(p => p.id === providerKey) || { icon: '🔗', name: providerKey }}
+                  <details class="int-group" open>
+                    <summary class="int-group-header">
+                      <span class="int-group-icon">{prov.icon}</span>
+                      <span class="int-group-name">{prov.name}</span>
+                      <span class="int-group-count">{accounts.length}</span>
+                      <button class="int-group-add" onclick={(e) => { e.preventDefault(); e.stopPropagation(); showConnectForm = providerKey; }} title="Add another">+</button>
+                    </summary>
+                    <div class="int-group-children">
+                      {#each accounts as acct}
+                        <div class="int-child-card">
+                          <span class="int-child-dot" class:active={acct.status === 'active'} class:error={acct.status === 'error'}></span>
+                          <div class="int-child-info">
+                            <div class="int-child-name">
+                              {acct.display_name?.replace(/^[^(]*\(/, '').replace(/\)$/, '') || acct.display_name || 'Account'}
+                              {#if acct.business_id}
+                                <span class="int-biz-badge">{acct.business_id}</span>
+                              {/if}
+                            </div>
+                            <div class="int-child-meta">
+                              {#if acct.status === 'active'}
+                                ✓ Connected
+                              {:else if acct.status === 'error'}
+                                ⚠ {acct.last_error?.slice(0, 30) || 'Error'}
+                              {:else}
+                                {acct.status}
+                              {/if}
+                              {#if acct.last_used_at}
+                                · {new Date(acct.last_used_at).toLocaleDateString()}
+                              {/if}
+                            </div>
+                          </div>
+                          <button class="int-child-remove" onclick={() => disconnectProvider(acct.id)} title="Disconnect">✕</button>
+                        </div>
+                      {/each}
                     </div>
-                    <button class="int-active-remove" onclick={() => disconnectProvider(acct.id)} title="Disconnect">✕</button>
-                  </div>
+                  </details>
                 {/each}
                 <button class="int-add-another" onclick={() => { const el = document.getElementById('int-all'); if (el) el.style.display = 'block'; }}>
-                  + Add account
+                  + Add new integration
                 </button>
               </div>
             {:else}
@@ -1825,9 +1842,57 @@ Tracked with Wirebot — your AI business operating partner`;
     display: block; width: 100%; padding: 10px;
     background: none; border: 1px dashed #1e1e30; border-radius: 10px;
     color: #555; font-size: 12px; cursor: pointer;
-    text-align: center; transition: all 0.2s;
+    text-align: center; transition: all 0.2s; margin-top: 8px;
   }
   .int-add-another:hover { border-color: #7c7cff40; color: #7c7cff; }
+
+  /* Grouped integrations */
+  .int-grouped-section { display: flex; flex-direction: column; gap: 8px; }
+  .int-group {
+    background: #0d0d14; border: 1px solid #1a1a2a; border-radius: 12px;
+    overflow: hidden;
+  }
+  .int-group[open] { border-color: #252535; }
+  .int-group-header {
+    display: flex; align-items: center; gap: 10px;
+    padding: 12px 14px; cursor: pointer; list-style: none;
+    background: #111118; user-select: none;
+  }
+  .int-group-header::-webkit-details-marker { display: none; }
+  .int-group-header::before {
+    content: '▶'; font-size: 10px; color: #444; transition: transform 0.2s;
+  }
+  .int-group[open] .int-group-header::before { transform: rotate(90deg); }
+  .int-group-icon { font-size: 18px; }
+  .int-group-name { flex: 1; font-size: 13px; font-weight: 600; color: #ccc; }
+  .int-group-count {
+    font-size: 11px; font-weight: 600; color: #666;
+    background: #1a1a2a; padding: 2px 8px; border-radius: 10px;
+  }
+  .int-group-add {
+    background: #1a1a2a; border: none; color: #666;
+    width: 22px; height: 22px; border-radius: 6px;
+    font-size: 14px; cursor: pointer; display: flex;
+    align-items: center; justify-content: center;
+  }
+  .int-group-add:hover { background: #252540; color: #7c7cff; }
+  .int-group-children { padding: 6px 10px 10px; display: flex; flex-direction: column; gap: 4px; }
+  .int-child-card {
+    display: flex; align-items: center; gap: 10px;
+    padding: 8px 10px; background: #0a0a10; border-radius: 8px;
+  }
+  .int-child-dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
+  .int-child-dot.active { background: #2ecc71; }
+  .int-child-dot.error { background: #ff4444; }
+  .int-child-info { flex: 1; min-width: 0; }
+  .int-child-name { font-size: 12px; font-weight: 500; color: #bbb; display: flex; align-items: center; gap: 6px; }
+  .int-child-meta { font-size: 10px; color: #444; margin-top: 1px; }
+  .int-child-remove {
+    background: none; border: none; color: #333; font-size: 12px;
+    cursor: pointer; padding: 2px; opacity: 0; transition: opacity 0.2s;
+  }
+  .int-child-card:hover .int-child-remove { opacity: 1; }
+  .int-child-remove:hover { color: #ff4444; }
 
   /* Empty state */
   .int-empty { text-align: center; padding: 24px 16px; color: #555; }
