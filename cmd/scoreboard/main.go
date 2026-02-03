@@ -452,6 +452,7 @@ func main() {
 	// Integrations management
 	mux.HandleFunc("/v1/integrations", s.auth(s.handleIntegrations))
 	mux.HandleFunc("/v1/integrations/", s.auth(s.handleIntegrationConfig))
+	mux.HandleFunc("/v1/oauth/config", s.auth(s.handleOAuthConfig)) // GET=status, POST=store credentials
 
 	// Webhook receivers (use their own verification, not bearer auth)
 	mux.HandleFunc("/v1/webhooks/github", s.auth(s.handleGitHubWebhook))
@@ -3046,6 +3047,108 @@ func getOAuthConfig(provider string) *oauthProviderConfig {
 		}
 	}
 	return nil
+}
+
+// handleOAuthConfig lets operator store OAuth app credentials (client_id/secret)
+// via the UI instead of env vars. GET returns which providers are configured.
+// POST stores new credentials.
+func (s *Server) handleOAuthConfig(w http.ResponseWriter, r *http.Request) {
+	cors(w)
+	if r.Method == "OPTIONS" {
+		return
+	}
+
+	if r.Method == "GET" {
+		// Return which OAuth providers are configured
+		providers := map[string]bool{
+			"github": oauthGitHubClientID != "",
+			"stripe": oauthStripeClientID != "",
+			"google": oauthGoogleClientID != "",
+		}
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"providers": providers,
+			"callback_url": oauthCallbackBase + "/v1/oauth/callback",
+		})
+		return
+	}
+
+	if r.Method != "POST" {
+		http.Error(w, `{"error":"GET or POST only"}`, 405)
+		return
+	}
+
+	var req struct {
+		Provider     string `json:"provider"`
+		ClientID     string `json:"client_id"`
+		ClientSecret string `json:"client_secret"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, `{"error":"invalid json"}`, 400)
+		return
+	}
+
+	if req.Provider == "" || req.ClientID == "" || req.ClientSecret == "" {
+		http.Error(w, `{"error":"provider, client_id, client_secret required"}`, 400)
+		return
+	}
+
+	// Store in runtime (takes effect immediately)
+	switch req.Provider {
+	case "github":
+		oauthGitHubClientID = req.ClientID
+		oauthGitHubClientSecret = req.ClientSecret
+	case "stripe":
+		oauthStripeClientID = req.ClientID
+		oauthStripeClientSecret = req.ClientSecret
+	case "google":
+		oauthGoogleClientID = req.ClientID
+		oauthGoogleClientSecret = req.ClientSecret
+	default:
+		http.Error(w, `{"error":"unknown provider, use: github, stripe, google"}`, 400)
+		return
+	}
+
+	// Persist to env file so it survives restart
+	envPath := os.Getenv("SCOREBOARD_ENV_PATH")
+	if envPath == "" {
+		envPath = "/run/wirebot/scoreboard.env"
+	}
+	envData, _ := os.ReadFile(envPath)
+	envStr := string(envData)
+
+	prefix := fmt.Sprintf("OAUTH_%s_CLIENT_ID=", strings.ToUpper(req.Provider))
+	secretPrefix := fmt.Sprintf("OAUTH_%s_CLIENT_SECRET=", strings.ToUpper(req.Provider))
+
+	// Replace existing lines
+	lines := strings.Split(envStr, "\n")
+	var newLines []string
+	idSet, secretSet := false, false
+	for _, line := range lines {
+		if strings.HasPrefix(line, prefix) {
+			newLines = append(newLines, fmt.Sprintf("%s%s", prefix, req.ClientID))
+			idSet = true
+		} else if strings.HasPrefix(line, secretPrefix) {
+			newLines = append(newLines, fmt.Sprintf(`%s"%s"`, secretPrefix, req.ClientSecret))
+			secretSet = true
+		} else {
+			newLines = append(newLines, line)
+		}
+	}
+	if !idSet {
+		newLines = append(newLines, fmt.Sprintf("%s%s", prefix, req.ClientID))
+	}
+	if !secretSet {
+		newLines = append(newLines, fmt.Sprintf(`%s"%s"`, secretPrefix, req.ClientSecret))
+	}
+
+	os.WriteFile(envPath, []byte(strings.Join(newLines, "\n")), 0600)
+
+	log.Printf("OAuth: %s credentials configured via UI (client_id: %s...)", req.Provider, req.ClientID[:8])
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"ok":       true,
+		"provider": req.Provider,
+		"message":  fmt.Sprintf("%s OAuth configured — users can now click Connect", req.Provider),
+	})
 }
 
 func (s *Server) handleOAuthStart(w http.ResponseWriter, r *http.Request) {

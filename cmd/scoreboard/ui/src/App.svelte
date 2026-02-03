@@ -925,12 +925,65 @@
                   </div>
                   <p class="int-setup-desc">{provider.desc}</p>
 
-                  {#if provider.auth === 'oauth' && provider.oauthUrl}
-                    <button class="int-setup-oauth" onclick={() => connectProvider(provider)}>
-                      Connect {provider.name} →
-                    </button>
-                  {:else if provider.auth === 'oauth' && !provider.oauthUrl}
-                    <p class="int-setup-coming">OAuth connection coming soon</p>
+                  {#if provider.auth === 'oauth'}
+                    {#await fetch(`${API}/v1/oauth/config`, { headers: authHeaders() }).then(r => r.json()) then oauthCfg}
+                      {#if oauthCfg?.providers?.[provider.id === 'youtube' ? 'google' : provider.id]}
+                        <!-- OAuth app configured — real Connect button -->
+                        <button class="int-setup-oauth" onclick={() => { window.location.href = provider.oauthUrl || `/v1/oauth/${provider.id}/authorize`; }}>
+                          Connect {provider.name} →
+                        </button>
+                      {:else}
+                        <!-- OAuth app not set up — show setup wizard for operator -->
+                        <div class="int-oauth-wizard">
+                          <p class="int-oauth-explain">One-time setup: create a {provider.name} app to enable Connect for all users.</p>
+                          <div class="int-setup-steps">
+                            <div class="int-setup-step">
+                              <span class="int-step-num">1</span>
+                              <span>
+                                {#if provider.id === 'github'}
+                                  Open <a href="https://github.com/settings/developers" target="_blank" class="int-link">GitHub Developer Settings</a> → New OAuth App
+                                {:else if provider.id === 'stripe'}
+                                  Open <a href="https://dashboard.stripe.com/settings/connect" target="_blank" class="int-link">Stripe Connect Settings</a>
+                                {:else if provider.id === 'google' || provider.id === 'youtube' || provider.id === 'youtube_key'}
+                                  Open <a href="https://console.cloud.google.com/apis/credentials" target="_blank" class="int-link">Google Cloud Console</a> → Create OAuth Client
+                                {:else}
+                                  Open the {provider.name} developer dashboard
+                                {/if}
+                              </span>
+                            </div>
+                            <div class="int-setup-step">
+                              <span class="int-step-num">2</span>
+                              <span>Set callback URL to:</span>
+                            </div>
+                          </div>
+                          <div class="int-copy-box" onclick={(e) => { navigator.clipboard.writeText(oauthCfg?.callback_url || `${API}/v1/oauth/callback`); e.target.closest('.int-copy-box').classList.add('copied'); setTimeout(() => e.target.closest('.int-copy-box')?.classList.remove('copied'), 1500); }}>
+                            <code>{oauthCfg?.callback_url || `${API}/v1/oauth/callback`}</code>
+                            <span class="int-copy-hint">tap to copy</span>
+                          </div>
+                          <div class="int-setup-step" style="margin-top:8px;">
+                            <span class="int-step-num">3</span>
+                            <span>Paste the Client ID and Secret below</span>
+                          </div>
+                          <input type="text" bind:value={connectCred} placeholder="Client ID" class="int-setup-input" />
+                          <input type="password" bind:value={connectExtra} placeholder="Client Secret" class="int-setup-input" />
+                          <button class="int-setup-save" onclick={async () => {
+                            connectStatus = 'saving';
+                            const prov = provider.id === 'youtube' || provider.id === 'youtube_key' ? 'google' : provider.id;
+                            const res = await fetch(`${API}/v1/oauth/config`, {
+                              method: 'POST',
+                              headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+                              body: JSON.stringify({ provider: prov, client_id: connectCred, client_secret: connectExtra })
+                            });
+                            const d = await res.json();
+                            connectStatus = d.ok ? 'ok' : 'fail';
+                            connectMsg = d.message || d.error || '';
+                            if (d.ok) { connectCred = ''; connectExtra = ''; showConnectForm = null; }
+                          }} disabled={!connectCred || !connectExtra || connectStatus === 'saving'}>
+                            {connectStatus === 'saving' ? 'Saving...' : `Save ${provider.name} App`}
+                          </button>
+                        </div>
+                      {/if}
+                    {/await}
                   {:else}
                     <div class="int-setup-steps">
                       <div class="int-setup-step">
@@ -1676,6 +1729,23 @@
     cursor: pointer; text-align: center;
   }
   .int-setup-coming { font-size: 12px; color: #555; text-align: center; font-style: italic; }
+
+  /* OAuth Wizard */
+  .int-oauth-wizard { display: flex; flex-direction: column; gap: 8px; }
+  .int-oauth-explain { font-size: 12px; color: #666; margin: 0; line-height: 1.5; }
+  .int-link { color: #7c7cff; text-decoration: underline; }
+  .int-copy-box {
+    background: #0a0a15; border: 1px solid #2a2a40; border-radius: 8px;
+    padding: 10px 12px; cursor: pointer; display: flex;
+    justify-content: space-between; align-items: center;
+    transition: border-color 0.2s;
+  }
+  .int-copy-box:hover { border-color: #7c7cff; }
+  .int-copy-box.copied { border-color: #2ecc71; }
+  .int-copy-box code { font-size: 11px; color: #7c7cff; font-family: monospace; word-break: break-all; }
+  .int-copy-hint { font-size: 9px; color: #444; white-space: nowrap; margin-left: 8px; }
+  .int-copy-box.copied .int-copy-hint { color: #2ecc71; }
+  .int-copy-box.copied .int-copy-hint::after { content: ' ✓'; }
 
   /* Webhook URL display */
   .int-webhook-url {
