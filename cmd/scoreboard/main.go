@@ -5026,13 +5026,13 @@ func (s *Server) runTaskAutoDetect(tasks []interface{}, cl map[string]interface{
 // chat history, and scoreboard events.
 
 type TaskProposal struct {
-	TaskID     string   `json:"task_id"`
-	Title      string   `json:"title"`
-	Status     string   `json:"status"`     // "proposed", "accepted", "rejected"
-	Draft      string   `json:"draft"`      // Wirebot's proposed answer/evidence
-	Evidence   []string `json:"evidence"`   // Source files/docs that support the proposal
-	Confidence float64  `json:"confidence"` // 0-1 how sure Wirebot is
-	CreatedAt  string   `json:"created_at"`
+	TaskID     string             `json:"task_id"`
+	Title      string             `json:"title"`
+	Status     string             `json:"status"`
+	Draft      string             `json:"draft"`
+	Evidence   []ProposalEvidence `json:"evidence"`
+	Confidence float64            `json:"confidence"`
+	CreatedAt  string             `json:"created_at"`
 }
 
 func (s *Server) ensureProposalsTable() {
@@ -5050,24 +5050,22 @@ func (s *Server) ensureProposalsTable() {
 	)`)
 }
 
+// ProposalEvidence is a rich reference shown in the UI
+type ProposalEvidence struct {
+	Source  string `json:"source"`  // "vault", "gdrive", "dropbox", "chat", "events"
+	File    string `json:"file"`    // filename or path
+	Section string `json:"section"` // § heading
+	Snippet string `json:"snippet"` // actual text from document
+	Keywords string `json:"keywords"` // which keywords matched
+}
+
 // generateProposals scans context sources and drafts proposals for manual tasks.
 func (s *Server) generateProposals(tasks []interface{}) []TaskProposal {
 	s.ensureProposalsTable()
 	var proposals []TaskProposal
 
-	// Load Obsidian vault index for keyword matching
-	// Only build vault index every 4h (expensive for 853 files)
 	vaultIndex := s.getCachedVaultIndex()
-
-	// Load pairing profile for business context
-	profileData, _ := os.ReadFile("/data/wirebot/pairing/profile.json")
-	var profile map[string]interface{}
-	json.Unmarshal(profileData, &profile)
-
-	// Load Google Drive file index (if available)
 	driveIndex := s.loadDriveIndex()
-
-	// Load Dropbox file index (if available)
 	dropboxIndex := s.loadDropboxIndex()
 
 	for _, t := range tasks {
@@ -5088,18 +5086,26 @@ func (s *Server) generateProposals(tasks []interface{}) []TaskProposal {
 		taskID, _ := tm["id"].(string)
 		title, _ := tm["title"].(string)
 
-		// Skip if we already have a pending proposal
 		var existing int
 		s.db.QueryRow("SELECT COUNT(*) FROM task_proposals WHERE task_id=? AND status='proposed'", taskID).Scan(&existing)
 		if existing > 0 {
 			continue
 		}
 
-		// Try to draft from available sources
-		draft, evidence, confidence := s.draftProposal(title, vaultIndex, driveIndex, dropboxIndex, profile)
-		if draft == "" {
-			continue // no evidence found
+		evidence := s.gatherEvidence(title, vaultIndex, driveIndex, dropboxIndex)
+		if len(evidence) == 0 {
+			continue
 		}
+
+		// Build confidence from source diversity
+		sourceTypes := map[string]bool{}
+		for _, e := range evidence {
+			sourceTypes[e.Source] = true
+		}
+		confidence := math.Min(0.85, 0.25+float64(len(sourceTypes))*0.15+float64(min(len(evidence), 6))*0.05)
+
+		// Build the draft text
+		draft := s.buildProposalDraft(title, evidence)
 
 		proposal := TaskProposal{
 			TaskID:     taskID,
@@ -5111,16 +5117,134 @@ func (s *Server) generateProposals(tasks []interface{}) []TaskProposal {
 			CreatedAt:  time.Now().UTC().Format(time.RFC3339),
 		}
 
-		evidenceJSON, _ := json.Marshal(evidence)
+		// Store rich evidence as JSON in draft field (UI parses it)
+		richJSON, _ := json.Marshal(evidence)
 		s.db.Exec(`INSERT OR IGNORE INTO task_proposals (task_id, title, status, draft, evidence, confidence)
 			VALUES (?, ?, 'proposed', ?, ?, ?)`,
-			taskID, title, draft, string(evidenceJSON), confidence)
+			taskID, title, string(richJSON), string(richJSON), confidence)
 
 		proposals = append(proposals, proposal)
 		log.Printf("[proposals] 📝 %s — confidence %.0f%%, %d sources", title, confidence*100, len(evidence))
 	}
 
 	return proposals
+}
+
+// gatherEvidence collects rich evidence from all sources for a task
+func (s *Server) gatherEvidence(taskTitle string, vault map[string][]VaultEvidence, drive, dropbox map[string][]string) []ProposalEvidence {
+	var evidence []ProposalEvidence
+	seen := map[string]bool{} // dedup by file
+
+	// Vault evidence (richest — has section + snippet)
+	if entries, ok := vault[taskTitle]; ok {
+		for _, ve := range entries {
+			if seen[ve.File] {
+				continue
+			}
+			seen[ve.File] = true
+			evidence = append(evidence, ProposalEvidence{
+				Source:   "vault",
+				File:     ve.File,
+				Section:  ve.Section,
+				Snippet:  ve.Snippet,
+				Keywords: ve.Keywords,
+			})
+		}
+	}
+
+	// Google Drive
+	if files, ok := drive[taskTitle]; ok {
+		for _, f := range files {
+			name := strings.TrimPrefix(f, "gdrive:")
+			if seen[name] {
+				continue
+			}
+			seen[name] = true
+			evidence = append(evidence, ProposalEvidence{
+				Source: "gdrive",
+				File:   name,
+			})
+			if len(evidence) >= 6 {
+				break
+			}
+		}
+	}
+
+	// Dropbox
+	if files, ok := dropbox[taskTitle]; ok {
+		for _, f := range files {
+			path := strings.TrimPrefix(f, "dropbox:")
+			if seen[path] {
+				continue
+			}
+			seen[path] = true
+			evidence = append(evidence, ProposalEvidence{
+				Source: "dropbox",
+				File:   path,
+			})
+			if len(evidence) >= 6 {
+				break
+			}
+		}
+	}
+
+	// Chat mentions
+	keywords := taskKeywords[taskTitle]
+	if len(keywords) > 0 {
+		var chatSnippet string
+		for _, kw := range keywords[:min(3, len(keywords))] {
+			var content string
+			s.db.QueryRow("SELECT content FROM chat_messages WHERE role='user' AND LOWER(content) LIKE ? ORDER BY created_at DESC LIMIT 1",
+				"%"+strings.ToLower(kw)+"%").Scan(&content)
+			if content != "" && chatSnippet == "" {
+				if len(content) > 150 {
+					content = content[:150] + "…"
+				}
+				chatSnippet = content
+			}
+		}
+		if chatSnippet != "" {
+			evidence = append(evidence, ProposalEvidence{
+				Source:  "chat",
+				File:    "conversation",
+				Snippet: chatSnippet,
+			})
+		}
+	}
+
+	// Cap at 6 total
+	if len(evidence) > 6 {
+		evidence = evidence[:6]
+	}
+	return evidence
+}
+
+// buildProposalDraft creates a human-readable draft from evidence
+func (s *Server) buildProposalDraft(taskTitle string, evidence []ProposalEvidence) string {
+	var parts []string
+	for _, e := range evidence {
+		line := ""
+		switch e.Source {
+		case "vault":
+			line = "📓 " + e.File
+			if e.Section != "" {
+				line += " § " + e.Section
+			}
+			if e.Snippet != "" {
+				line += "\n   \"" + e.Snippet + "\""
+			}
+		case "gdrive":
+			line = "📁 Google Drive: " + e.File
+		case "dropbox":
+			line = "📦 Dropbox: " + e.File
+		case "chat":
+			line = "💬 You mentioned: \"" + e.Snippet + "\""
+		case "events":
+			line = "📊 Scoreboard: " + e.Snippet
+		}
+		parts = append(parts, line)
+	}
+	return strings.Join(parts, "\n")
 }
 
 // Task-to-keyword mapping for vault/drive scanning
@@ -5187,12 +5311,20 @@ var taskKeywords = map[string][]string{
 	"Join Industry Communities":             {"industry community", "professional network"},
 }
 
+// VaultEvidence holds a rich reference: file, section, snippet, matched keywords
+type VaultEvidence struct {
+	File     string `json:"file"`     // relative path
+	Section  string `json:"section"`  // nearest heading (§)
+	Snippet  string `json:"snippet"`  // 2-3 lines of real text around match
+	Keywords string `json:"keywords"` // which keywords matched
+}
+
 // Cached vault index + timestamp
-var cachedVaultIndex map[string][]string
+var cachedVaultIndex map[string][]VaultEvidence
 var vaultIndexBuiltAt time.Time
 var vaultIndexMu sync.Mutex
 
-func (s *Server) getCachedVaultIndex() map[string][]string {
+func (s *Server) getCachedVaultIndex() map[string][]VaultEvidence {
 	vaultIndexMu.Lock()
 	defer vaultIndexMu.Unlock()
 	if cachedVaultIndex != nil && time.Since(vaultIndexBuiltAt) < 4*time.Hour {
@@ -5203,32 +5335,35 @@ func (s *Server) getCachedVaultIndex() map[string][]string {
 	return cachedVaultIndex
 }
 
-// buildVaultIndex indexes Obsidian vault files by keyword presence.
-// Uses word-boundary matching to avoid false positives ("EIN" shouldn't match "being").
-// Only indexes files where 2+ keywords from a task match (higher signal).
-func (s *Server) buildVaultIndex() map[string][]string {
-	index := map[string][]string{} // task title -> []filepath
+// buildVaultIndex indexes Obsidian vault files with section + snippet context.
+// Uses word-boundary matching. Requires 2+ keywords. Captures nearest heading + surrounding lines.
+func (s *Server) buildVaultIndex() map[string][]VaultEvidence {
+	index := map[string][]VaultEvidence{}
 	vaultDir := "/data/wirebot/obsidian"
 
 	// Precompile regexes for each keyword set
-	taskRegexes := map[string][]*regexp.Regexp{}
+	type kwReg struct {
+		keyword string
+		re      *regexp.Regexp
+	}
+	taskRegexes := map[string][]kwReg{}
 	for task, keywords := range taskKeywords {
-		var regs []*regexp.Regexp
+		var regs []kwReg
 		for _, kw := range keywords {
-			// Word boundary match: (?i)\bkeyword\b
 			pattern := `(?i)\b` + regexp.QuoteMeta(kw) + `\b`
 			if r, err := regexp.Compile(pattern); err == nil {
-				regs = append(regs, r)
+				regs = append(regs, kwReg{kw, r})
 			}
 		}
 		taskRegexes[task] = regs
 	}
 
+	headingRe := regexp.MustCompile(`(?m)^#{1,4}\s+(.+)$`)
+
 	filepath.Walk(vaultDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil || info.IsDir() || !strings.HasSuffix(path, ".md") {
 			return nil
 		}
-		// Skip huge files (>100KB) and common noise
 		if info.Size() > 100*1024 {
 			return nil
 		}
@@ -5237,25 +5372,114 @@ func (s *Server) buildVaultIndex() map[string][]string {
 			return nil
 		}
 		text := string(content)
+		lines := strings.Split(text, "\n")
 		relPath := strings.TrimPrefix(path, vaultDir+"/")
 
+		// Build heading index: line number -> heading text
+		headings := headingRe.FindAllStringIndex(text, -1)
+		headingTexts := headingRe.FindAllStringSubmatch(text, -1)
+
+		// For each task, check keywords and capture context
 		for task, regs := range taskRegexes {
-			// Require 2+ keyword matches for high confidence
-			matches := 0
-			for _, r := range regs {
-				if r.MatchString(text) {
-					matches++
-					if matches >= 2 {
-						index[task] = appendUnique(index[task], "vault:"+relPath)
+			var matchedKWs []string
+			var bestLoc int = -1
+			for _, kr := range regs {
+				loc := kr.re.FindStringIndex(text)
+				if loc != nil {
+					matchedKWs = append(matchedKWs, kr.keyword)
+					if bestLoc < 0 {
+						bestLoc = loc[0]
+					}
+				}
+			}
+			if len(matchedKWs) < 2 {
+				continue
+			}
+
+			// Deduplicate: max 3 files per task
+			if len(index[task]) >= 3 {
+				continue
+			}
+			// Skip if this file already in the list
+			dup := false
+			for _, ev := range index[task] {
+				if ev.File == relPath {
+					dup = true
+					break
+				}
+			}
+			if dup {
+				continue
+			}
+
+			// Find nearest heading before the match
+			section := ""
+			if bestLoc >= 0 {
+				for i := len(headings) - 1; i >= 0; i-- {
+					if headings[i][0] <= bestLoc && i < len(headingTexts) {
+						section = strings.TrimSpace(headingTexts[i][1])
 						break
 					}
 				}
 			}
+
+			// Extract snippet: find the line of the match, grab 2 lines context
+			snippet := ""
+			if bestLoc >= 0 {
+				// Find which line the match is on
+				charCount := 0
+				matchLine := 0
+				for i, l := range lines {
+					charCount += len(l) + 1
+					if charCount > bestLoc {
+						matchLine = i
+						break
+					}
+				}
+				start := matchLine
+				if start > 0 {
+					start--
+				}
+				end := matchLine + 2
+				if end > len(lines) {
+					end = len(lines)
+				}
+				var snipLines []string
+				for i := start; i < end; i++ {
+					l := strings.TrimSpace(lines[i])
+					if l == "" || strings.HasPrefix(l, "---") || strings.HasPrefix(l, "```") {
+						continue
+					}
+					// Trim very long lines
+					if len(l) > 150 {
+						l = l[:150] + "…"
+					}
+					snipLines = append(snipLines, l)
+				}
+				snippet = strings.Join(snipLines, " ")
+			}
+
+			// Cap keywords display
+			kwDisplay := strings.Join(matchedKWs, ", ")
+			if len(kwDisplay) > 60 {
+				kwDisplay = kwDisplay[:60] + "…"
+			}
+
+			index[task] = append(index[task], VaultEvidence{
+				File:     relPath,
+				Section:  section,
+				Snippet:  snippet,
+				Keywords: kwDisplay,
+			})
 		}
 		return nil
 	})
 
-	log.Printf("[vault] Indexed %d task-file associations", len(index))
+	total := 0
+	for _, v := range index {
+		total += len(v)
+	}
+	log.Printf("[vault] Indexed %d evidence entries across %d tasks", total, len(index))
 	return index
 }
 
@@ -5316,82 +5540,6 @@ func (s *Server) loadDropboxIndex() map[string][]string {
 }
 
 // draftProposal builds a proposal from available evidence sources
-func (s *Server) draftProposal(taskTitle string, vault, drive, dropbox map[string][]string, profile map[string]interface{}) (string, []string, float64) {
-	var allEvidence []string
-	var draftParts []string
-
-	// Check vault
-	if files, ok := vault[taskTitle]; ok && len(files) > 0 {
-		allEvidence = append(allEvidence, files...)
-		draftParts = append(draftParts, fmt.Sprintf("Found %d related document(s) in your Obsidian vault.", len(files)))
-	}
-
-	// Check Google Drive
-	if files, ok := drive[taskTitle]; ok && len(files) > 0 {
-		allEvidence = append(allEvidence, files...)
-		draftParts = append(draftParts, fmt.Sprintf("Found %d related file(s) in Google Drive.", len(files)))
-	}
-
-	// Check Dropbox
-	if files, ok := dropbox[taskTitle]; ok && len(files) > 0 {
-		allEvidence = append(allEvidence, files...)
-		draftParts = append(draftParts, fmt.Sprintf("Found %d related file(s) in Dropbox.", len(files)))
-	}
-
-	// Check chat history for task mentions
-	var chatMentions int
-	keywords := taskKeywords[taskTitle]
-	if len(keywords) > 0 {
-		for _, kw := range keywords[:min(3, len(keywords))] {
-			var cnt int
-			s.db.QueryRow("SELECT COUNT(*) FROM chat_messages WHERE role='user' AND LOWER(content) LIKE ?",
-				"%"+strings.ToLower(kw)+"%").Scan(&cnt)
-			chatMentions += cnt
-		}
-	}
-	if chatMentions > 0 {
-		allEvidence = append(allEvidence, fmt.Sprintf("chat:%d mentions", chatMentions))
-		draftParts = append(draftParts, fmt.Sprintf("You've discussed this topic %d time(s) in chat.", chatMentions))
-	}
-
-	// Check scoreboard events for related activity
-	var eventMentions int
-	if len(keywords) > 0 {
-		for _, kw := range keywords[:min(3, len(keywords))] {
-			var cnt int
-			s.db.QueryRow("SELECT COUNT(*) FROM events WHERE LOWER(artifact_title) LIKE ? AND status='approved'",
-				"%"+strings.ToLower(kw)+"%").Scan(&cnt)
-			eventMentions += cnt
-		}
-	}
-	if eventMentions > 0 {
-		allEvidence = append(allEvidence, fmt.Sprintf("events:%d related", eventMentions))
-		draftParts = append(draftParts, fmt.Sprintf("Found %d related scoreboard event(s).", eventMentions))
-	}
-
-	if len(allEvidence) == 0 {
-		return "", nil, 0
-	}
-
-	// Build confidence: more diverse sources = higher confidence
-	// Each unique source type adds confidence, not raw count
-	sourceTypes := map[string]bool{}
-	for _, e := range allEvidence {
-		parts := strings.SplitN(e, ":", 2)
-		sourceTypes[parts[0]] = true
-	}
-	confidence := math.Min(0.85, 0.25+float64(len(sourceTypes))*0.15+float64(min(len(allEvidence), 10))*0.02)
-
-	draft := fmt.Sprintf("**Wirebot detected evidence for \"%s\":**\n\n%s\n\n"+
-		"📎 Sources: %s\n\n"+
-		"_Review these sources and tap ✅ to confirm this task is done, or 📝 to refine._",
-		taskTitle,
-		strings.Join(draftParts, "\n"),
-		strings.Join(allEvidence, ", "))
-
-	return draft, allEvidence, confidence
-}
-
 // handleProposals serves the proposal API
 func (s *Server) handleProposals(w http.ResponseWriter, r *http.Request) {
 	cors(w)
@@ -5417,9 +5565,41 @@ func (s *Server) handleProposals(w http.ResponseWriter, r *http.Request) {
 		var proposals []TaskProposal
 		for rows.Next() {
 			var p TaskProposal
-			var evidenceJSON string
-			rows.Scan(&p.TaskID, &p.Title, &p.Status, &p.Draft, &evidenceJSON, &p.Confidence, &p.CreatedAt)
-			json.Unmarshal([]byte(evidenceJSON), &p.Evidence)
+			var draftOrJSON, evidenceJSON string
+			rows.Scan(&p.TaskID, &p.Title, &p.Status, &draftOrJSON, &evidenceJSON, &p.Confidence, &p.CreatedAt)
+			// Evidence column contains rich JSON (ProposalEvidence array)
+			if json.Unmarshal([]byte(evidenceJSON), &p.Evidence) != nil {
+				// Fallback: old format was string array
+				var oldEvidence []string
+				json.Unmarshal([]byte(evidenceJSON), &oldEvidence)
+				for _, e := range oldEvidence {
+					p.Evidence = append(p.Evidence, ProposalEvidence{Source: "vault", File: e})
+				}
+			}
+			// Draft is also rich JSON now, build human-readable from evidence
+			p.Draft = ""
+			for _, e := range p.Evidence {
+				line := ""
+				switch e.Source {
+				case "vault":
+					line = "📓 " + e.File
+					if e.Section != "" {
+						line += " § " + e.Section
+					}
+					if e.Snippet != "" {
+						line += "\n   \"" + e.Snippet + "\""
+					}
+				case "gdrive":
+					line = "📁 " + e.File
+				case "dropbox":
+					line = "📦 " + e.File
+				case "chat":
+					line = "💬 \"" + e.Snippet + "\""
+				}
+				if line != "" {
+					p.Draft += line + "\n"
+				}
+			}
 			proposals = append(proposals, p)
 		}
 		json.NewEncoder(w).Encode(map[string]interface{}{

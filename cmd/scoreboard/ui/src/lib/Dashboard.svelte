@@ -524,9 +524,20 @@
               <span class="prop-title">{prop.title}</span>
               <span class="prop-conf" title="Confidence">{Math.round(prop.confidence * 100)}%</span>
             </div>
-            <div class="prop-body">
+            <div class="prop-evidence-list">
               {#each prop.evidence as ev}
-                <span class="prop-evidence">{ev.startsWith('vault:') ? '📓' : ev.startsWith('gdrive:') ? '📁' : ev.startsWith('dropbox:') ? '📦' : ev.startsWith('chat:') ? '💬' : '📊'} {ev.split(':').slice(1).join(':')}</span>
+                <div class="prop-ev-item">
+                  <div class="prop-ev-header">
+                    <span class="prop-ev-icon">{ev.source === 'vault' ? '📓' : ev.source === 'gdrive' ? '📁' : ev.source === 'dropbox' ? '📦' : ev.source === 'chat' ? '💬' : '📊'}</span>
+                    <span class="prop-ev-file">{ev.file?.split('/').pop() || ev.file}</span>
+                    {#if ev.section}
+                      <span class="prop-ev-section">§ {ev.section}</span>
+                    {/if}
+                  </div>
+                  {#if ev.snippet}
+                    <div class="prop-ev-snippet">"{ev.snippet}"</div>
+                  {/if}
+                </div>
               {/each}
             </div>
             <div class="prop-actions">
@@ -751,14 +762,22 @@
     border: 1px solid rgba(124,124,255,0.3);
     border-radius: 10px; padding: 12px;
   }
-  .prop-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
+  .prop-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
   .prop-title { font-size: 13px; font-weight: 600; color: #e8e8ff; }
   .prop-conf { font-size: 11px; color: #7c7cff; background: rgba(124,124,255,0.1); padding: 2px 6px; border-radius: 8px; }
-  .prop-body { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 8px; }
-  .prop-evidence {
-    font-size: 11px; color: #8888aa; background: rgba(255,255,255,0.05);
-    padding: 2px 6px; border-radius: 6px; white-space: nowrap;
-    max-width: 200px; overflow: hidden; text-overflow: ellipsis;
+  .prop-evidence-list { display: flex; flex-direction: column; gap: 8px; margin-bottom: 10px; }
+  .prop-ev-item {
+    background: rgba(255,255,255,0.03); border-left: 2px solid #333;
+    padding: 6px 8px; border-radius: 0 6px 6px 0;
+  }
+  .prop-ev-header { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+  .prop-ev-icon { font-size: 14px; flex-shrink: 0; }
+  .prop-ev-file { font-size: 12px; font-weight: 500; color: #aaa; }
+  .prop-ev-section { font-size: 11px; color: #7c7cff; font-style: italic; }
+  .prop-ev-snippet {
+    font-size: 11px; color: #999; margin-top: 4px; line-height: 1.4;
+    font-style: italic; padding-left: 20px;
+    overflow: hidden; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical;
   }
   .prop-actions { display: flex; gap: 8px; }
   .prop-accept {
