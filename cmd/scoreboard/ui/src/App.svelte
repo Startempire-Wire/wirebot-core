@@ -1065,6 +1065,7 @@ Tracked with Wirebot — your AI business operating partner`;
           <!-- ── Connected Accounts ── -->
           <div class="s-group">
             <label>Connected Accounts</label>
+            <div style="font-size:10px;color:#666;margin:4px 0;">DEBUG: {integrations.length} integrations, {Object.keys(groupedIntegrations).length} groups</div>
 
             {#if connectStatus}
               <div class="token-status" class:ok={connectStatus === 'ok'} class:fail={connectStatus === 'fail'} class:saving={connectStatus === 'saving'}>
