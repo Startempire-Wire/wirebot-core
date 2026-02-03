@@ -1,8 +1,8 @@
 # Wirebot Current State
 
-> **What's actually deployed, running, and operational — vs what's planned.**
+> **What's actually deployed, running, and operational.**
 >
-> Last updated: 2026-01-31
+> Last updated: 2026-02-02
 
 ---
 
@@ -10,206 +10,146 @@
 
 | Phase | Status | Notes |
 |-------|--------|-------|
-| **Phase 0: Foundation** | 🟢 Core Complete | Gateway running, auth working, skills loaded, **memory operational**, cron active. Letta/Mem0 deferred. |
-| Phase 1: Dogfooding | 🟡 Starting | Memory + identity + accountability cadence live. Dashboard frontend next. |
-| Phase 2: Rollout Prep | ⬜ Not Started | |
-| Phase 3: Network Integration | ⬜ Not Started | |
-| Phase 4: Scale | ⬜ Not Started | |
-
-See [LAUNCH_ORDER.md](./LAUNCH_ORDER.md) for the full roadmap.
+| **Phase 0: Foundation** | 🟢 Complete | Gateway, auth, memory, cron, pairing, Drift |
+| **Phase 1: Dogfooding** | 🟢 Active | Dashboard, Scoreboard, Extension, Connect overlay all live |
+| **Phase 2: Rollout Prep** | 🟡 Starting | Auto-provisioning built, onboarding flow ready |
+| Phase 3: Network Integration | ⬜ Planned | Ring Leader content distribution |
+| Phase 4: Scale | ⬜ Planned | Multi-tenant beta test |
 
 ---
 
-## Infrastructure (Running)
+## Surfaces (All Live)
 
-### ✅ Clawdbot Gateway
+### 🏠 Scoreboard PWA — `wins.wirebot.chat`
+- **Stack**: Go + Svelte 5 + SQLite + PWA
+- **Views**: Dashboard (Home), Score, Feed, Season, Wrapped, Settings
+- **Auth**: Operator token + Ring Leader JWT
+- **Score**: 85/100 (Ship 40/40, Dist 25/25, Rev 5/20, Sys 15/15)
+- **API**: 60+ endpoints (events, score, feed, chat, pairing, drift, integrations, reconciliation)
+- **Features**: 4-lane scoring, approve-once trust, Drift system, R.A.B.I.T., pairing v2, chat, share cards
 
-| Property | Value |
-|----------|-------|
-| **Service** | `clawdbot-gateway.service` (systemd, enabled) |
-| **Version** | Clawdbot 2026.1.24-3 |
-| **Node** | v22.22.0 (nvm) |
-| **Port** | 18789 (loopback) |
-| **Config** | `/data/wirebot/users/verious/clawdbot.json` |
-| **State dir** | `/data/wirebot/users/verious/` |
-| **Workspace** | `/home/wirebot/clawd` |
-| **Launcher** | `/data/wirebot/bin/clawdbot-gateway.sh` |
-| **Log** | `/home/wirebot/logs/clawdbot-gateway.log` |
-| **Default model** | `anthropic/claude-opus-4-5` |
-| **Auth** | Anthropic OAuth (Claude Max 5x) + OpenRouter API key |
-| **Secrets** | rbw vault injection via systemd ExecStartPre |
+### 🧩 Chrome Extension — v0.2.2
+- **Components**: WirebotTab (chat), ProfileSummary, Drift card, R.A.B.I.T. alert, WebRing, NetworkOverlay
+- **Auth**: WP login → Ring Leader JWT
+- **Download**: `https://wins.wirebot.chat/sewn-extension-v0.2.2.zip`
 
-### ✅ Memory System (memory-core)
+### 🔌 Connect Plugin — v0.3.1
+- **Deployed**: startempirewire.com
+- **Features**: Wirebot overlay widget, Drift bar, R.A.B.I.T. alert, Ring Leader client, REST API
 
-| Property | Value |
-|----------|-------|
-| **Plugin** | `memory-core` (built-in) |
-| **Provider** | local (embeddinggemma-300M, Q8_0 GGUF) |
-| **Search** | Hybrid: BM25 + vector (sqlite-vec) |
-| **Store** | `/data/wirebot/users/verious/memory/verious.sqlite` |
-| **Files indexed** | 2/2 (MEMORY.md + memory/2026-01-31.md) |
-| **Chunks** | 4 |
-| **FTS** | Ready |
-| **Vector** | Ready (768 dims) |
-| **Cache** | Enabled (50K cap) |
-| **File watcher** | Active (auto-reindex on changes) |
+### 🔑 Ring Leader — v0.2.1
+- **Deployed**: startempirewire.network
+- **Endpoints**: auth (validate/token/issue), content (posts/events/podcasts/activity/directory), member (me/scoreboard/profile/integrations), network (stats/members)
+- **Features**: JWT issuance, profile sync, preferences, auto-provisioning, tier-gated content
+- **Security**: Tier derived from JWT only (no client-provided tier spoofing)
 
-### ✅ Workspace Identity
+### 🤖 Gateway — OpenClaw v2026.1.30
+- **URL**: helm.wirebot.chat → port 18789
+- **Tools**: wirebot_recall, wirebot_remember, wirebot_business_state, wirebot_checklist, wirebot_score
+- **Models**: Kimi → GLM → OpenRouter (3-tier fallback)
 
-| File | Status | Content |
-|------|--------|---------|
-| `IDENTITY.md` | ✅ Populated | Wirebot = AI business operating partner, ⚡ |
-| `SOUL.md` | ✅ Populated | Accountability-first mentor, 4-pillar business coaching |
-| `USER.md` | ✅ Populated | Verious Smith III context |
-| `MEMORY.md` | ✅ Populated | Architecture, tiers, coaching model, decisions |
-| `memory/2026-01-31.md` | ✅ Created | Day 1 log |
-| `AGENTS.md` | ✅ Pre-existing | Agent operating instructions |
-| `TOOLS.md` | ✅ Pre-existing | Tool notes |
-| `HEARTBEAT.md` | ✅ Pre-existing | Heartbeat checklist |
-
-### ✅ Accountability Cron
-
-| Job | Schedule | Next Run |
-|-----|----------|----------|
-| Daily Standup | 8:00 AM PT daily | ~19h |
-| EOD Review | 6:00 PM PT daily | ~5h |
-| Weekly Planning | 7:00 AM PT Mondays | ~2d |
-
-### ✅ Cloudflare Tunnel
-
-| Property | Value |
-|----------|-------|
-| **Service** | `cloudflared-wirebot.service` (systemd, enabled) |
-| **Tunnel ID** | `57df17a8-b9d1-4790-bab9-8157ac51641b` |
-| **Config** | `/etc/cloudflared/wirebot.yml` |
-| **Routes** | `helm.wirebot.chat` → `127.0.0.1:18789` |
-| | `api.wirebot.chat` → `localhost:8100` (no listener yet) |
-
-### ✅ Wirebot Skills (Loaded)
-
-Skills loaded from `/home/wirebot/wirebot-core/skills/`:
-
-| Skill | Status |
-|-------|--------|
-| `wirebot-core` | ✅ Loaded |
-| `wirebot-accountability` | ✅ Loaded |
-| `wirebot-memory` | ✅ Loaded |
-| `wirebot-network` | ✅ Loaded |
-
-### ✅ Auth Profiles
-
-| Profile | Provider | Type | Status |
-|---------|----------|------|--------|
-| `anthropic:claude-cli` | Anthropic | OAuth | ✅ Working (auto-refresh) |
-| `openrouter:default` | OpenRouter | API Key | ⚠️ Cursor-provisioned (no direct API) |
+### 🌐 startempirewire.com
+- **Stack**: WordPress + BuddyBoss + MemberPress + Connect Plugin
+- **Auth**: MemberPress → Ring Leader JWT relay
+- **SSO**: mu-plugin for auto-redirect to scoreboard
 
 ---
 
-## Infrastructure (Not Yet Deployed)
+## Memory Systems (All Operational)
 
-### ⏸️ Mem0 Server
-
-- Python package installed (mem0ai 1.0.2), plugin skeleton exists
-- Needs embedding API key (OpenAI, Gemini, or real OpenRouter key)
-- Primary use case: browser sync (OpenMemory → Wirebot)
-- **Deferred**: memory-core covers search/recall needs
-- See [MEM0_PLUGIN.md](./MEM0_PLUGIN.md)
-
-### ⏸️ Letta Server
-
-- `letta` CLI is Letta Code (coding agent), NOT the memory server
-- Would need separate Python Letta server for structured state
-- **Deferred**: business state can be modeled in workspace files for now
-- See [LETTA_INTEGRATION.md](./LETTA_INTEGRATION.md)
-
-### ⏸️ memory-lancedb
-
-- Plugin exists but hardcoded for OpenAI embeddings
-- Config supports OpenAI-compatible via `memorySearch.remote.baseUrl`
-- **Blocked**: OpenRouter Cursor key returns 401 on direct API calls
-- **Unblocked when**: real OpenRouter API key generated at openrouter.ai/keys
-
-### ❌ WordPress Plugin (`startempire-wirebot`)
-
-- Not started
-- Required for tier routing, provisioning UI, channel setup
-- See [PLUGIN.md](./PLUGIN.md)
-
-### ❌ Dashboard Frontend
-
-- Figma mockup analyzed ([DISCOVERY_NOTES.md](./DISCOVERY_NOTES.md))
-- Mobile-first business operating dashboard
-- Not a chat app — "Ask Wirebot" is one input element
-- Needs: checklist engine, progress tracking, standup UI
-
-### ❌ api.wirebot.chat
-
-- Route exists in Cloudflare tunnel config (`localhost:8100`)
-- No service listening on port 8100
+| System | Port | Purpose | Status |
+|--------|------|---------|--------|
+| **memory-core** | embedded | Workspace file recall (BM25+vector) | ✅ Active |
+| **Mem0** | 8200 | Conversation facts (fastembed, 80+ memories) | ✅ Active |
+| **Letta** | 8283 | Structured business state (4 blocks, PostgreSQL) | ✅ Active |
+| **memory-syncd** | 8201 | Hot cache + sync daemon (Go, sub-ms) | ✅ Active |
 
 ---
 
-## Config (Current)
+## Pairing Engine v2 (Fully Operational)
 
-```json5
-{
-  agents: {
-    defaults: {
-      workspace: "/home/wirebot/clawd",
-      skipBootstrap: true,
-      userTimezone: "America/Los_Angeles",
-      memorySearch: {
-        provider: "local",
-        fallback: "none",
-        query: { hybrid: { enabled: true, vectorWeight: 0.7, textWeight: 0.3 } },
-        cache: { enabled: true, maxEntries: 50000 },
-        sync: { watch: true }
-      }
-    },
-    list: [{
-      id: "verious",
-      name: "Wirebot",
-      identity: { name: "Wirebot", theme: "AI business operating partner", emoji: "⚡" }
-    }]
-  },
-  gateway: {
-    port: 18789, mode: "local", bind: "loopback",
-    auth: { mode: "token", token: "<redacted>", allowTailscale: true }
-  },
-  skills: { load: { extraDirs: ["/home/wirebot/wirebot-core/skills"] } },
-  plugins: { allow: ["memory-core"] }
-}
-```
+- **Score**: 60/100 (Partner), 47.5% accuracy
+- **Instruments**: 7 (ASI-12, CSI-8, ETM-6, RDS-6, COG-8, BIZ-6, TIME-6) — 47 questions
+- **Signals**: 1,326 total (879 messages, 421 events, 853 vault docs)
+- **Drift**: 78/100 (IN DRIFT), modesty reflex 0.375 (open)
+- **R.A.B.I.T.**: Clear
+- **Evidence**: 455+ records in SQLite
+- **Vault**: 853 Obsidian docs ingested (2.96M words, 2013–2025)
 
 ---
 
-## What's Working (Can Dogfood Now)
+## Integrations (6 Active)
 
-- ✅ Gateway with WebSocket RPC (v3 protocol)
-- ✅ Cloudflare tunnel (helm.wirebot.chat)
-- ✅ Anthropic Claude Opus 4.5 via OAuth
-- ✅ Memory: hybrid search (vector + BM25), local embeddings, file watcher
-- ✅ Identity: IDENTITY.md, SOUL.md, USER.md, MEMORY.md all populated
-- ✅ Skills: 4 wirebot skills + ~12 bundled skills eligible
-- ✅ Accountability cron: daily standup, EOD review, weekly planning
-- ✅ Systemd service with auto-restart + rbw secret injection
+| Integration | Type | Interval | Status |
+|-------------|------|----------|--------|
+| Blog RSS × 2 | Poller | 15 min | ✅ |
+| Cloudflare | Poller | Daily | ✅ 50 zones |
+| WooCommerce | Poller | 30 min | ✅ |
+| Sendy | Poller | Hourly | ✅ 4 brands, 1,070 subs |
+| Stripe | Webhook | Real-time | ✅ 9 event types |
+| MemberPress | Webhook | Real-time | ✅ mu-plugin |
 
-## What's Needed Next
-
-- 🔜 Dashboard frontend (Figma → code, mobile-first)
-- 🔜 Business setup checklist data model (Idea→Launch→Growth tasks)
-- 🔜 HTTP API endpoints (chatCompletions + responses) for frontend
-- 🔜 Real OpenRouter API key for enhanced embeddings + model fallbacks
-- 🔜 WordPress plugin for onboarding + tier gating
-- 🔜 First beta tester onboarded
+**Ready but need credentials**: FreshBooks, PostHog, UptimeRobot, RescueTime, Discord, HubSpot, GitHub OAuth, Google OAuth
 
 ---
 
-## See Also
+## Cron Jobs
 
-- [LAUNCH_ORDER.md](./LAUNCH_ORDER.md) — Full roadmap
-- [DISCOVERY_NOTES.md](./DISCOVERY_NOTES.md) — Figma + ecosystem analysis
-- [OPERATIONS.md](./OPERATIONS.md) — How to operate what's running
-- [AUTH_AND_SECRETS.md](./AUTH_AND_SECRETS.md) — Current auth setup
-- [MONITORING.md](./MONITORING.md) — How to verify health
-- [ARCHITECTURE.md](./ARCHITECTURE.md) — Target architecture
+| Job | Schedule | Script |
+|-----|----------|--------|
+| Git Discovery Watch | */5 min | `/data/wirebot/bin/wb-discover watch` |
+| Systems Health | Daily 6 AM PT | `/data/wirebot/bin/wb-systems-check` |
+| Obsidian Vault Sync | Daily 4 AM PT | `/data/wirebot/bin/obsidian-sync.sh` |
+| Weekly Memory Sync | Sunday midnight | `/data/wirebot/bin/memory-sync.sh` |
+
+---
+
+## CLI (`wb`)
+
+1,290 lines, 30+ commands across 7 sections:
+- **Pairing**: pair, pair status, pair skip, pair reset
+- **Businesses**: overview, businesses, focus, add-business
+- **Checklist**: status, next, daily, complete, skip, add, list, detail, stage
+- **Memory**: recall, remember, state, cache, memory, sync
+- **System**: health, services, logs, pillars
+- **Scoreboard**: score, streak, season, feed, ship, submit, pending, approve, reject, intent, discover, projects, lock, audit, wins, card
+- **Drift**: drift, handshake, rabbit
+
+---
+
+## GitHub Repos
+
+| Repo | Latest Commit | Lines |
+|------|---------------|-------|
+| wirebot-core | `1a4086d` Dashboard + onboarding | ~15K Go + ~3K Svelte |
+| Startempire-Wire-Network | `abddcce` Extension v0.2.2 | ~2K Svelte |
+| Startempire-Wire-Network-Connect | `e023388` Overlay v0.3.1 | ~1.5K PHP+JS |
+| Startempire-Wire-Network-Ring-Leader | `0eb69f1` Auto-provisioning | ~1.5K PHP |
+| focusa | Cognitive memory OS specs | 55 docs |
+
+---
+
+## Key Metrics
+
+| Metric | Value |
+|--------|-------|
+| Execution Score | 85/100 |
+| Ship Streak | 🔥 2 days |
+| Season | Red-to-Black (Day 1) |
+| Record | 1W-1L |
+| Ships Today | 39 |
+| Drift Score | 78/100 (IN DRIFT) |
+| Pairing Accuracy | 47.5% |
+| Total Events | ~300+ |
+| Approved Sources | 9 |
+| Active Services | 7 |
+
+---
+
+## Next Steps
+
+1. **Connect FreshBooks** — Paste Bearer Token + Account ID in Settings
+2. **Create OAuth apps** — GitHub, Stripe, Google (manual, 2 min each)
+3. **Beta test** — Invite first external user through full onboarding flow
+4. **Revenue lane** — Get real financial data flowing (currently 5/20)
+5. **Multi-account per provider** — UI "Add another" button
