@@ -53,6 +53,7 @@ var (
 	plaidClientID  = envOr("PLAID_CLIENT_ID", "")       // Plaid client_id
 	plaidSecret    = envOr("PLAID_SECRET", "")          // Plaid secret (sandbox/development/production)
 	plaidEnv       = envOr("PLAID_ENV", "sandbox")      // sandbox | development | production
+	gatewayToken   = envOr("GATEWAY_TOKEN", "")         // OpenClaw gateway auth token
 )
 
 func envOr(key, def string) string {
@@ -184,7 +185,8 @@ type ScoreboardView struct {
 	StallHours   float64   `json:"stall_hours,omitempty"`
 	Penalties    int       `json:"penalties"`
 	StreakBonus  int       `json:"streak_bonus"`
-	PendingCount int       `json:"pending_count"`
+	PendingCount       int `json:"pending_count"`
+	MemoryPendingCount int `json:"memory_pending_count"`
 }
 
 type ClockView struct {
@@ -807,6 +809,18 @@ func (s *Server) initDB() {
 			profile_impact TEXT DEFAULT '{}',
 			constructs TEXT DEFAULT '[]',
 			created_at TEXT NOT NULL DEFAULT (datetime('now'))
+		)`,
+		`CREATE TABLE IF NOT EXISTS memory_queue (
+			id TEXT PRIMARY KEY,
+			memory_text TEXT NOT NULL,
+			source_type TEXT NOT NULL DEFAULT 'unknown',
+			source_file TEXT DEFAULT '',
+			source_context TEXT DEFAULT '',
+			confidence REAL DEFAULT 0.5,
+			status TEXT DEFAULT 'pending',
+			correction TEXT DEFAULT '',
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			reviewed_at DATETIME
 		)`,
 	}
 	for _, stmt := range stmts {
@@ -1525,6 +1539,10 @@ func (s *Server) handleScoreboard(w http.ResponseWriter, r *http.Request) {
 	var pendingCount int
 	s.db.QueryRow("SELECT COUNT(*) FROM events WHERE status='pending'").Scan(&pendingCount)
 
+	// Count pending memory queue items
+	var memoryPendingCount int
+	s.db.QueryRow("SELECT COUNT(*) FROM memory_queue WHERE status='pending'").Scan(&memoryPendingCount)
+
 	// Calculate streak bonus
 	streakBonus := 0
 	if streak.Current >= 30 {
@@ -1563,7 +1581,8 @@ func (s *Server) handleScoreboard(w http.ResponseWriter, r *http.Request) {
 		StallHours:   stallHours,
 		Penalties:    daily.Penalties,
 		StreakBonus:  streakBonus,
-		PendingCount: pendingCount,
+		PendingCount:       pendingCount,
+		MemoryPendingCount: memoryPendingCount,
 	}
 
 	// Dashboard mode: include today's feed + checklist summary
@@ -1642,12 +1661,15 @@ func (s *Server) handleFeed(w http.ResponseWriter, r *http.Request) {
 	// Also return pending count for badge display
 	var pendingCount int
 	s.db.QueryRow("SELECT COUNT(*) FROM events WHERE status='pending'").Scan(&pendingCount)
+	var memoryPendingCount int
+	s.db.QueryRow("SELECT COUNT(*) FROM memory_queue WHERE status='pending'").Scan(&memoryPendingCount)
 
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"items":           items,
-		"count":           len(items),
-		"pending_count":   pendingCount,
-		"business_counts": bizCounts,
+		"items":                items,
+		"count":               len(items),
+		"pending_count":       pendingCount,
+		"memory_pending_count": memoryPendingCount,
+		"business_counts":     bizCounts,
 	})
 }
 
@@ -4493,9 +4515,9 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	// Build proxy request to OpenClaw
 	// "user" field = stable session key → persistent conversation with memory
 	gatewayURL := "http://127.0.0.1:18789/v1/chat/completions"
-	gatewayToken := os.Getenv("GATEWAY_TOKEN")
-	if gatewayToken == "" {
-		gatewayToken = "65b918ba-baf5-4996-8b53-6fb0f662a0c3"
+	gwToken := gatewayToken
+	if gwToken == "" {
+		gwToken = authToken // fallback to scoreboard token
 	}
 
 	proxyBody := map[string]interface{}{
@@ -4514,7 +4536,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	proxyReq.Header.Set("Content-Type", "application/json")
-	proxyReq.Header.Set("Authorization", "Bearer "+gatewayToken)
+	proxyReq.Header.Set("Authorization", "Bearer "+gwToken)
 	proxyReq.Header.Set("x-openclaw-agent-id", "verious") // Use the Wirebot agent, not "main"
 
 	client := &http.Client{Timeout: 120 * time.Second}
@@ -4582,6 +4604,8 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		// Save assistant response
 		if resp := fullResponse.String(); resp != "" {
 			s.saveMessage(sessionID, "assistant", resp)
+			// Async: extract memories from this exchange into approval queue
+			go s.extractConversationToQueue(lastMsg.Content, resp)
 		}
 	} else {
 		// Non-streaming — simple proxy
@@ -4604,12 +4628,49 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		}
 		if json.Unmarshal(respBody, &result) == nil && len(result.Choices) > 0 {
 			s.saveMessage(sessionID, "assistant", result.Choices[0].Message.Content)
+			// Async: extract memories from this exchange into approval queue
+			go s.extractConversationToQueue(lastMsg.Content, result.Choices[0].Message.Content)
 		}
 
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.WriteHeader(proxyResp.StatusCode)
 		w.Write(respBody)
+	}
+}
+
+// extractConversationToQueue runs LLM extraction on a user+assistant exchange
+// and queues any personal facts found for approval review.
+func (s *Server) extractConversationToQueue(userMsg, assistantMsg string) {
+	// Skip tiny exchanges — nothing to extract
+	if len(userMsg) < 20 {
+		return
+	}
+	messages := []map[string]string{
+		{"role": "user", "content": userMsg},
+		{"role": "assistant", "content": assistantMsg},
+	}
+	memories, err := s.ExtractMemoriesFromConversation(messages)
+	if err != nil {
+		log.Printf("[chat→queue] Extraction error: %v", err)
+		return
+	}
+	for _, m := range memories {
+		// Auto-approve high-confidence conversation facts (direct user statements)
+		if m.Confidence >= 0.95 {
+			m.SourceType = "conversation"
+			go s.writebackApprovedMemory(m.MemoryText)
+			s.db.Exec(`INSERT INTO memory_queue (id, memory_text, source_type, source_file, source_context, confidence, status, reviewed_at)
+				VALUES (?, ?, ?, ?, ?, ?, 'approved', CURRENT_TIMESTAMP)`,
+				fmt.Sprintf("mem-%d", time.Now().UnixNano()), m.MemoryText, m.SourceType, m.SourceFile, m.SourceContext, m.Confidence)
+		} else {
+			if err := s.QueueMemoryForApproval(m); err != nil {
+				log.Printf("[chat→queue] Queue error: %v", err)
+			}
+		}
+	}
+	if len(memories) > 0 {
+		log.Printf("[chat→queue] Extracted %d memories from conversation", len(memories))
 	}
 }
 
@@ -6346,9 +6407,9 @@ Write the draft now:`, bizName, title)
 
 	// Call the gateway for AI generation
 	gatewayURL := "http://127.0.0.1:18789/v1/chat/completions"
-	token := os.Getenv("GATEWAY_TOKEN")
+	token := gatewayToken
 	if token == "" {
-		token = "65b918ba-baf5-4996-8b53-6fb0f662a0c3"
+		token = authToken // fallback to scoreboard token
 	}
 
 	reqBody, _ := json.Marshal(map[string]interface{}{
@@ -6929,12 +6990,11 @@ func (s *Server) handleMemoryQueueAction(w http.ResponseWriter, r *http.Request)
 
 	switch action {
 	case "approve":
-		// Store to Mem0 and mark approved
-		go func() {
-			mem0Store("http://127.0.0.1:8200", "wirebot_verious", item.MemoryText, nil)
-		}()
+		finalText := item.MemoryText
+		// Store to Mem0 + MEMORY.md + Letta (if business-relevant)
+		go s.writebackApprovedMemory(finalText)
 		s.db.Exec(`UPDATE memory_queue SET status='approved', reviewed_at=CURRENT_TIMESTAMP WHERE id=?`, id)
-		json.NewEncoder(w).Encode(map[string]interface{}{"ok": true, "action": "approved", "memory": item.MemoryText})
+		json.NewEncoder(w).Encode(map[string]interface{}{"ok": true, "action": "approved", "memory": finalText})
 
 	case "reject":
 		s.db.Exec(`UPDATE memory_queue SET status='rejected', reviewed_at=CURRENT_TIMESTAMP WHERE id=?`, id)
@@ -6948,10 +7008,8 @@ func (s *Server) handleMemoryQueueAction(w http.ResponseWriter, r *http.Request)
 			http.Error(w, `{"error":"correction required"}`, 400)
 			return
 		}
-		// Store corrected version to Mem0
-		go func() {
-			mem0Store("http://127.0.0.1:8200", "wirebot_verious", body.Correction, nil)
-		}()
+		// Store corrected version to all memory layers
+		go s.writebackApprovedMemory(body.Correction)
 		s.db.Exec(`UPDATE memory_queue SET status='corrected', correction=?, reviewed_at=CURRENT_TIMESTAMP WHERE id=?`,
 			body.Correction, id)
 		json.NewEncoder(w).Encode(map[string]interface{}{"ok": true, "action": "corrected", "memory": body.Correction})
@@ -6978,6 +7036,64 @@ func mem0Store(baseURL, namespace, text string, messages []map[string]string) er
 	return nil
 }
 
+// writebackApprovedMemory fans out an approved memory to all three layers:
+//   1. Mem0 (cross-surface fact store)
+//   2. MEMORY.md (workspace knowledge — immediate append, not waiting for syncd)
+//   3. Letta agent message (if business-relevant — agent self-edits its blocks)
+func (s *Server) writebackApprovedMemory(text string) {
+	// 1. Mem0
+	if err := mem0Store("http://127.0.0.1:8200", "wirebot_verious", text, nil); err != nil {
+		log.Printf("[memory-writeback] Mem0 error: %v", err)
+	}
+
+	// 2. Append to MEMORY.md (immediate, not waiting for syncd 60s poll)
+	memoryPath := "/home/wirebot/clawd/MEMORY.md"
+	f, err := os.OpenFile(memoryPath, os.O_APPEND|os.O_WRONLY, 0644)
+	if err == nil {
+		f.WriteString("- " + text + "\n")
+		f.Close()
+	} else {
+		log.Printf("[memory-writeback] MEMORY.md append error: %v", err)
+	}
+
+	// 3. Letta — only if business-relevant (goals, kpis, stage, revenue, customers)
+	lower := strings.ToLower(text)
+	businessKeywords := []string{"revenue", "goal", "kpi", "stage", "milestone", "customer",
+		"beta tester", "pricing", "debt", "profit", "business", "startup", "shipped", "launched",
+		"member", "subscriber", "mrr", "churn", "pillar", "checklist"}
+	isBusinessRelevant := false
+	for _, kw := range businessKeywords {
+		if strings.Contains(lower, kw) {
+			isBusinessRelevant = true
+			break
+		}
+	}
+	if isBusinessRelevant {
+		lettaAgentID := os.Getenv("LETTA_AGENT_ID")
+		if lettaAgentID == "" {
+			lettaAgentID = "agent-82610d14-ec65-4d10-9ec2-8c479848cea9"
+		}
+		lettaURL := "http://127.0.0.1:8283"
+		msg := fmt.Sprintf("Approved memory from user review: %s\n\nUpdate your human, goals, kpis, or business_stage blocks if this is relevant.", text)
+		payload, _ := json.Marshal(map[string]interface{}{
+			"messages": []map[string]string{{"role": "user", "content": msg}},
+		})
+		req, _ := http.NewRequest("POST", fmt.Sprintf("%s/v1/agents/%s/messages/", lettaURL, lettaAgentID), bytes.NewReader(payload))
+		if req != nil {
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("Authorization", "Bearer letta")
+			client := &http.Client{Timeout: 30 * time.Second}
+			resp, err := client.Do(req)
+			if err != nil {
+				log.Printf("[memory-writeback] Letta message error: %v", err)
+			} else {
+				resp.Body.Close()
+				log.Printf("[memory-writeback] Letta agent notified of business-relevant memory")
+			}
+		}
+	}
+}
+
 // ─── Memory Conflicts Detection ──────────────────────────────────────────
 
 type ConflictItem struct {
@@ -6993,14 +7109,14 @@ type MemoryConflict struct {
 	Category string       `json:"category"` // location, name, business, etc.
 }
 
-// GET /v1/memory/conflicts — detect contradictory memories
+// GET /v1/memory/conflicts — detect contradictory memories using category grouping
 func (s *Server) handleMemoryConflicts(w http.ResponseWriter, r *http.Request) {
 	cors(w)
 	if r.Method == "OPTIONS" {
 		return
 	}
 
-	// Fetch all approved memories from Mem0
+	// Fetch all memories from Mem0
 	resp, err := http.Post("http://127.0.0.1:8200/v1/list", "application/json",
 		strings.NewReader(`{"namespace": "wirebot_verious"}`))
 	if err != nil {
@@ -7011,76 +7127,122 @@ func (s *Server) handleMemoryConflicts(w http.ResponseWriter, r *http.Request) {
 
 	var listResp struct {
 		Results []struct {
-			ID       string `json:"id"`
-			Memory   string `json:"memory"`
-			Metadata struct {
-				Category string `json:"category"`
-			} `json:"metadata"`
+			ID     string `json:"id"`
+			Memory string `json:"memory"`
 		} `json:"results"`
 	}
 	json.NewDecoder(resp.Body).Decode(&listResp)
 
 	conflicts := []MemoryConflict{}
 
-	// Conflict detection patterns
-	locationKeywords := []string{"location", "located", "lives in", "based in", "Corona", "Providence", "California", "timezone"}
-	nameKeywords := []string{"name is", "called", "goes by", "preferred name"}
-
-	// Check for location conflicts
-	var locationMems []struct{ id, text string }
-	for _, m := range listResp.Results {
-		lower := strings.ToLower(m.Memory)
-		for _, kw := range locationKeywords {
-			if strings.Contains(lower, strings.ToLower(kw)) {
-				locationMems = append(locationMems, struct{ id, text string }{m.ID, m.Memory})
-				break
-			}
-		}
+	// Category keyword groups — memories in the same category that contradict are flagged
+	categories := map[string][]string{
+		"location":     {"location", "located", "lives in", "based in", "moved to", "timezone", "city", "state"},
+		"name":         {"name is", "called", "goes by", "preferred name", "my name"},
+		"stage":        {"idea stage", "launch stage", "growth stage", "pre-mvp", "post-mvp"},
+		"revenue":      {"revenue", "mrr", "income", "earning", "making $"},
+		"team":         {"solo", "co-founder", "team of", "employees", "hired"},
+		"progress":     {"% progress", "% complete", "completion rate"},
 	}
 
-	// If multiple location mentions, check for conflicts
-	if len(locationMems) >= 2 {
-		// Simple heuristic: if one says "Corona" and another says "Providence", conflict
-		for i := 0; i < len(locationMems); i++ {
-			for j := i + 1; j < len(locationMems); j++ {
-				a, b := locationMems[i], locationMems[j]
-				aLower, bLower := strings.ToLower(a.text), strings.ToLower(b.text)
-
-				// Check for contradicting locations
-				if (strings.Contains(aLower, "corona") && strings.Contains(bLower, "providence")) ||
-					(strings.Contains(aLower, "providence") && strings.Contains(bLower, "corona")) {
-					conflicts = append(conflicts, MemoryConflict{
-						ID:       fmt.Sprintf("conflict-%s-%s", a.id[:8], b.id[:8]),
-						Category: "location",
-						A:        ConflictItem{ID: a.id, Text: a.text, Source: "mem0"},
-						B:        ConflictItem{ID: b.id, Text: b.text, Source: "mem0"},
-					})
+	// Group memories by category
+	type catMem struct{ id, text string }
+	grouped := map[string][]catMem{}
+	for _, m := range listResp.Results {
+		lower := strings.ToLower(m.Memory)
+		for cat, keywords := range categories {
+			for _, kw := range keywords {
+				if strings.Contains(lower, kw) {
+					grouped[cat] = append(grouped[cat], catMem{m.ID, m.Memory})
+					break
 				}
 			}
 		}
 	}
 
-	// Check for name conflicts
-	var nameMems []struct{ id, text string }
-	for _, m := range listResp.Results {
-		lower := strings.ToLower(m.Memory)
-		for _, kw := range nameKeywords {
-			if strings.Contains(lower, kw) {
-				nameMems = append(nameMems, struct{ id, text string }{m.ID, m.Memory})
-				break
-			}
+	// Within each category, look for contradictions
+	// Two memories contradict if they're in the same category but contain
+	// mutually exclusive values (e.g. different cities, different stages)
+	for cat, mems := range grouped {
+		if len(mems) < 2 {
+			continue
 		}
-	}
-
-	// If multiple different names, might be conflict
-	if len(nameMems) >= 2 {
-		for i := 0; i < len(nameMems); i++ {
-			for j := i + 1; j < len(nameMems); j++ {
-				a, b := nameMems[i], nameMems[j]
-				// Only flag if texts are significantly different
-				if !strings.Contains(a.text, b.text) && !strings.Contains(b.text, a.text) &&
-					len(a.text) > 0 && len(b.text) > 0 {
-					// Could be legitimate multiple facts, be conservative
+		for i := 0; i < len(mems) && i < 20; i++ { // cap to avoid O(n²) blowup
+			for j := i + 1; j < len(mems) && j < 20; j++ {
+				a, b := mems[i], mems[j]
+				// Skip if one contains the other (likely consistent, not contradictory)
+				if strings.Contains(strings.ToLower(a.text), strings.ToLower(b.text)) ||
+					strings.Contains(strings.ToLower(b.text), strings.ToLower(a.text)) {
+					continue
+				}
+				// For location: check if they mention different specific places
+				if cat == "location" {
+					places := []string{"corona", "providence", "los angeles", "new york", "riverside",
+						"portland", "san francisco", "inland empire", "chicago"}
+					aPlaces, bPlaces := []string{}, []string{}
+					aLower, bLower := strings.ToLower(a.text), strings.ToLower(b.text)
+					for _, p := range places {
+						if strings.Contains(aLower, p) { aPlaces = append(aPlaces, p) }
+						if strings.Contains(bLower, p) { bPlaces = append(bPlaces, p) }
+					}
+					if len(aPlaces) > 0 && len(bPlaces) > 0 {
+						// Check if any places differ
+						for _, ap := range aPlaces {
+							for _, bp := range bPlaces {
+								if ap != bp {
+									idA := a.id; if len(idA) > 8 { idA = idA[:8] }
+									idB := b.id; if len(idB) > 8 { idB = idB[:8] }
+									conflicts = append(conflicts, MemoryConflict{
+										ID:       fmt.Sprintf("conflict-%s-%s", idA, idB),
+										Category: cat,
+										A:        ConflictItem{ID: a.id, Text: a.text, Source: "mem0"},
+										B:        ConflictItem{ID: b.id, Text: b.text, Source: "mem0"},
+									})
+								}
+							}
+						}
+					}
+				}
+				// For stage: check if they mention different stages
+				if cat == "stage" {
+					stages := []string{"idea", "launch", "growth", "pre-mvp", "post-mvp"}
+					aStage, bStage := "", ""
+					for _, st := range stages {
+						if strings.Contains(strings.ToLower(a.text), st) { aStage = st }
+						if strings.Contains(strings.ToLower(b.text), st) { bStage = st }
+					}
+					if aStage != "" && bStage != "" && aStage != bStage {
+						idA := a.id; if len(idA) > 8 { idA = idA[:8] }
+						idB := b.id; if len(idB) > 8 { idB = idB[:8] }
+						conflicts = append(conflicts, MemoryConflict{
+							ID:       fmt.Sprintf("conflict-%s-%s", idA, idB),
+							Category: cat,
+							A:        ConflictItem{ID: a.id, Text: a.text, Source: "mem0"},
+							B:        ConflictItem{ID: b.id, Text: b.text, Source: "mem0"},
+						})
+					}
+				}
+				// For numeric categories (revenue, progress, team): flag if numbers differ significantly
+				if cat == "revenue" || cat == "progress" || cat == "team" {
+					// Extract any numbers from both
+					aNums := extractNumbers(a.text)
+					bNums := extractNumbers(b.text)
+					if len(aNums) > 0 && len(bNums) > 0 {
+						// If the primary numbers differ by >50%, flag
+						if aNums[0] > 0 && bNums[0] > 0 {
+							ratio := aNums[0] / bNums[0]
+							if ratio < 0.5 || ratio > 2.0 {
+								idA := a.id; if len(idA) > 8 { idA = idA[:8] }
+								idB := b.id; if len(idB) > 8 { idB = idB[:8] }
+								conflicts = append(conflicts, MemoryConflict{
+									ID:       fmt.Sprintf("conflict-%s-%s", idA, idB),
+									Category: cat,
+									A:        ConflictItem{ID: a.id, Text: a.text, Source: "mem0"},
+									B:        ConflictItem{ID: b.id, Text: b.text, Source: "mem0"},
+								})
+							}
+						}
+					}
 				}
 			}
 		}
@@ -7090,6 +7252,20 @@ func (s *Server) handleMemoryConflicts(w http.ResponseWriter, r *http.Request) {
 		"conflicts": conflicts,
 		"checked":   len(listResp.Results),
 	})
+}
+
+// extractNumbers pulls numeric values from text
+func extractNumbers(text string) []float64 {
+	var nums []float64
+	words := strings.Fields(text)
+	for _, w := range words {
+		w = strings.Trim(w, "$%,()") 
+		var n float64
+		if _, err := fmt.Sscanf(w, "%f", &n); err == nil && n > 0 {
+			nums = append(nums, n)
+		}
+	}
+	return nums
 }
 
 // ─── Encryption Helpers ──────────────────────────────────────────────────
@@ -8936,7 +9112,100 @@ func (s *Server) pollGoogleDrive(integrationID, credential, configJSON, lastPoll
 		"Scanned Google Drive via OAuth")
 
 	log.Printf("[gdrive] Indexed %d files from Google Drive", len(indexFiles))
+
+	// Extract memories from text-based docs (Google Docs, plain text)
+	// Only process files we haven't extracted from before (watermark)
+	go s.extractFromGDriveIndex(indexFiles, tokenData.AccessToken)
+
 	return nil
+}
+
+// extractFromGDriveIndex fetches content from text-based GDrive files and runs memory extraction.
+// Rate-limited to 5 files per poll cycle, skips already-processed files.
+func (s *Server) extractFromGDriveIndex(files []map[string]string, accessToken string) {
+	watermarkPath := "/data/wirebot/scoreboard/gdrive_watermark.json"
+	processed := map[string]bool{}
+	if data, err := os.ReadFile(watermarkPath); err == nil {
+		var ids []string
+		if json.Unmarshal(data, &ids) == nil {
+			for _, id := range ids {
+				processed[id] = true
+			}
+		}
+	}
+
+	client := &http.Client{Timeout: 30 * time.Second}
+	extracted := 0
+	maxPerCycle := 5
+
+	// Only process Google Docs and plain text files
+	textMimeTypes := map[string]bool{
+		"application/vnd.google-apps.document": true,
+		"text/plain": true,
+		"text/markdown": true,
+	}
+
+	for _, f := range files {
+		if extracted >= maxPerCycle {
+			break
+		}
+		fileID := f["id"]
+		mimeType := f["mimeType"]
+		name := f["name"]
+		if fileID == "" || processed[fileID] || !textMimeTypes[mimeType] {
+			continue
+		}
+
+		// Export Google Docs as plain text; download others directly
+		var fetchURL string
+		if mimeType == "application/vnd.google-apps.document" {
+			fetchURL = fmt.Sprintf("https://www.googleapis.com/drive/v3/files/%s/export?mimeType=text/plain", fileID)
+		} else {
+			fetchURL = fmt.Sprintf("https://www.googleapis.com/drive/v3/files/%s?alt=media", fileID)
+		}
+
+		req, _ := http.NewRequest("GET", fetchURL, nil)
+		req.Header.Set("Authorization", "Bearer "+accessToken)
+		resp, err := client.Do(req)
+		if err != nil || resp.StatusCode != 200 {
+			if resp != nil { resp.Body.Close() }
+			continue
+		}
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		content := string(body)
+
+		if len(content) < 100 {
+			processed[fileID] = true
+			continue
+		}
+
+		memories, err := s.ExtractMemoriesFromDocument("gdrive:"+name, content)
+		if err != nil {
+			log.Printf("[gdrive-extract] Error on %s: %v", name, err)
+			continue
+		}
+		for _, m := range memories {
+			m.SourceType = "gdrive"
+			s.QueueMemoryForApproval(m)
+		}
+
+		processed[fileID] = true
+		extracted++
+		time.Sleep(2 * time.Second) // Rate limit LLM calls
+	}
+
+	// Save watermark
+	ids := make([]string, 0, len(processed))
+	for id := range processed {
+		ids = append(ids, id)
+	}
+	data, _ := json.Marshal(ids)
+	os.WriteFile(watermarkPath, data, 0644)
+
+	if extracted > 0 {
+		log.Printf("[gdrive-extract] Processed %d docs, queued memories", extracted)
+	}
 }
 
 // refreshGoogleToken uses refresh_token to get a new access_token
@@ -9099,7 +9368,93 @@ func (s *Server) pollDropbox(integrationID, credential, configJSON, lastPoll str
 		fmt.Sprintf("Scanned Dropbox storage"))
 
 	log.Printf("[dropbox] Indexed %d files from Dropbox", len(indexFiles))
+
+	// Extract memories from text-based Dropbox files
+	go s.extractFromDropboxIndex(indexFiles, token)
+
 	return nil
+}
+
+// extractFromDropboxIndex fetches content from text/markdown Dropbox files and runs memory extraction.
+func (s *Server) extractFromDropboxIndex(files []map[string]string, accessToken string) {
+	watermarkPath := "/data/wirebot/scoreboard/dropbox_watermark.json"
+	processed := map[string]bool{}
+	if data, err := os.ReadFile(watermarkPath); err == nil {
+		var paths []string
+		if json.Unmarshal(data, &paths) == nil {
+			for _, p := range paths {
+				processed[p] = true
+			}
+		}
+	}
+
+	client := &http.Client{Timeout: 30 * time.Second}
+	extracted := 0
+	maxPerCycle := 5
+
+	textExts := map[string]bool{".md": true, ".txt": true, ".markdown": true, ".text": true}
+
+	for _, f := range files {
+		if extracted >= maxPerCycle {
+			break
+		}
+		path := f["path"]
+		name := f["name"]
+		if path == "" || processed[path] {
+			continue
+		}
+		// Only text files
+		ext := strings.ToLower(filepath.Ext(name))
+		if !textExts[ext] {
+			processed[path] = true // watermark non-text so we don't check again
+			continue
+		}
+
+		// Download file content via Dropbox API
+		payload, _ := json.Marshal(map[string]string{"path": path})
+		req, _ := http.NewRequest("POST", "https://content.dropboxapi.com/2/files/download", nil)
+		req.Header.Set("Authorization", "Bearer "+accessToken)
+		req.Header.Set("Dropbox-API-Arg", string(payload))
+		resp, err := client.Do(req)
+		if err != nil || resp.StatusCode != 200 {
+			if resp != nil { resp.Body.Close() }
+			continue
+		}
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		content := string(body)
+
+		if len(content) < 100 {
+			processed[path] = true
+			continue
+		}
+
+		memories, err := s.ExtractMemoriesFromDocument("dropbox:"+name, content)
+		if err != nil {
+			log.Printf("[dropbox-extract] Error on %s: %v", name, err)
+			continue
+		}
+		for _, m := range memories {
+			m.SourceType = "dropbox"
+			s.QueueMemoryForApproval(m)
+		}
+
+		processed[path] = true
+		extracted++
+		time.Sleep(2 * time.Second)
+	}
+
+	// Save watermark
+	paths := make([]string, 0, len(processed))
+	for p := range processed {
+		paths = append(paths, p)
+	}
+	data, _ := json.Marshal(paths)
+	os.WriteFile(watermarkPath, data, 0644)
+
+	if extracted > 0 {
+		log.Printf("[dropbox-extract] Processed %d files, queued memories", extracted)
+	}
 }
 
 // ─── Stripe Poller ──────────────────────────────────────────────────────

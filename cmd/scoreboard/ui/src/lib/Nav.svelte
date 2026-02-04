@@ -1,6 +1,6 @@
 <script>
   import { createEventDispatcher, onMount } from 'svelte';
-  let { active, pendingCount = 0 } = $props();
+  let { active, pendingCount = 0, memoryPendingCount = 0 } = $props();
   const dispatch = createEventDispatcher();
 
   const defaultTabs = [
@@ -150,6 +150,9 @@
         {#if tab.id === 'feed' && pendingCount > 0 && !editMode}
           <span class="nav-badge">{pendingCount > 99 ? '99+' : pendingCount}</span>
         {/if}
+        {#if tab.id === 'settings' && memoryPendingCount > 0 && !editMode}
+          <span class="nav-badge memory">{memoryPendingCount > 99 ? '99+' : memoryPendingCount}</span>
+        {/if}
       </span>
       <span class="tab-label">{tab.label}</span>
     </button>
@@ -254,6 +257,7 @@
     align-items: center;
     justify-content: center;
   }
+  .nav-badge.memory { background: #a855f7; }
 
   /* Edit mode */
   nav.edit-mode { background: var(--bg); }

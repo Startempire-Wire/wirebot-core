@@ -1070,6 +1070,9 @@ Tracked with Wirebot — your AI business operating partner`;
                 <!-- Memory Review -->
                 <button class="btn-memory-review" onclick={() => navigateTo('memory-review')}>
                   🧠 Memory Review
+                  {#if data?.memory_pending_count > 0}
+                    <span class="memory-badge">{data.memory_pending_count}</span>
+                  {/if}
                   <span class="btn-sub">Approve or correct inferred facts</span>
                 </button>
 
@@ -1484,7 +1487,7 @@ Tracked with Wirebot — your AI business operating partner`;
       </button>
     {/if}
 
-    <Nav active={view} pendingCount={data?.pending_count || 0} on:nav={handleNav} />
+    <Nav active={view} pendingCount={data?.pending_count || 0} memoryPendingCount={data?.memory_pending_count || 0} on:nav={handleNav} />
 
     <!-- Hints panel -->
     <Hints bind:visible={showHints} />
@@ -1950,6 +1953,12 @@ Tracked with Wirebot — your AI business operating partner`;
   }
   .btn-memory-review:hover { filter: brightness(1.1); }
   .btn-memory-review .btn-sub { font-size: 10px; opacity: 0.8; }
+  .memory-badge {
+    display: inline-flex; align-items: center; justify-content: center;
+    min-width: 20px; height: 20px; padding: 0 6px;
+    background: #a855f7; color: white; border-radius: 10px;
+    font-size: 11px; font-weight: 700; margin-left: 6px;
+  }
 
   .btn-logout {
     background: transparent; border: 1px solid var(--border-light); color: var(--text-secondary); border-radius: 6px;

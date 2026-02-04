@@ -36,7 +36,7 @@ func (s *Server) ExtractMemoriesFromDocument(filepath, content string) ([]Memory
 		extractContent = extractContent[:8000]
 	}
 
-	// Build LLM prompt for extraction
+	// Build LLM prompt for extraction — includes entity disambiguation, category, reasoning
 	prompt := fmt.Sprintf(`You are extracting PERSONAL FACTS about the document author from their writing.
 
 DOCUMENT: %s
@@ -45,22 +45,34 @@ DOCUMENT: %s
 ---
 
 RULES:
-1. Extract facts about the author - inference is OK if supported by quoted text
+1. Extract facts about the AUTHOR — inference OK if supported by quoted text
 2. Each fact MUST have a direct quote (2-4 sentences) from the document as evidence
-3. Confidence: 0.9+ for explicit ("I live in X"), 0.7-0.9 for supported inference ("moved to Corona last year" → lives in Corona)
-4. Focus on: location, work, preferences, relationships, goals, habits, beliefs
-5. Do NOT extract general knowledge or opinions about external topics (only facts about the AUTHOR)
-6. NO GUESSING - if you can't quote evidence from the document, don't extract it
+3. Confidence scoring:
+   - 0.9+ explicit statement ("I live in X", "my name is Y")
+   - 0.7-0.9 supported inference ("moved to Corona last year" → lives in Corona)
+   - 0.5-0.7 weak inference (mentioned but unclear if about the author)
+   - Below 0.5: do not extract
+4. Focus on: location, work, preferences, relationships, goals, habits, beliefs, business
+5. Do NOT extract general knowledge or opinions about external topics
+6. NO GUESSING — if you can't quote evidence, don't extract it
+7. FLAG ENTITIES that need disambiguation (e.g. "Providence" = hospital? city? organization?)
 
 OUTPUT FORMAT (JSON array):
 [
   {
     "memory": "The author lives in Corona, California",
-    "quote": "I've been living in Corona for the past 5 years. The Inland Empire heat takes some getting used to, but I love the community here.",
+    "quote": "I've been living in Corona for the past 5 years...",
     "section": "About Me",
-    "confidence": 0.95
+    "confidence": 0.95,
+    "category": "identity",
+    "entities": ["Corona, California"],
+    "reasoning": "Explicit first-person statement about current residence"
   }
 ]
+
+CATEGORIES: identity, preference, fact, relationship, business, temporal, habit
+ENTITIES: List any person names, locations, organizations, or products mentioned.
+REASONING: One sentence explaining why you assigned that confidence level.
 
 If no personal facts can be extracted with real quotes, return: []`, filepath, extractContent)
 
@@ -72,10 +84,13 @@ If no personal facts can be extracted with real quotes, return: []`, filepath, e
 
 	// Parse response
 	var extractions []struct {
-		Memory     string  `json:"memory"`
-		Quote      string  `json:"quote"`
-		Section    string  `json:"section"`
-		Confidence float64 `json:"confidence"`
+		Memory     string   `json:"memory"`
+		Quote      string   `json:"quote"`
+		Section    string   `json:"section"`
+		Confidence float64  `json:"confidence"`
+		Category   string   `json:"category"`
+		Entities   []string `json:"entities"`
+		Reasoning  string   `json:"reasoning"`
 	}
 
 	// Find JSON array in response
@@ -93,7 +108,7 @@ If no personal facts can be extracted with real quotes, return: []`, filepath, e
 	// Convert to MemoryExtraction
 	var memories []MemoryExtraction
 	for _, e := range extractions {
-		if e.Confidence < 0.7 || e.Memory == "" || e.Quote == "" {
+		if e.Confidence < 0.5 || e.Memory == "" || e.Quote == "" {
 			continue
 		}
 		// Verify quote actually exists in content (fuzzy match)
@@ -101,12 +116,20 @@ If no personal facts can be extracted with real quotes, return: []`, filepath, e
 			log.Printf("[memory-extract] Quote not found in doc, skipping: %s", e.Quote[:min(50, len(e.Quote))])
 			continue
 		}
+		// Build context with reasoning and entities
+		context := e.Quote
+		if e.Reasoning != "" {
+			context += "\n\n[Reasoning: " + e.Reasoning + "]"
+		}
+		if len(e.Entities) > 0 {
+			context += "\n[Entities: " + strings.Join(e.Entities, ", ") + "]"
+		}
 		memories = append(memories, MemoryExtraction{
 			MemoryText:    e.Memory,
 			SourceType:    "obsidian",
 			SourceFile:    filepath,
 			SourceSection: e.Section,
-			SourceContext: e.Quote,
+			SourceContext: context,
 			Confidence:    e.Confidence,
 		})
 	}
@@ -114,18 +137,43 @@ If no personal facts can be extracted with real quotes, return: []`, filepath, e
 	return memories, nil
 }
 
-// containsFuzzy checks if quote exists in content (allows minor differences)
+// containsFuzzy checks if quote exists in content using token overlap scoring.
+// Returns true if enough tokens from the quote appear in the content.
 func containsFuzzy(content, quote string) bool {
 	// Normalize both
 	normContent := strings.ToLower(strings.Join(strings.Fields(content), " "))
 	normQuote := strings.ToLower(strings.Join(strings.Fields(quote), " "))
-	
-	// Check first 50 chars of quote
-	if len(normQuote) > 50 {
-		normQuote = normQuote[:50]
+
+	// First try: exact substring match on first 80 chars (fast path)
+	checkLen := len(normQuote)
+	if checkLen > 80 {
+		checkLen = 80
 	}
-	
-	return strings.Contains(normContent, normQuote)
+	if strings.Contains(normContent, normQuote[:checkLen]) {
+		return true
+	}
+
+	// Second try: token overlap — if 60%+ of quote tokens appear in content, accept
+	quoteTokens := strings.Fields(normQuote)
+	if len(quoteTokens) < 3 {
+		return false
+	}
+	contentSet := make(map[string]bool)
+	for _, t := range strings.Fields(normContent) {
+		contentSet[t] = true
+	}
+	matches := 0
+	for _, t := range quoteTokens {
+		if len(t) < 3 { // skip tiny words (a, an, the, is, etc.)
+			matches++ // count as match — don't penalize for common words
+			continue
+		}
+		if contentSet[t] {
+			matches++
+		}
+	}
+	ratio := float64(matches) / float64(len(quoteTokens))
+	return ratio >= 0.6
 }
 
 // ExtractMemoriesFromConversation extracts facts from chat messages with context
@@ -218,16 +266,63 @@ func ExtractMemoryFromPairing(questionID, questionText, answerText string) Memor
 	}
 }
 
-// QueueMemoryForApproval adds an extraction to the approval queue
+// QueueMemoryForApproval adds an extraction to the approval queue with dedup.
+// Skips if an identical memory_text already exists (any status).
+// Auto-approves high-confidence items per MEMORY_APPROVAL_SYSTEM.md rules.
 func (s *Server) QueueMemoryForApproval(m MemoryExtraction) error {
+	// Dedup: check if this exact text already exists in queue
+	var existing int
+	s.db.QueryRow(`SELECT COUNT(*) FROM memory_queue WHERE memory_text = ?`, m.MemoryText).Scan(&existing)
+	if existing > 0 {
+		return nil // already queued, skip silently
+	}
+
 	id := fmt.Sprintf("mem-%d", time.Now().UnixNano())
+	sourceFile := m.SourceFile
+	if m.SourceSection != "" {
+		sourceFile = fmt.Sprintf("%s [%s]", m.SourceFile, m.SourceSection)
+	}
+
+	// Auto-approve rules (from MEMORY_APPROVAL_SYSTEM.md):
+	//   - conf >= 0.95 AND source = direct_statement/pairing → auto-approve
+	//   - conf >= 0.95 AND no ambiguous entities → auto-approve
+	//   - conf < 0.7 → always queue for review
+	//   - source = bulk_document_scan → always queue for review
+	status := "pending"
+	hasAmbiguousEntities := containsAmbiguousEntities(m.MemoryText)
+
+	if m.Confidence >= 0.95 && m.SourceType == "pairing" {
+		status = "approved"
+	} else if m.Confidence >= 0.95 && !hasAmbiguousEntities && m.SourceType != "obsidian" {
+		status = "approved"
+	}
+	// Everything else stays "pending" (including all obsidian/bulk, <0.95 conf, or entity-bearing)
+
 	_, err := s.db.Exec(`
-		INSERT INTO memory_queue (id, memory_text, source_type, source_file, source_context, confidence)
-		VALUES (?, ?, ?, ?, ?, ?)`,
-		id, m.MemoryText, m.SourceType, 
-		fmt.Sprintf("%s [%s]", m.SourceFile, m.SourceSection),
-		m.SourceContext, m.Confidence)
+		INSERT INTO memory_queue (id, memory_text, source_type, source_file, source_context, confidence, status, reviewed_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, CASE WHEN ?='approved' THEN CURRENT_TIMESTAMP ELSE NULL END)`,
+		id, m.MemoryText, m.SourceType, sourceFile, m.SourceContext, m.Confidence, status, status)
+
+	// If auto-approved, fan out to all memory layers
+	if status == "approved" {
+		go s.writebackApprovedMemory(m.MemoryText)
+		log.Printf("[memory-queue] Auto-approved (conf=%.2f, type=%s): %s", m.Confidence, m.SourceType, m.MemoryText[:min(60, len(m.MemoryText))])
+	}
+
 	return err
+}
+
+// containsAmbiguousEntities checks for location/person/org names that need human disambiguation.
+func containsAmbiguousEntities(text string) bool {
+	lower := strings.ToLower(text)
+	// Location names that have been historically confused
+	ambiguousLocations := []string{"providence", "corona", "riverside", "portland", "springfield"}
+	for _, loc := range ambiguousLocations {
+		if strings.Contains(lower, loc) {
+			return true
+		}
+	}
+	return false
 }
 
 // callLLMForExtraction calls the gateway for memory extraction
@@ -236,7 +331,10 @@ func (s *Server) callLLMForExtraction(prompt string) (string, error) {
 	if gatewayURL == "" {
 		gatewayURL = "http://127.0.0.1:18789"
 	}
-	gatewayToken := os.Getenv("GATEWAY_TOKEN")
+	gwToken := gatewayToken
+	if gwToken == "" {
+		gwToken = authToken // fallback to scoreboard token
+	}
 
 	body := map[string]interface{}{
 		"model": "claude-sonnet-4-20250514",
@@ -249,8 +347,8 @@ func (s *Server) callLLMForExtraction(prompt string) (string, error) {
 
 	req, _ := http.NewRequest("POST", gatewayURL+"/v1/chat/completions", bytes.NewReader(bodyBytes))
 	req.Header.Set("Content-Type", "application/json")
-	if gatewayToken != "" {
-		req.Header.Set("Authorization", "Bearer "+gatewayToken)
+	if gwToken != "" {
+		req.Header.Set("Authorization", "Bearer "+gwToken)
 	}
 
 	client := &http.Client{Timeout: 60 * time.Second}
@@ -312,6 +410,19 @@ func (s *Server) handleMemoryExtractVault(w http.ResponseWriter, r *http.Request
 		processed := 0
 		extracted := 0
 		queued := 0
+		skipped := 0
+
+		// Load watermark: set of already-processed file paths
+		watermarkPath := "/data/wirebot/scoreboard/vault_watermark.json"
+		processedFiles := map[string]bool{}
+		if data, err := os.ReadFile(watermarkPath); err == nil {
+			var files []string
+			if json.Unmarshal(data, &files) == nil {
+				for _, f := range files {
+					processedFiles[f] = true
+				}
+			}
+		}
 
 		filepath.Walk(vaultPath, func(path string, info os.FileInfo, err error) error {
 			if err != nil || info.IsDir() || processed >= limit {
@@ -321,12 +432,19 @@ func (s *Server) handleMemoryExtractVault(w http.ResponseWriter, r *http.Request
 				return nil
 			}
 
+			relPath := strings.TrimPrefix(path, vaultPath+"/")
+
+			// Skip already-processed files (watermark)
+			if processedFiles[relPath] {
+				skipped++
+				return nil
+			}
+
 			data, err := os.ReadFile(path)
 			if err != nil {
 				return nil
 			}
 
-			relPath := strings.TrimPrefix(path, vaultPath+"/")
 			memories, err := s.ExtractMemoriesFromDocument(relPath, string(data))
 			if err != nil {
 				log.Printf("[memory-extract] Error extracting from %s: %v", relPath, err)
@@ -340,18 +458,33 @@ func (s *Server) handleMemoryExtractVault(w http.ResponseWriter, r *http.Request
 				extracted++
 			}
 
+			// Mark file as processed in watermark
+			processedFiles[relPath] = true
 			processed++
 			if processed%10 == 0 {
-				log.Printf("[memory-extract] Processed %d files, extracted %d memories", processed, extracted)
+				log.Printf("[memory-extract] Processed %d files (skipped %d), extracted %d memories", processed, skipped, extracted)
+				// Save watermark periodically so crashes resume from here
+				s.saveVaultWatermark(watermarkPath, processedFiles)
 			}
-			
+
 			// Rate limit to avoid hammering the LLM
 			time.Sleep(2 * time.Second)
 			return nil
 		})
 
-		log.Printf("[memory-extract] Complete: %d files, %d memories extracted, %d queued", processed, extracted, queued)
+		// Final watermark save
+		s.saveVaultWatermark(watermarkPath, processedFiles)
+		log.Printf("[memory-extract] Complete: %d files processed, %d skipped, %d memories extracted, %d queued", processed, skipped, extracted, queued)
 	}()
+}
+
+func (s *Server) saveVaultWatermark(path string, processed map[string]bool) {
+	files := make([]string, 0, len(processed))
+	for f := range processed {
+		files = append(files, f)
+	}
+	data, _ := json.Marshal(files)
+	os.WriteFile(path, data, 0644)
 }
 
 func min(a, b int) int {

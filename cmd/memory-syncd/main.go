@@ -170,16 +170,31 @@ func lettaGetBlocks(baseURL, agentID string) ([]LettaBlock, error) {
 	return blocks, nil
 }
 
+// lettaUpdateBlock sends a message to the Letta agent asking it to self-edit a block.
+// This routes through the agent's reasoning rather than direct PATCH, preserving
+// Letta's core value: the agent decides what to persist using memory_replace/memory_insert.
 func lettaUpdateBlock(baseURL, agentID, label, value string) error {
-	url := fmt.Sprintf("%s/v1/agents/%s/core-memory/blocks/%s", baseURL, agentID, label)
-	body, _ := json.Marshal(map[string]string{"value": value})
-	req, err := http.NewRequest("PATCH", url, bytes.NewReader(body))
+	// Truncate value to avoid huge payloads
+	truncated := value
+	if len(truncated) > 2000 {
+		truncated = truncated[:2000] + "..."
+	}
+
+	msg := fmt.Sprintf("Workspace sync update for your [%s] block. Here is the current workspace state:\n\n%s\n\nPlease update your %s block to reflect this information. Use memory_replace to make targeted edits rather than overwriting everything.",
+		label, truncated, label)
+
+	payload, _ := json.Marshal(map[string]interface{}{
+		"messages": []map[string]string{{"role": "user", "content": msg}},
+	})
+
+	req, err := http.NewRequest("POST", fmt.Sprintf("%s/v1/agents/%s/messages/", baseURL, agentID), bytes.NewReader(payload))
 	if err != nil {
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer letta")
 
-	client := &http.Client{Timeout: 5 * time.Second}
+	client := &http.Client{Timeout: 60 * time.Second} // Agent reasoning takes time
 	resp, err := client.Do(req)
 	if err != nil {
 		return err
@@ -187,9 +202,17 @@ func lettaUpdateBlock(baseURL, agentID, label, value string) error {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != 200 {
-		return fmt.Errorf("letta update block %s: status %d", label, resp.StatusCode)
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("letta agent message for block %s: status %d: %s", label, resp.StatusCode, string(body[:min(200, len(body))]))
 	}
 	return nil
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 // ============================================================================

@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -514,6 +515,24 @@ func (s *Server) handlePairingAnswers(w http.ResponseWriter, r *http.Request) {
 			"answers": answersIface,
 		},
 	})
+
+	// Also queue each answer as a memory for approval
+	go func() {
+		for _, a := range body.Answers {
+			valueStr := fmt.Sprintf("%v", a.Value)
+			if valueStr == "" || valueStr == "<nil>" {
+				continue
+			}
+			m := ExtractMemoryFromPairing(
+				a.QuestionID,
+				fmt.Sprintf("%s / %s", a.InstrumentID, a.QuestionID),
+				valueStr,
+			)
+			if err := s.QueueMemoryForApproval(m); err != nil {
+				log.Printf("[pairing→queue] Failed to queue %s: %v", a.QuestionID, err)
+			}
+		}
+	}()
 
 	writeJSON(w, map[string]interface{}{
 		"accepted": len(body.Answers),

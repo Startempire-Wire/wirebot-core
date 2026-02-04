@@ -46,6 +46,7 @@
 package main
 
 import (
+	"bytes"
 	"crypto/rand"
 	"database/sql"
 	"encoding/json"
@@ -1079,49 +1080,30 @@ func (pe *PairingEngine) syncToMemory() {
 		}
 	}
 
-	// ── 2. Letta (if agent ID configured) ───────────────────────────────────
+	// ── 2. Letta (if agent ID configured) — route through agent message, not direct PATCH
 	if pe.config.LettaAgentID != "" {
-		getReq, err := http.NewRequest("GET",
-			fmt.Sprintf("%s/v1/agents/%s", pe.config.LettaURL, pe.config.LettaAgentID), nil)
+		stageUpdate := fmt.Sprintf(
+			"Pairing profile update from assessment:\nCurrent Score: %.0f/100\nPairing Level: %s (%.0f%% accuracy)\nProfile: %s\n\nPlease update your business_stage, human, and goals blocks with any relevant new information.",
+			pe.profile.PairingScore.Composite,
+			pe.profile.PairingScore.Level,
+			pe.computeAccuracy()*100,
+			safeSummary)
+
+		payload, _ := json.Marshal(map[string]interface{}{
+			"messages": []map[string]string{{"role": "user", "content": stageUpdate}},
+		})
+		req, err := http.NewRequest("POST",
+			fmt.Sprintf("%s/v1/agents/%s/messages/", pe.config.LettaURL, pe.config.LettaAgentID),
+			bytes.NewReader(payload))
 		if err == nil {
-			getReq.Header.Set("Authorization", "Bearer letta")
-			resp, err := client.Do(getReq)
-			if err == nil {
-				var agentData struct {
-					Memory struct {
-						Blocks []struct {
-							ID    string `json:"id"`
-							Label string `json:"label"`
-						} `json:"blocks"`
-					} `json:"memory"`
-				}
-				if json.NewDecoder(resp.Body).Decode(&agentData) == nil {
-					for _, block := range agentData.Memory.Blocks {
-						if block.Label == "business_stage" {
-							stageUpdate := fmt.Sprintf(
-								"Current Score: %.0f/100\nPairing Level: %s (%.0f%% accuracy)\nProfile: %s",
-								pe.profile.PairingScore.Composite,
-								pe.profile.PairingScore.Level,
-								pe.computeAccuracy()*100,
-								safeSummary)
-							updatePayload, _ := json.Marshal(map[string]string{"value": stageUpdate})
-							patchReq, _ := http.NewRequest("PATCH",
-								fmt.Sprintf("%s/v1/blocks/%s", pe.config.LettaURL, block.ID),
-								strings.NewReader(string(updatePayload)))
-							if patchReq != nil {
-								patchReq.Header.Set("Authorization", "Bearer letta")
-								patchReq.Header.Set("Content-Type", "application/json")
-								patchResp, err := client.Do(patchReq)
-								if err == nil {
-									patchResp.Body.Close()
-									log.Printf("[pairing] Letta block updated (score=%.0f)", pe.profile.PairingScore.Composite)
-								}
-							}
-							break
-						}
-					}
-				}
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("Authorization", "Bearer letta")
+			resp, err := client.Do(req)
+			if err != nil {
+				log.Printf("[pairing] Letta agent message error: %v", err)
+			} else {
 				resp.Body.Close()
+				log.Printf("[pairing] Letta agent notified of pairing update (score=%.0f)", pe.profile.PairingScore.Composite)
 			}
 		}
 	}
