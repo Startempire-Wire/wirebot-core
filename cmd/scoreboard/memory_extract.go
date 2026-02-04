@@ -621,7 +621,7 @@ func (s *Server) callLLMForExtraction(prompt string) (string, error) {
 	}
 
 	body := map[string]interface{}{
-		"model": "claude-sonnet-4-20250514",
+		"model": envOr("EXTRACTION_MODEL", "kimi-coding/k2p5"),
 		"messages": []map[string]string{
 			{"role": "user", "content": prompt},
 		},
