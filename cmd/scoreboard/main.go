@@ -465,6 +465,7 @@ func main() {
 	mux.HandleFunc("/v1/memory/extract-conversation", s.auth(s.handleMemoryExtractConversation))
 	mux.HandleFunc("/v1/system/health", s.auth(s.handleSystemHealth))
 	mux.HandleFunc("/v1/system/restart", s.auth(s.handleSystemRestart))
+	mux.HandleFunc("/v1/alerts", s.authMember(s.handleAlerts))
 
 	// Wirebot chat proxy — full conversations with memory retention
 	mux.HandleFunc("/v1/chat", s.auth(s.handleChat))
@@ -658,6 +659,7 @@ func main() {
 	log.Printf("Startup recalc complete for %s", today)
 
 	go s.lettaStateFeeder()
+	go s.lettaAlertChecker()
 
 	log.Printf("Scoreboard listening on %s (multi-tenant enabled)", listenAddr)
 	log.Fatal(http.ListenAndServe(listenAddr, topHandler))
@@ -850,6 +852,9 @@ func (s *Server) initDB() {
 
 	// Init reconciliation tables
 	s.initReconciliation()
+
+	// Init alerts table (Letta state → deterministic alerts)
+	s.initAlerts()
 
 	// Seed default season
 	var count int

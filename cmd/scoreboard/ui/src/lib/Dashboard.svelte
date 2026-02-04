@@ -20,6 +20,7 @@
 
   let { data = null, user = null, token = '', activeBusiness: parentBiz = '', pairingComplete = false, onOpenPairing = null, onNav = null } = $props();
   let localBiz = $state(parentBiz || '');  // local business filter state
+  let alerts = $state([]);
 
   // Keep local business selector in sync with parent (prevents stale UI if parentBiz changes externally)
   $effect(() => {
@@ -117,7 +118,8 @@
     buildSuggestions();
     loading = false;
 
-    // Load partners + proposals in background (non-blocking)
+    // Load alerts + partners + proposals in background (non-blocking)
+    authFetch('/v1/alerts').then(a => { if (a) alerts = a; });
     authFetch('/v1/network/members?limit=8').then(mem => {
       if (mem?.members) partners = mem.members;
       if (partners.length > 0) partnersOpen = true;
@@ -155,6 +157,11 @@
     localBiz = bizId;
     bizKey++;
     dispatch('businessChange', bizId);
+  }
+
+  async function dismissAlert(id) {
+    await fetch(`${API}/v1/alerts`, { method: 'POST', headers: { ...headers(), 'Content-Type': 'application/json' }, body: JSON.stringify({ id }) });
+    alerts = alerts.filter(a => a.id !== id);
   }
 
   function buildSuggestions() {
@@ -387,6 +394,19 @@
         {/if}
       </div>
     </div>
+
+    <!-- ═══ ALERTS STRIP ═══ -->
+    {#if alerts.length > 0}
+      <div class="alerts-strip">
+        {#each alerts as a (a.id)}
+          <div class="alert-item alert-{a.severity}">
+            <span class="alert-icon">{a.severity === 'critical' ? '🔴' : a.severity === 'warning' ? '🟡' : 'ℹ️'}</span>
+            <span class="alert-body"><strong>{a.title}</strong> — {a.detail}</span>
+            <button class="alert-dismiss" onclick={() => dismissAlert(a.id)}>✕</button>
+          </div>
+        {/each}
+      </div>
+    {/if}
 
     <!-- ═══ PAIRING ASSESSMENT CTA (prominent, only when incomplete) ═══ -->
     {#if !pairingComplete}
@@ -834,6 +854,20 @@
   .spinner { width: 32px; height: 32px; border: 3px solid var(--border-light); border-top-color: var(--accent); border-radius: 50%; animation: spin .8s linear infinite; }
   .spinner.small { width: 16px; height: 16px; border-width: 2px; }
   @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* ─── Alerts ─── */
+  .alerts-strip { display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px; }
+  .alert-item { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-radius: 10px; font-size: 13px; }
+  .alert-warning { background: #fef3c7; color: #92400e; }
+  .alert-critical { background: #fee2e2; color: #991b1b; }
+  .alert-info { background: var(--bg-card); color: var(--text-primary); border: 1px solid var(--border-light); }
+  :global(.dark) .alert-warning { background: #78350f33; color: #fbbf24; }
+  :global(.dark) .alert-critical { background: #7f1d1d33; color: #fca5a5; }
+  .alert-icon { font-size: 14px; flex-shrink: 0; }
+  .alert-body { flex: 1; line-height: 1.3; }
+  .alert-body strong { font-weight: 600; }
+  .alert-dismiss { background: none; border: none; opacity: 0.5; cursor: pointer; font-size: 14px; padding: 2px 4px; color: inherit; }
+  .alert-dismiss:hover { opacity: 1; }
 
   /* ─── Header ─── */
   .header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 12px; }
