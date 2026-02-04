@@ -262,49 +262,47 @@
     return t || item.type;
   }
 
-  // Deduplicate: collapse repeat GDRIVE_SCAN, hide bare "commit" when PRODUCT_RELEASE exists
+  // Deduplicate: hide duplicate commits, collapse repeated scans into one entry
   function dedupeItems(raw) {
-    // Track PRODUCT_RELEASE URLs to suppress matching commit events
-    const releaseUrls = new Set();
+    const out = [];
+    // Collect repos that have PRODUCT_RELEASE events
+    const releaseRepos = new Set();
+    // Collect repeated event types to collapse (keep first, count rest)
+    const collapsed = {};  // type → { item, count }
+
     for (const item of raw) {
-      if (item.type === 'PRODUCT_RELEASE' && item.url) releaseUrls.add(item.url);
+      if (item.type === 'PRODUCT_RELEASE') {
+        const m = (item.title || '').match(/^\[([^\]]+)\]/);
+        if (m) releaseRepos.add(m[1]);
+      }
     }
 
-    let lastGdrive = null;
-    let gdriveCount = 0;
-    const out = [];
-
     for (const item of raw) {
-      // Skip commit events that duplicate a PRODUCT_RELEASE from same repo
+      // Skip commit events when PRODUCT_RELEASE covers that repo
       if (item.type === 'commit') {
-        const repo = (item.url || item.title || '').match(/\/([^/]+?)(?:\.git)?$/)?.[1] || '';
-        const hasRelease = raw.some(r => r.type === 'PRODUCT_RELEASE' && r.title?.includes(`[${repo}]`));
-        if (hasRelease) continue;
+        const repo = (item.url || '').match(/\/([^/]+?)(?:\.git)?$/)?.[1] || '';
+        if (repo && releaseRepos.has(repo)) continue;
       }
 
-      // Collapse consecutive GDRIVE_SCAN into one
-      if (item.type === 'GDRIVE_SCAN') {
-        gdriveCount++;
-        if (!lastGdrive) lastGdrive = { ...item };
-        else lastGdrive.title = item.title; // keep latest title
+      // Collapse repeated scan/check types into one
+      if (['GDRIVE_SCAN', 'DROPBOX_SCAN'].includes(item.type)) {
+        if (!collapsed[item.type]) {
+          collapsed[item.type] = { item: { ...item }, count: 1 };
+        } else {
+          collapsed[item.type].count++;
+        }
         continue;
-      }
-
-      // Flush pending gdrive
-      if (lastGdrive) {
-        if (gdriveCount > 1) lastGdrive._count = gdriveCount;
-        out.push(lastGdrive);
-        lastGdrive = null;
-        gdriveCount = 0;
       }
 
       out.push(item);
     }
-    // Flush final gdrive
-    if (lastGdrive) {
-      if (gdriveCount > 1) lastGdrive._count = gdriveCount;
-      out.push(lastGdrive);
+
+    // Insert collapsed items at their natural position (after first few items)
+    for (const { item, count } of Object.values(collapsed)) {
+      if (count > 1) item._count = count;
+      out.push(item);
     }
+
     return out;
   }
   function statusIcon(s) {
