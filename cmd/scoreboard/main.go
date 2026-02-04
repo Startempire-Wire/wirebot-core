@@ -8826,47 +8826,66 @@ func (s *Server) emitIntegrationEvent(integrationID, eventType, lane, title, det
 	s.mu.Unlock()
 }
 
-// ─── Google Drive Integration (via gogcli) ──────────────────────────────
-// Uses `gog drive` CLI for auth + listing. Indexes file names for task proposals.
-// Credentials: OAuth token stored in gogcli keychain, account email in integration config.
+// ─── Google Drive Integration (via Drive API v3) ────────────────────────
+// Uses stored OAuth token to list files via Google Drive API.
+// Indexes file names for task proposals.
 
 func (s *Server) pollGoogleDrive(integrationID, credential, configJSON, lastPoll string) error {
-	var cfg map[string]string
-	json.Unmarshal([]byte(configJSON), &cfg)
-	account := cfg["account"] // e.g. "verious@startempirewire.com"
-	if account == "" {
-		account = credential // fallback: credential is the account email
+	// credential is OAuth token JSON from callback
+	var tokenData struct {
+		AccessToken  string `json:"access_token"`
+		RefreshToken string `json:"refresh_token"`
+	}
+	if err := json.Unmarshal([]byte(credential), &tokenData); err != nil || tokenData.AccessToken == "" {
+		return fmt.Errorf("invalid OAuth token for gdrive")
 	}
 
-	log.Printf("[gdrive] Scanning Google Drive for %s", account)
+	log.Printf("[gdrive] Scanning Google Drive via API")
 
-	// Use gogcli to list all files
-	cmd := fmt.Sprintf("gog --account %s --json drive ls --recursive --limit 500 2>/dev/null", account)
-	out, err := execCmd(cmd)
-	if err != nil {
-		// Try without recursive (might not be supported)
-		cmd = fmt.Sprintf("gog --account %s --json drive ls 2>/dev/null", account)
-		out, err = execCmd(cmd)
-		if err != nil {
-			return fmt.Errorf("gog drive ls failed: %v", err)
-		}
-	}
-
-	// Parse JSON output — gogcli outputs JSON array of files
+	// List files via Drive API v3
+	client := &http.Client{Timeout: 30 * time.Second}
 	var files []map[string]interface{}
-	if err := json.Unmarshal([]byte(out), &files); err != nil {
-		// Try parsing as newline-delimited JSON
-		for _, line := range strings.Split(out, "\n") {
-			line = strings.TrimSpace(line)
-			if line == "" || line == "[" || line == "]" {
-				continue
-			}
-			line = strings.TrimSuffix(line, ",")
-			var f map[string]interface{}
-			if json.Unmarshal([]byte(line), &f) == nil {
-				files = append(files, f)
-			}
+	pageToken := ""
+
+	for {
+		apiURL := "https://www.googleapis.com/drive/v3/files?pageSize=500&fields=nextPageToken,files(id,name,mimeType,modifiedTime)"
+		if pageToken != "" {
+			apiURL += "&pageToken=" + pageToken
 		}
+
+		req, _ := http.NewRequest("GET", apiURL, nil)
+		req.Header.Set("Authorization", "Bearer "+tokenData.AccessToken)
+
+		resp, err := client.Do(req)
+		if err != nil {
+			return fmt.Errorf("drive API request failed: %v", err)
+		}
+
+		if resp.StatusCode == 401 {
+			resp.Body.Close()
+			// TODO: refresh token and retry
+			return fmt.Errorf("drive API: access token expired (needs refresh)")
+		}
+
+		if resp.StatusCode != 200 {
+			body, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			return fmt.Errorf("drive API error %d: %s", resp.StatusCode, string(body))
+		}
+
+		var result struct {
+			NextPageToken string                   `json:"nextPageToken"`
+			Files         []map[string]interface{} `json:"files"`
+		}
+		json.NewDecoder(resp.Body).Decode(&result)
+		resp.Body.Close()
+
+		files = append(files, result.Files...)
+
+		if result.NextPageToken == "" || len(files) >= 2000 {
+			break
+		}
+		pageToken = result.NextPageToken
 	}
 
 	// Build index
@@ -8892,7 +8911,7 @@ func (s *Server) pollGoogleDrive(integrationID, credential, configJSON, lastPoll
 	// Emit discovery event
 	s.emitIntegrationEvent(integrationID, "GDRIVE_SCAN", "systems",
 		fmt.Sprintf("Google Drive: %d files indexed", len(indexFiles)),
-		fmt.Sprintf("Scanned Google Drive for %s", account))
+		"Scanned Google Drive via OAuth")
 
 	log.Printf("[gdrive] Indexed %d files from Google Drive", len(indexFiles))
 	return nil
@@ -8903,7 +8922,15 @@ func (s *Server) pollGoogleDrive(integrationID, credential, configJSON, lastPoll
 // Indexes file names for task proposals.
 
 func (s *Server) pollDropbox(integrationID, credential, configJSON, lastPoll string) error {
-	token := credential // OAuth access token
+	// credential is OAuth token JSON from callback, extract access_token
+	var tokenData struct {
+		AccessToken string `json:"access_token"`
+	}
+	if err := json.Unmarshal([]byte(credential), &tokenData); err != nil || tokenData.AccessToken == "" {
+		// fallback: credential might be raw access token
+		tokenData.AccessToken = credential
+	}
+	token := tokenData.AccessToken
 
 	log.Printf("[dropbox] Scanning Dropbox")
 
