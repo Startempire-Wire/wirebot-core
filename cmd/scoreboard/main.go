@@ -8931,6 +8931,9 @@ func (s *Server) pollDropbox(integrationID, credential, configJSON, lastPoll str
 		tokenData.AccessToken = credential
 	}
 	token := tokenData.AccessToken
+	if token == "" {
+		return fmt.Errorf("dropbox: no access token found in credential")
+	}
 
 	log.Printf("[dropbox] Scanning Dropbox")
 
@@ -8986,8 +8989,11 @@ func (s *Server) pollDropbox(integrationID, credential, configJSON, lastPoll str
 		})
 	}
 
-	// Handle pagination
-	for result.HasMore {
+	// Handle pagination (cap at 50 pages / ~100k files to avoid timeout)
+	pageNum := 1
+	maxPages := 50
+	for result.HasMore && pageNum < maxPages {
+		pageNum++
 		continuePayload, _ := json.Marshal(map[string]string{"cursor": result.Cursor})
 		req2, _ := http.NewRequest("POST", "https://api.dropboxapi.com/2/files/list_folder/continue", bytes.NewReader(continuePayload))
 		req2.Header.Set("Authorization", "Bearer "+token)
