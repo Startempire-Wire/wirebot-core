@@ -7903,8 +7903,16 @@ func (s *Server) pollDueIntegrations() {
 		case "dropbox":
 			pollErr = s.pollDropbox(id, credential, config, lastPoll)
 		case "stripe":
-			// Support API key from env var (for operator's own accounts)
+			// OAuth tokens are stored as JSON {"access_token":"sk_...","stripe_user_id":"acct_..."}
+			// API keys are stored as plain strings
 			apiKey := credential
+			if strings.HasPrefix(credential, "{") {
+				var creds map[string]string
+				json.Unmarshal([]byte(credential), &creds)
+				if at := creds["access_token"]; at != "" {
+					apiKey = at
+				}
+			}
 			if apiKey == "" && config != "" {
 				var cfg map[string]string
 				json.Unmarshal([]byte(config), &cfg)
@@ -9499,6 +9507,34 @@ func (s *Server) updateIntegrationCredential(integrationID, oldCred, newAccessTo
 // Uses Dropbox API v2 with OAuth access token.
 // Indexes file names for task proposals.
 
+func (s *Server) refreshDropboxToken(refreshToken string) (string, error) {
+	data := url.Values{}
+	data.Set("client_id", oauthDropboxClientID)
+	data.Set("client_secret", oauthDropboxClientSecret)
+	data.Set("refresh_token", refreshToken)
+	data.Set("grant_type", "refresh_token")
+
+	resp, err := http.PostForm("https://api.dropboxapi.com/oauth2/token", data)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	var result struct {
+		AccessToken string `json:"access_token"`
+		Error       string `json:"error"`
+		ErrorDesc   string `json:"error_description"`
+	}
+	json.NewDecoder(resp.Body).Decode(&result)
+	if result.Error != "" {
+		return "", fmt.Errorf("%s: %s", result.Error, result.ErrorDesc)
+	}
+	if result.AccessToken == "" {
+		return "", fmt.Errorf("no access_token in response")
+	}
+	return result.AccessToken, nil
+}
+
 func (s *Server) pollDropbox(integrationID, credential, configJSON, lastPoll string) error {
 	// credential is OAuth token JSON from callback, extract access_token
 	var tokenData struct {
@@ -9537,6 +9573,30 @@ func (s *Server) pollDropbox(integrationID, credential, configJSON, lastPoll str
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode == 401 {
+		resp.Body.Close()
+		// Try refreshing the token
+		var fullToken struct {
+			RefreshToken string `json:"refresh_token"`
+		}
+		json.Unmarshal([]byte(credential), &fullToken)
+		if fullToken.RefreshToken != "" && oauthDropboxClientID != "" {
+			newToken, err := s.refreshDropboxToken(fullToken.RefreshToken)
+			if err != nil {
+				return fmt.Errorf("dropbox token refresh failed: %v", err)
+			}
+			// Update stored credential with new access_token
+			var stored map[string]interface{}
+			json.Unmarshal([]byte(credential), &stored)
+			stored["access_token"] = newToken
+			updatedJSON, _ := json.Marshal(stored)
+			enc, nonce, _ := s.encryptCredential(updatedJSON)
+			s.db.Exec("UPDATE integrations SET credential_encrypted=?, credential_nonce=?, last_error='' WHERE id=?", enc, nonce, integrationID)
+			log.Printf("[dropbox] Token refreshed for %s", integrationID)
+			return nil // will succeed on next poll cycle
+		}
+		return fmt.Errorf("dropbox: expired_access_token (no refresh_token available — reconnect in Settings)")
+	}
 	if resp.StatusCode != 200 {
 		respBody, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("dropbox API error %d: %s", resp.StatusCode, string(respBody))
