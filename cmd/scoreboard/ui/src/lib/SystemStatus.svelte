@@ -1,27 +1,35 @@
 <script>
   /**
    * SystemStatus — Admin-only system health panel for Settings page.
-   * Shows service status with restart buttons and live polling counters.
-   * Only visible to superadmin (is_admin + operator token).
+   * - Lazy: only polls when visible (IntersectionObserver)
+   * - Non-blocking: fetch in background, never freezes UI
+   * - Live: 30s interval when visible, stops when scrolled away
    */
   let { token = '' } = $props();
   let health = $state(null);
   let loading = $state(true);
   let error = $state(false);
   let polling = $state(false);
-  let pollTimer = $state(null);
-  let restarting = $state({});  // { serviceName: true } while restart in progress
-  let restartMsg = $state({});  // { serviceName: 'Restarted ✓' }
+  let restarting = $state({});
+  let restartMsg = $state({});
   let lastChecked = $state('');
   let pollCount = $state(0);
+  let visible = $state(false);
+  let panelEl = $state(null);
+  let pollTimer = null;
 
   async function fetchHealth() {
+    if (polling) return; // skip if previous still running
     polling = true;
     pollCount++;
     try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 8000);
       const resp = await fetch('/v1/system/health', {
-        headers: { 'Authorization': `Bearer ${token}` }
+        headers: { 'Authorization': `Bearer ${token}` },
+        signal: controller.signal
       });
+      clearTimeout(timeout);
       if (resp.ok) {
         health = await resp.json();
         lastChecked = new Date().toLocaleTimeString();
@@ -29,25 +37,46 @@
       } else {
         error = true;
       }
-    } catch {
-      error = true;
+    } catch (e) {
+      if (e.name !== 'AbortError') error = true;
     }
     loading = false;
     polling = false;
   }
 
-  function startPolling() {
-    fetchHealth();
-    pollTimer = setInterval(fetchHealth, 15000); // 15s for admin
-  }
-
-  function stopPolling() {
-    if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
-  }
-
+  // IntersectionObserver — only poll when panel is on screen
   $effect(() => {
-    startPolling();
-    return () => stopPolling();
+    if (!panelEl) return;
+    const obs = new IntersectionObserver(
+      ([entry]) => {
+        visible = entry.isIntersecting;
+      },
+      { threshold: 0.1 }
+    );
+    obs.observe(panelEl);
+    return () => obs.disconnect();
+  });
+
+  // Start/stop polling based on visibility
+  $effect(() => {
+    if (visible) {
+      // First fetch immediately (non-blocking via requestIdleCallback)
+      if ('requestIdleCallback' in window) {
+        requestIdleCallback(() => fetchHealth());
+      } else {
+        setTimeout(fetchHealth, 100);
+      }
+      pollTimer = setInterval(() => {
+        if ('requestIdleCallback' in window) {
+          requestIdleCallback(() => fetchHealth());
+        } else {
+          fetchHealth();
+        }
+      }, 30000);
+    } else {
+      if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+    }
+    return () => { if (pollTimer) { clearInterval(pollTimer); pollTimer = null; } };
   });
 
   async function restartService(name) {
@@ -65,7 +94,6 @@
       const data = await resp.json();
       if (resp.ok) {
         restartMsg = { ...restartMsg, [name]: '✓ Restarted' };
-        // Re-poll after restart settles
         setTimeout(fetchHealth, 5000);
         setTimeout(fetchHealth, 12000);
       } else {
@@ -75,7 +103,6 @@
       restartMsg = { ...restartMsg, [name]: `✗ ${e.message}` };
     }
     restarting = { ...restarting, [name]: false };
-    // Clear message after 8s
     setTimeout(() => { restartMsg = { ...restartMsg, [name]: '' }; }, 8000);
   }
 
@@ -100,7 +127,6 @@
   }
 
   function canRestart(name) {
-    // Scoreboard can't restart itself
     return name !== 'scoreboard';
   }
 
@@ -111,7 +137,7 @@
   }
 </script>
 
-<div class="sys-panel">
+<div class="sys-panel" bind:this={panelEl}>
   <div class="sys-header">
     <div class="sys-title">
       <span class="sys-icon">🖥️</span>
@@ -124,12 +150,20 @@
       {#if lastChecked}
         <span class="sys-time">{lastChecked}</span>
       {/if}
-      <span class="sys-polls">#{pollCount}</span>
+      <button class="sys-refresh" onclick={fetchHealth} disabled={polling} title="Refresh now">↻</button>
     </div>
   </div>
 
   {#if loading}
-    <div class="sys-loading">Checking systems…</div>
+    <div class="sys-loading">
+      <div class="sys-skeleton">
+        <div class="skel-bar"></div>
+        <div class="skel-bar short"></div>
+        <div class="skel-bar"></div>
+        <div class="skel-bar short"></div>
+        <div class="skel-bar"></div>
+      </div>
+    </div>
   {:else if error}
     <div class="sys-error">
       <span>⚠️ Health check failed</span>
@@ -201,7 +235,7 @@
         <div class="sys-gauge-val">{health.disk_percent}%</div>
       </div>
       <div class="sys-gauge">
-        <div class="sys-gauge-label">📋 Memory Queue</div>
+        <div class="sys-gauge-label">📋 Queue</div>
         <div class="sys-gauge-counts">
           <span class="sys-cnt pending">{health.memory_pending}</span>
           <span class="sys-cnt-label">pending</span>
@@ -244,19 +278,50 @@
   @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
   .sys-meta {
     display: flex;
+    align-items: center;
     gap: 8px;
     font-size: 10px;
     color: var(--text-tertiary, #555);
   }
-  .sys-polls { opacity: 0.4; }
+  .sys-refresh {
+    width: 22px;
+    height: 22px;
+    border-radius: 5px;
+    border: 1px solid var(--border, rgba(255,255,255,0.12));
+    background: transparent;
+    color: var(--text-secondary, #888);
+    font-size: 12px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .sys-refresh:hover { background: var(--accent, #6366f1); color: #fff; border-color: var(--accent); }
+  .sys-refresh:disabled { opacity: 0.3; cursor: default; }
 
-  .sys-loading, .sys-error {
+  /* Skeleton loading */
+  .sys-loading { padding: 8px 0; }
+  .sys-skeleton { display: flex; flex-direction: column; gap: 8px; }
+  .skel-bar {
+    height: 32px;
+    background: linear-gradient(90deg, var(--card-bg-hover, rgba(255,255,255,0.04)) 25%, rgba(255,255,255,0.08) 50%, var(--card-bg-hover, rgba(255,255,255,0.04)) 75%);
+    background-size: 200% 100%;
+    animation: shimmer 1.5s infinite;
+    border-radius: 6px;
+  }
+  .skel-bar.short { width: 60%; }
+  @keyframes shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
+
+  .sys-error {
     text-align: center;
     padding: 20px;
     font-size: 12px;
     color: var(--text-secondary, #888);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    justify-content: center;
   }
-  .sys-error { display: flex; align-items: center; gap: 8px; justify-content: center; }
   .sys-retry {
     background: var(--accent, #6366f1);
     color: #fff;
@@ -291,7 +356,7 @@
     border: 1px solid transparent;
     border-radius: 8px;
     padding: 8px 10px;
-    transition: all 0.2s;
+    transition: border-color 0.3s, background 0.3s;
   }
   .sys-svc.down { border-color: rgba(239, 68, 68, 0.3); background: rgba(239, 68, 68, 0.05); }
   .sys-svc.degraded { border-color: rgba(234, 179, 8, 0.3); background: rgba(234, 179, 8, 0.05); }

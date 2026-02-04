@@ -1143,13 +1143,46 @@ func (s *Server) handleSystemHealth(w http.ResponseWriter, r *http.Request) {
 		return svcStatus{Name: name, Status: "degraded", Latency: latency, Detail: fmt.Sprintf("HTTP %d", resp.StatusCode)}
 	}
 
-	services := []svcStatus{
-		{Name: "scoreboard", Status: "up", Latency: 0, Detail: "this service"},
-		check("gateway", "http://127.0.0.1:18789/"),
-		check("mem0", "http://127.0.0.1:8200/health"),
-		check("letta", "http://127.0.0.1:8283/v1/health"),
-		check("memory-sync", "http://127.0.0.1:8201/health"),
+	// TCP-only check for services that serve heavy HTML on GET
+	checkTCP := func(name, addr string) svcStatus {
+		start := time.Now()
+		conn, err := net.DialTimeout("tcp", addr, 2*time.Second)
+		latency := int(time.Since(start).Milliseconds())
+		if err != nil {
+			return svcStatus{Name: name, Status: "down", Latency: latency, Detail: "unreachable"}
+		}
+		conn.Close()
+		return svcStatus{Name: name, Status: "up", Latency: latency}
 	}
+
+	// Check all services in parallel
+	type checkTarget struct {
+		name string
+		url  string
+		tcp  bool // use TCP dial instead of HTTP GET
+	}
+	targets := []checkTarget{
+		{"gateway", "127.0.0.1:18789", true},
+		{"mem0", "http://127.0.0.1:8200/health", false},
+		{"letta", "http://127.0.0.1:8283/v1/health", false},
+		{"memory-sync", "http://127.0.0.1:8201/health", false},
+	}
+	results := make([]svcStatus, len(targets))
+	var wg sync.WaitGroup
+	for i, t := range targets {
+		wg.Add(1)
+		go func(idx int, tgt checkTarget) {
+			defer wg.Done()
+			if tgt.tcp {
+				results[idx] = checkTCP(tgt.name, tgt.url)
+			} else {
+				results[idx] = check(tgt.name, tgt.url)
+			}
+		}(i, t)
+	}
+	wg.Wait()
+
+	services := append([]svcStatus{{Name: "scoreboard", Status: "up", Latency: 0, Detail: "this service"}}, results...)
 
 	// Memory queue counts
 	var pending, approved int
