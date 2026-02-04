@@ -17,7 +17,7 @@ Ring Leader Plugin (identity + network graph)
         └─ Wirebot Plugin (auth + provisioning)
                  │
                  ▼
-           Clawdbot Runtime
+           OpenClaw Runtime
                  │
                  ▼
         Letta + Mem0 (memory)
@@ -32,7 +32,7 @@ Ring Leader Plugin (identity + network graph)
 - **MemberPress** determines tier
 - **Ring Leader** exposes network identity
 - **Wirebot Plugin** routes:
-  - Top tier → dedicated Clawdbot
+  - Top tier → dedicated OpenClaw
   - Lower tier → shared gateway
 
 ### 2) Network Context
@@ -67,7 +67,7 @@ Member logs in (startempirewire.com)
     ▼
 Wirebot plugin detects tier + member_id
     │
-    ├─ Top tier → provision dedicated Clawdbot
+    ├─ Top tier → provision dedicated OpenClaw
     └─ Lower tier → shared gateway (agents.list + bindings)
     │
     ▼
@@ -100,7 +100,7 @@ Core functions:
 | Tier | Infrastructure | Network Intel |
 |------|----------------|---------------|
 | Wire/ExtraWire | Shared gateway | ✅ |
-| Sovereign | Dedicated Clawdbot | ✅ |
+| Sovereign | Dedicated OpenClaw | ✅ |
 
 ---
 
@@ -108,7 +108,7 @@ Core functions:
 
 - Network context only for authenticated members
 - No cross-member leakage
-- Clawdbot default DM policy = pairing
+- OpenClaw default DM policy = pairing
 - Channel allowlists must be managed by plugin
 
 ---

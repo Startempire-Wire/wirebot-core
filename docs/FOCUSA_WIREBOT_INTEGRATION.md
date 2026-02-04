@@ -1392,7 +1392,7 @@ Each event includes: job id, kind, duration_ms, correlation_id.
 
 Workers have **no persistent state**. All persistence handled by reducer.
 
-**Bridge mapping:** Workers → async functions in bridge plugin, triggered by Clawdbot `afterAgentTurn` hook.
+**Bridge mapping:** Workers → async functions in bridge plugin, triggered by OpenClaw `afterAgentTurn` hook.
 
 ---
 
@@ -1547,7 +1547,7 @@ If Focusa fails:
 - `proxy.max_inject_tokens = 2000`
 - `proxy.passthrough_on_error = true`
 
-**Bridge mapping:** Proxy Adapter = Clawdbot gateway itself. Clawdbot already intercepts all model requests. Bridge hooks (`beforeAgentTurn`, `afterAgentTurn`) serve as the adapter interface points.
+**Bridge mapping:** Proxy Adapter = OpenClaw gateway itself. OpenClaw already intercepts all model requests. Bridge hooks (`beforeAgentTurn`, `afterAgentTurn`) serve as the adapter interface points.
 
 ---
 
@@ -2052,7 +2052,7 @@ Every event must include: thread_id (if applicable), instance_id, session_id, at
 
 Events: `instance.connected`, `instance.disconnected`, `session.started`, `session.ended`, `session.timed_out`, `thread.attached`, `thread.detached`, `proposal.submitted`, `proposal.resolved`.
 
-**Bridge mapping:** Each Clawdbot channel (WebSocket, Discord, Telegram, SMS) = one Instance. Each Clawdbot session = one Session. One Thread per founder.
+**Bridge mapping:** Each OpenClaw channel (WebSocket, Discord, Telegram, SMS) = one Instance. Each OpenClaw session = one Session. One Thread per founder.
 
 ---
 
@@ -2298,7 +2298,7 @@ The skill surface does not change — only gate behavior does.
 
 > **Skills reveal truth. Gates decide action. Autonomy is earned.**
 
-**Bridge mapping:** Each Focusa skill → Clawdbot registered tool via `api.registerTool()` in bridge plugin.
+**Bridge mapping:** Each Focusa skill → OpenClaw registered tool via `api.registerTool()` in bridge plugin.
 
 ---
 
@@ -2865,7 +2865,7 @@ C0 caches are immutable — never invalidated.
 
 > **If caching and cognition disagree, cognition wins.**
 
-**Bridge mapping:** Cache policies → bridge plugin configuration. memory-core's embedding cache is C0 (content-addressed). Provider KV caching via Clawdbot's model failover layer.
+**Bridge mapping:** Cache policies → bridge plugin configuration. memory-core's embedding cache is C0 (content-addressed). Provider KV caching via OpenClaw's model failover layer.
 
 ---
 
@@ -3065,7 +3065,7 @@ Codes: `unauthorized`, `forbidden`, `not_found`, `invalid_request`, `policy_viol
 
 > **The Capabilities API exposes everything you need to understand Focusa — but only explicit, audited commands may change it.**
 
-**Bridge mapping:** Capabilities API endpoints → Clawdbot registered tools. Each `GET` endpoint → read-only tool. `POST /v1/commands/submit` → guarded `focusa.request_command` tool.
+**Bridge mapping:** Capabilities API endpoints → OpenClaw registered tools. Each `GET` endpoint → read-only tool. `POST /v1/commands/submit` → guarded `focusa.request_command` tool.
 
 ---
 
@@ -3128,7 +3128,7 @@ UFI records (append-only)             Local SQLite              /data/wirebot/fo
 UXP snapshot (readable)               Workspace file            clawd/USER.md
 Telemetry events (CTL)                Local append-only         /data/wirebot/focusa-state/telemetry.jsonl
 Reducer events                        Local append-only         /data/wirebot/focusa-state/events.jsonl
-Telemetry (system)                    systemd journal           journalctl -u clawdbot-gateway
+Telemetry (system)                    systemd journal           journalctl -u openclaw-gateway
 Agent schema                          Letta agent config        agent-82610d14-*
 Agent Constitution (active)           Workspace file            clawd/SOUL.md
 Agent Constitution (versions)         Local directory            /data/wirebot/focusa-state/constitutions/
@@ -3269,7 +3269,7 @@ Each bust records: timestamp, category (A–F), reason, impacted cache classes, 
 
 > **We bust caches when the system risks being wrong, stale, or miscalibrated — even if it costs tokens.**
 
-**Bridge mapping:** Bust triggers → bridge plugin event handlers. Category A/B map to Clawdbot config change events. Category D/E map to UFI signals from UXP/UFI module.
+**Bridge mapping:** Bust triggers → bridge plugin event handlers. Category A/B map to OpenClaw config change events. Category D/E map to UFI signals from UXP/UFI module.
 
 ---
 
@@ -3483,7 +3483,7 @@ Source: `26-agent-capability-scope.md`
 
 > **Agents reason *with* Focusa — they do not reason *instead of* Focusa.**
 
-**Bridge mapping:** Wirebot itself is the agent. Clawdbot registered tools = read scopes. Bridge plugin enforces scope tiers.
+**Bridge mapping:** Wirebot itself is the agent. OpenClaw registered tools = read scopes. Bridge plugin enforces scope tiers.
 
 ---
 
@@ -3543,7 +3543,7 @@ Focusa terminates ACP client transport, routes bidirectionally, maps ACP session
 
 > **Observation is optional. Proxying is explicit. Cognition is earned.**
 
-**Bridge mapping:** Clawdbot IS the proxy layer. Mode B is the natural architecture — Clawdbot already mediates all model requests. `beforeAgentTurn` / `afterAgentTurn` hooks serve as the ACP cognitive hook equivalents.
+**Bridge mapping:** OpenClaw IS the proxy layer. Mode B is the natural architecture — OpenClaw already mediates all model requests. `beforeAgentTurn` / `afterAgentTurn` hooks serve as the ACP cognitive hook equivalents.
 
 ---
 
@@ -3612,7 +3612,7 @@ Every skill invocation emits: `skill.invoked`, `capability.accessed`, `permissio
 
 > **If a skill cannot be mapped to a capability, it must not exist.**
 
-**Bridge mapping:** Each row in the table above → one `api.registerTool()` call in bridge plugin. Read skills map directly; proposal skills go through Clawdbot's command validation.
+**Bridge mapping:** Each row in the table above → one `api.registerTool()` call in bridge plugin. Read skills map directly; proposal skills go through OpenClaw's command validation.
 
 ---
 
@@ -3837,7 +3837,7 @@ Mutating commands MUST: show summary, require confirmation, support `--dry-run`,
 
 > **If the CLI cannot explain what happened, the system is wrong.**
 
-**Bridge mapping:** CLI commands → Clawdbot registered tools. Each `focusa <domain> <action>` maps to a `wirebot_focusa_<domain>_<action>` tool.
+**Bridge mapping:** CLI commands → OpenClaw registered tools. Each `focusa <domain> <action>` maps to a `wirebot_focusa_<domain>_<action>` tool.
 
 ---
 
@@ -4077,7 +4077,7 @@ Required scopes: `telemetry:read`, `export:start` (for exports).
 
 > **Telemetry is queryable, never mutable.**
 
-**Bridge mapping:** Each endpoint → Clawdbot registered tool or dashboard API route.
+**Bridge mapping:** Each endpoint → OpenClaw registered tool or dashboard API route.
 
 ---
 
@@ -4221,7 +4221,7 @@ MUST: keep cognition explicit, keep behavior deterministic, emit events for all 
 - State must survive restarts
 - Passthrough must work if Focusa fails
 
-**Bridge mapping:** Implementation order → bridge plugin build sequence. Bridge implements steps 1-7 in TypeScript on Clawdbot. Steps 8-11 use Clawdbot's existing API/CLI/web infrastructure.
+**Bridge mapping:** Implementation order → bridge plugin build sequence. Bridge implements steps 1-7 in TypeScript on OpenClaw. Steps 8-11 use OpenClaw's existing API/CLI/web infrastructure.
 
 ---
 
@@ -4358,7 +4358,7 @@ Not multi-writer. Not distributed. Not autonomous. Not self-modifying. Not cloud
 
 > **The Focusa Runtime is the stable ground of cognition. It does not think, decide, or act — it maintains coherence.**
 
-**Bridge mapping:** Daemon = Clawdbot gateway process. Session management = Clawdbot session model. Event system = bridge plugin event emitters.
+**Bridge mapping:** Daemon = OpenClaw gateway process. Session management = OpenClaw session model. Event system = bridge plugin event emitters.
 
 ---
 
@@ -4500,7 +4500,7 @@ Verified compatibility: Unsloth, HuggingFace `datasets`, Axolotl, TRL (DPO/IPO).
 
 > **Exporting data is an act of training — not logging. Treat it with the same rigor as model evaluation.**
 
-**Bridge mapping:** Export CLI → scheduled bridge job or manual Clawdbot tool.
+**Bridge mapping:** Export CLI → scheduled bridge job or manual OpenClaw tool.
 
 ---
 
@@ -4552,7 +4552,7 @@ HTTP status + `{ code, message, details?, correlation_id? }`
 
 Repeated status reads do not mutate state. `turn/complete` with same `turn_id` must not double-apply (turn_id dedupe).
 
-**Bridge mapping:** Gen1 API → Clawdbot HTTP API. `POST /v1/focus/push` → `wirebot_focus_push` tool. Turn lifecycle → Clawdbot's built-in turn model.
+**Bridge mapping:** Gen1 API → OpenClaw HTTP API. `POST /v1/focus/push` → `wirebot_focus_push` tool. Turn lifecycle → OpenClaw's built-in turn model.
 
 ---
 
@@ -4584,7 +4584,7 @@ Default: human-readable. `--json`: exact API response passthrough.
 
 Non-zero exit codes. Errors include message, correlation_id, suggested next action.
 
-**Bridge mapping:** Gen1 CLI commands → Clawdbot registered tools. Each command → one `api.registerTool()` call.
+**Bridge mapping:** Gen1 CLI commands → OpenClaw registered tools. Each command → one `api.registerTool()` call.
 
 ---
 
@@ -4625,7 +4625,7 @@ Any change to prompt assembly → snapshot comparison. Any change to Focus Gate 
 
 MVP complete only when: no silent degradation exists, human override always wins, long sessions remain stable, focus never auto-shifts, all failures are observable.
 
-**Bridge mapping:** These acceptance criteria become bridge plugin test cases. Each test → automated verification via Clawdbot WebSocket RPC.
+**Bridge mapping:** These acceptance criteria become bridge plugin test cases. Each test → automated verification via OpenClaw WebSocket RPC.
 
 ---
 

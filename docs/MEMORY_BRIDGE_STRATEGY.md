@@ -16,7 +16,7 @@ No caller for Mem0. No caller for Letta. The `wirebot-memory` skill describes th
 
 ## Each System's Actual Strengths (From Research)
 
-### memory-core (Clawdbot built-in)
+### memory-core (OpenClaw built-in)
 **What it is:** File-watching vector index over the workspace directory.
 **Strengths:**
 - Zero-latency: embedded in gateway process, no HTTP call
@@ -85,7 +85,7 @@ Each system has a **primary role** with clear write ownership. Reads cascade fro
 │         │                 │                    │                │
 │    ─────┴─────────────────┴────────────────────┴──────          │
 │                    BRIDGE LAYER                                  │
-│              (Clawdbot plugin + cron)                           │
+│              (OpenClaw plugin + cron)                           │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -96,7 +96,7 @@ Each system has a **primary role** with clear write ownership. Reads cascade fro
 | Daily logs, identity, soul | **memory-core** (via workspace files) | Files are the source of truth; auto-indexed |
 | User preferences, decisions, facts | **Mem0** (via bridge after conversations) | LLM-extracted, deduplicated, contradiction-resolved |
 | Business stage, goals, KPIs, checklists | **Letta** (via memory blocks) | Agent self-manages structured state |
-| Conversation history | **Clawdbot sessions** (built-in) | Already handled by gateway |
+| Conversation history | **OpenClaw sessions** (built-in) | Already handled by gateway |
 
 ### Read Cascade (How Recall Works)
 
@@ -110,12 +110,12 @@ When Wirebot needs to recall something:
 3. Letta block read (fast, ~100ms HTTP) or agent query (slow, ~2s)
 ```
 
-This is implemented as a single Clawdbot tool: `wirebot_recall`.
+This is implemented as a single OpenClaw tool: `wirebot_recall`.
 
 ### Sync Flows (How Data Moves Between Systems)
 
 #### Flow 1: Conversation → Mem0 (Post-turn extraction)
-**Trigger:** After every agent turn (Clawdbot hook: `afterAgentTurn`)
+**Trigger:** After every agent turn (OpenClaw hook: `afterAgentTurn`)
 **Logic:**
 ```
 1. Get the last user message + assistant response
@@ -162,7 +162,7 @@ This is implemented as a single Clawdbot tool: `wirebot_recall`.
 **Trigger:** Daily Standup (8AM), EOD Review (6PM), Weekly Planning (Mon 7AM)
 **Logic:**
 ```
-1. Cron runs Clawdbot agent turn (existing behavior)
+1. Cron runs OpenClaw agent turn (existing behavior)
 2. Bridge extracts facts from cron output → Mem0
 3. Bridge checks for business state changes → Letta block updates
 4. Agent writes daily log → workspace → memory-core auto-indexes
@@ -172,9 +172,9 @@ This is implemented as a single Clawdbot tool: `wirebot_recall`.
 
 ## Implementation Plan
 
-### Component 1: Clawdbot Plugin — `wirebot-memory-bridge`
+### Component 1: OpenClaw Plugin — `wirebot-memory-bridge`
 
-A Clawdbot extension (TypeScript, loaded at gateway startup) that:
+A OpenClaw extension (TypeScript, loaded at gateway startup) that:
 - Registers 3 tools: `wirebot_recall`, `wirebot_remember`, `wirebot_business_state`
 - Hooks into `afterAgentTurn` for automatic Mem0 extraction
 - Runs as `kind: "extension"` (not `kind: "memory"`, so no slot conflict)
@@ -188,7 +188,7 @@ const bridge = {
   description: "Coordinates memory across memory-core, Mem0, and Letta",
   kind: "extension" as const,
 
-  register(api: ClawdbotPluginApi) {
+  register(api: OpenClawPluginApi) {
 
     // === Tool: wirebot_recall ===
     // Cascading search across all three memory layers
@@ -357,7 +357,7 @@ You are NOT a conversational assistant — you are a state management engine.
 **Solution:** 
 1. **Mem0 is idempotent** — `add()` deduplicates via vector similarity (>0.95 = same fact). No race condition possible.
 2. **Letta blocks use last-write-wins** — acceptable because updates are sparse (~1-5/day) and semantic (not numeric counters).
-3. **Workspace files** — Only one writer at a time (Clawdbot agent or sync script). Sync script runs at midnight when no live conversation is expected. If collision occurs, `memory-core` re-indexes on next file change.
+3. **Workspace files** — Only one writer at a time (OpenClaw agent or sync script). Sync script runs at midnight when no live conversation is expected. If collision occurs, `memory-core` re-indexes on next file change.
 4. **Bridge extraction is async** — `afterAgentTurn` hook fires after response is sent, so extraction doesn't block live conversation.
 
 ### Problem: Stale reads across layers

@@ -1,17 +1,17 @@
-# Wirebot Dual-Track Business Plan (Clawdbot-Based)
+# Wirebot Dual-Track Business Plan (OpenClaw-Based)
 
-> **Standalone + Network. Full Clawdbot available day 0 for top tier.**
+> **Standalone + Network. Full OpenClaw available day 0 for top tier.**
 
 ---
 
 ## Overview
 
-Wirebot uses Clawdbot as the runtime and ships two tracks:
+Wirebot uses OpenClaw as the runtime and ships two tracks:
 
 1. **Track A: Standalone** — wirebot.chat
 2. **Track B: Network-Integrated** — Startempire Wire members
 
-Both tracks can provision **full Clawdbot** for top tier from day 0.
+Both tracks can provision **full OpenClaw** for top tier from day 0.
 
 ---
 
@@ -19,8 +19,8 @@ Both tracks can provision **full Clawdbot** for top tier from day 0.
 
 | Tier | Infrastructure | Notes |
 |------|----------------|-------|
-| **Top tier** | Dedicated Clawdbot container | Full channels + autonomy |
-| **Lower tiers** | Shared Clawdbot gateway | Multi-tenant agents |
+| **Top tier** | Dedicated OpenClaw container | Full channels + autonomy |
+| **Lower tiers** | Shared OpenClaw gateway | Multi-tenant agents |
 
 ---
 
@@ -28,7 +28,7 @@ Both tracks can provision **full Clawdbot** for top tier from day 0.
 
 - Auth: WordPress
 - Billing: Stripe
-- Runtime: Clawdbot
+- Runtime: OpenClaw
 
 **Example tiering** (prices TBD):
 
@@ -38,7 +38,7 @@ Both tracks can provision **full Clawdbot** for top tier from day 0.
 | Basic | Shared | Web only |
 | Standard | Shared | Web + Discord/Telegram |
 | Premium | Shared | + SMS* |
-| Power | Dedicated | Full Clawdbot |
+| Power | Dedicated | Full OpenClaw |
 
 *SMS depends on Android/iMessage or email‑to‑SMS gateway (unreliable).
 
@@ -48,7 +48,7 @@ Both tracks can provision **full Clawdbot** for top tier from day 0.
 
 - Auth: Ring Leader SSO
 - Billing: MemberPress
-- Runtime: Clawdbot + network intelligence
+- Runtime: OpenClaw + network intelligence
 
 | Tier | Infra | Channels | Network Intel |
 |------|-------|----------|---------------|
@@ -56,11 +56,11 @@ Both tracks can provision **full Clawdbot** for top tier from day 0.
 | FreeWire | Shared | Web only | ❌ |
 | Wire | Shared | Discord/Telegram | ✅ |
 | ExtraWire | Shared | Full shared channels | ✅ Deep |
-| Sovereign | Dedicated | Full Clawdbot | ✅ Deep |
+| Sovereign | Dedicated | Full OpenClaw | ✅ Deep |
 
 ---
 
-## Clawdbot Config (Shared Gateway)
+## OpenClaw Config (Shared Gateway)
 
 ```json5
 {
@@ -78,7 +78,7 @@ Both tracks can provision **full Clawdbot** for top tier from day 0.
 
 ## SMS Reality
 
-Clawdbot does **not** include Twilio SMS.
+OpenClaw does **not** include Twilio SMS.
 
 Options (supported plan):
 - Android node (`sms.send`)
@@ -103,7 +103,7 @@ Injected into Letta + Mem0 per user.
 ## Upgrade Path
 
 Lower tier → top tier:
-- Provision Clawdbot container
+- Provision OpenClaw container
 - Migrate Letta agent + Mem0 namespace
 - Enable full channels
 

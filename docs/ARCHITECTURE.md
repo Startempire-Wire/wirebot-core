@@ -1,6 +1,6 @@
-# Wirebot Architecture (Clawdbot-Based)
+# Wirebot Architecture (OpenClaw-Based)
 
-> **Clawdbot is the runtime. Wirebot is skills + product shell + network intelligence.**
+> **OpenClaw is the runtime. Wirebot is skills + product shell + network intelligence.**
 
 ---
 
@@ -23,7 +23,7 @@
 │  └──────────────┬──────────────────────────────────────┘     │
 │                 │                                             │
 │  ┌──────────────▼──────────────────────────────────────┐     │
-│  │  Clawdbot Gateway (clawdbot-gateway.service)         │     │
+│  │  OpenClaw Gateway (openclaw-gateway.service)         │     │
 │  │  Port: 18789 (loopback only)                         │     │
 │  │  User: wirebot | Node: v22.22.0                      │     │
 │  │                                                       │     │
@@ -61,7 +61,7 @@
 
 ## Component Responsibilities
 
-### Clawdbot Gateway (Runtime)
+### OpenClaw Gateway (Runtime)
 
 **Owns:**
 - WebSocket control plane (ws://127.0.0.1:18789)
@@ -104,8 +104,8 @@ Exposes the loopback-bound gateway to the public internet via encrypted tunnel.
 ### Secret Management (rbw + OAuth)
 
 - **Provider API keys:** Retrieved from Bitwarden vault (`rbw`) at service start
-- **Anthropic OAuth:** Synced from Claude Code credentials, auto-refreshed by Clawdbot
-- **Gateway token:** Stored in `clawdbot.json` (mode 600)
+- **Anthropic OAuth:** Synced from Claude Code credentials, auto-refreshed by OpenClaw
+- **Gateway token:** Stored in `openclaw.json` (mode 600)
 - **Runtime secrets:** Written to tmpfs `/run/wirebot/gateway.env` (cleared on reboot)
 
 See [AUTH_AND_SECRETS.md](./AUTH_AND_SECRETS.md) for details.
@@ -120,9 +120,9 @@ Each user gets isolated state:
 
 | Layer | Isolation Key | Storage |
 |-------|--------------|---------|
-| Clawdbot agent | `agentId` | `agents/<id>/agent/` + workspace |
-| Clawdbot sessions | `agentId + channel + peer` | `agents/<id>/sessions/` |
-| Clawdbot memory | `agentId + workspaceDir` | SQLite per-agent |
+| OpenClaw agent | `agentId` | `agents/<id>/agent/` + workspace |
+| OpenClaw sessions | `agentId + channel + peer` | `agents/<id>/sessions/` |
+| OpenClaw memory | `agentId + workspaceDir` | SQLite per-agent |
 | Letta (planned) | `agent_<user_id>` | Letta server |
 | Mem0 (planned) | `wirebot_<user_id>` | Mem0 server |
 
@@ -130,7 +130,7 @@ Each user gets isolated state:
 
 ```
 /data/wirebot/users/<user_id>/           # State dir (700, wirebot)
-├── clawdbot.json                        # Config (600)
+├── openclaw.json                        # Config (600)
 ├── credentials/                          # Channel pairing + allowlists
 ├── cron/                                 # Cron job definitions
 ├── devices/                              # Paired devices
@@ -164,7 +164,7 @@ Each user gets isolated state:
 
 ### Shared Gateway (Lower Tiers)
 
-Single Clawdbot gateway with multi-tenant agents:
+Single OpenClaw gateway with multi-tenant agents:
 
 ```
 One gateway process (port 18789)
@@ -177,7 +177,7 @@ Config: `agents.list` + `bindings` for channel → agent routing.
 
 ### Dedicated Gateway (Top Tier)
 
-Per-user Clawdbot container with unique port:
+Per-user OpenClaw container with unique port:
 
 ```
 Gateway process (port 18xxx)
@@ -186,7 +186,7 @@ Gateway process (port 18xxx)
 └── Own workspace + credentials
 ```
 
-Provisioned via script with per-user `CLAWDBOT_STATE_DIR` and port.
+Provisioned via script with per-user `OPENCLAW_STATE_DIR` and port.
 
 ---
 
@@ -194,7 +194,7 @@ Provisioned via script with per-user `CLAWDBOT_STATE_DIR` and port.
 
 ```
 ┌─────────────────────────────┐
-│  Clawdbot Memory (Built-in) │  ← Daily logs + MEMORY.md + hybrid search
+│  OpenClaw Memory (Built-in) │  ← Daily logs + MEMORY.md + hybrid search
 │  SQLite + sqlite-vec + FTS5 │     Operational. Used now.
 ├─────────────────────────────┤
 │  Letta (Planned)            │  ← Structured business state (goals, KPIs, stage)
@@ -218,7 +218,7 @@ Ring Leader Plugin (identity + network graph)
         │
 Wirebot Plugin (auth + provisioning + tier routing)
         │
-Clawdbot Runtime (gateway + skills + channels)
+OpenClaw Runtime (gateway + skills + channels)
         │
 Letta + Mem0 (memory + context)
 ```
@@ -231,7 +231,7 @@ See [NETWORK_INTEGRATION.md](./NETWORK_INTEGRATION.md) for details.
 
 | Service | Unit | Port | User | Status |
 |---------|------|------|------|--------|
-| Clawdbot Gateway | `clawdbot-gateway.service` | 18789 | wirebot | ✅ Running |
+| OpenClaw Gateway | `openclaw-gateway.service` | 18789 | wirebot | ✅ Running |
 | Cloudflare Tunnel | `cloudflared-wirebot.service` | N/A | root | ✅ Running |
 | Browser Control | (embedded) | 18791 | wirebot | ✅ Running |
 | Letta Server | — | TBD | — | ❌ Not deployed |

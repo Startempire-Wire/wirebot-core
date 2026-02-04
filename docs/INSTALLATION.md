@@ -1,6 +1,6 @@
 # Installation & Setup
 
-> **Complete production install procedure: Node, Clawdbot, config, auth, systemd, tunnel.**
+> **Complete production install procedure: Node, OpenClaw, config, auth, systemd, tunnel.**
 
 ---
 
@@ -34,15 +34,15 @@ node --version  # v22.x.x
 
 ---
 
-## Step 2: Install Clawdbot
+## Step 2: Install OpenClaw
 
 ```bash
 # As wirebot user
-npm install -g clawdbot@latest
-clawdbot --version  # 2026.x.x
+npm install -g openclaw@latest
+openclaw --version  # 2026.x.x
 ```
 
-Binary installed to: `/home/wirebot/.nvm/versions/node/v22.x.x/bin/clawdbot`
+Binary installed to: `/home/wirebot/.nvm/versions/node/v22.x.x/bin/openclaw`
 
 ---
 
@@ -62,7 +62,7 @@ chmod 700 /data/wirebot/users/verious
 
 ```bash
 # As wirebot user (or use as-user wirebot)
-cat > /data/wirebot/users/verious/clawdbot.json << 'EOF'
+cat > /data/wirebot/users/verious/openclaw.json << 'EOF'
 {
   "gateway": {
     "port": 18789,
@@ -87,7 +87,7 @@ cat > /data/wirebot/users/verious/clawdbot.json << 'EOF'
 }
 EOF
 
-chmod 600 /data/wirebot/users/verious/clawdbot.json
+chmod 600 /data/wirebot/users/verious/openclaw.json
 ```
 
 Generate a token:
@@ -166,7 +166,7 @@ See [AUTH_AND_SECRETS.md](./AUTH_AND_SECRETS.md) for full details.
 
 See [OPERATIONS.md](./OPERATIONS.md#launcher-script) for the full script.
 
-**Path:** `/data/wirebot/bin/clawdbot-gateway.sh` (wirebot:wirebot, mode 750)
+**Path:** `/data/wirebot/bin/openclaw-gateway.sh` (wirebot:wirebot, mode 750)
 
 ### Secret Injector
 
@@ -180,9 +180,9 @@ See [OPERATIONS.md](./OPERATIONS.md#secret-injection-execstartpre) for the full 
 
 ```bash
 # Copy unit file (see OPERATIONS.md for full content)
-cat > /etc/systemd/system/clawdbot-gateway.service << 'EOF'
+cat > /etc/systemd/system/openclaw-gateway.service << 'EOF'
 [Unit]
-Description=Clawdbot Gateway (Wirebot)
+Description=OpenClaw Gateway (Wirebot)
 After=network-online.target cloudflared-wirebot.service
 Wants=network-online.target
 StartLimitIntervalSec=300
@@ -193,21 +193,21 @@ Type=simple
 ExecStartPre=+/data/wirebot/bin/inject-gateway-secrets.sh
 User=wirebot
 Group=wirebot
-ExecStart=/data/wirebot/bin/clawdbot-gateway.sh
+ExecStart=/data/wirebot/bin/openclaw-gateway.sh
 WorkingDirectory=/home/wirebot
 Restart=on-failure
 RestartSec=10
-StandardOutput=append:/home/wirebot/logs/clawdbot-gateway.log
-StandardError=append:/home/wirebot/logs/clawdbot-gateway.log
+StandardOutput=append:/home/wirebot/logs/openclaw-gateway.log
+StandardError=append:/home/wirebot/logs/openclaw-gateway.log
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=read-only
 ReadWritePaths=/data/wirebot /home/wirebot/logs /home/wirebot/.nvm /run/wirebot
 PrivateTmp=true
 Environment=HOME=/home/wirebot
-Environment=CLAWDBOT_STATE_DIR=/data/wirebot/users/verious
-Environment=CLAWDBOT_CONFIG_PATH=/data/wirebot/users/verious/clawdbot.json
-Environment=CLAWDBOT_GATEWAY_PORT=18789
+Environment=OPENCLAW_STATE_DIR=/data/wirebot/users/verious
+Environment=OPENCLAW_CONFIG_PATH=/data/wirebot/users/verious/openclaw.json
+Environment=OPENCLAW_GATEWAY_PORT=18789
 
 [Install]
 WantedBy=multi-user.target
@@ -218,8 +218,8 @@ as-user wirebot 'mkdir -p ~/logs'
 
 # Enable and start
 systemctl daemon-reload
-systemctl enable clawdbot-gateway
-systemctl start clawdbot-gateway
+systemctl enable openclaw-gateway
+systemctl start openclaw-gateway
 ```
 
 ---
@@ -256,22 +256,22 @@ systemctl start cloudflared-wirebot
 
 ```bash
 # Service running
-systemctl status clawdbot-gateway
+systemctl status openclaw-gateway
 
 # Port listening (wait 15–25s for startup)
 ss -tlnp | grep 18789
 
 # Gateway probe
 as-user wirebot 'source ~/.nvm/nvm.sh && \
-  export CLAWDBOT_STATE_DIR=/data/wirebot/users/verious \
-  CLAWDBOT_CONFIG_PATH=/data/wirebot/users/verious/clawdbot.json; \
-  clawdbot gateway probe'
+  export OPENCLAW_STATE_DIR=/data/wirebot/users/verious \
+  OPENCLAW_CONFIG_PATH=/data/wirebot/users/verious/openclaw.json; \
+  openclaw gateway probe'
 
 # Auth probe
 as-user wirebot 'source ~/.nvm/nvm.sh && \
-  export CLAWDBOT_STATE_DIR=/data/wirebot/users/verious \
-  CLAWDBOT_CONFIG_PATH=/data/wirebot/users/verious/clawdbot.json; \
-  clawdbot models status --probe'
+  export OPENCLAW_STATE_DIR=/data/wirebot/users/verious \
+  OPENCLAW_CONFIG_PATH=/data/wirebot/users/verious/openclaw.json; \
+  openclaw models status --probe'
 
 # Public URL (if tunnel configured)
 curl -sI https://helm.wirebot.chat

@@ -39,9 +39,9 @@ Wirebot is:
 
 ## 3. Runtime Foundation
 
-Wirebot is **built on Clawdbot**, not a custom gateway.
+Wirebot is **built on OpenClaw**, not a custom gateway.
 
-Clawdbot provides:
+OpenClaw provides:
 - Gateway control plane
 - Channels (Discord, Telegram, WhatsApp, etc.)
 - Skills system (pi-coding-agent)
@@ -65,7 +65,7 @@ Wirebot adds:
 - Startempire Wire members
 - Network intelligence features
 
-Both tracks share the same Clawdbot runtime + skills.
+Both tracks share the same OpenClaw runtime + skills.
 
 ---
 

@@ -6,7 +6,7 @@
 
 ## 1) Android Node (sms.send)
 
-Clawdbot nodes can expose `sms.send` when an Android device has telephony.
+OpenClaw nodes can expose `sms.send` when an Android device has telephony.
 
 **Pros:** reliable, no A2P 10DLC, direct SIM.
 **Cons:** requires dedicated device.
@@ -18,14 +18,14 @@ Clawdbot nodes can expose `sms.send` when an Android device has telephony.
 
 **Pairing commands:**
 ```bash
-clawdbot node register
-clawdbot nodes list
+openclaw node register
+openclaw nodes list
 ```
 
 **Example (CLI):**
 ```bash
 # Send SMS via paired Android node
-clawdbot nodes invoke --node <idOrNameOrIp> \
+openclaw nodes invoke --node <idOrNameOrIp> \
   --command sms.send \
   --params '{"to":"+15555550123","message":"Hello from Wirebot"}'
 ```
@@ -34,12 +34,12 @@ clawdbot nodes invoke --node <idOrNameOrIp> \
 
 ## 2) iMessage SMS (macOS channel)
 
-Clawdbot iMessage channel can send **SMS fallback** via a paired iPhone.
+OpenClaw iMessage channel can send **SMS fallback** via a paired iPhone.
 
 **Pros:** no A2P 10DLC, uses Apple stack.
 **Cons:** requires Mac + iPhone.
 
-**Config example (clawdbot.json):**
+**Config example (openclaw.json):**
 ```json5
 {
   channels: {

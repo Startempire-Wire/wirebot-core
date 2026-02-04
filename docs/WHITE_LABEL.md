@@ -1,12 +1,12 @@
 # Wirebot White-Label Frontend
 
-> **Branded, tier-scoped chat interface for clients. Connects to your Clawdbot gateway API.**
+> **Branded, tier-scoped chat interface for clients. Connects to your OpenClaw gateway API.**
 
 ---
 
 ## Concept
 
-The Wirebot White-Label Frontend is a **lightweight, brandable chat application** that connects to the central Clawdbot gateway. Each client deployment is scoped to their trust level and shows only the capabilities their tier permits.
+The Wirebot White-Label Frontend is a **lightweight, brandable chat application** that connects to the central OpenClaw gateway. Each client deployment is scoped to their trust level and shows only the capabilities their tier permits.
 
 ```
 Client's domain (ai.clientbiz.com)
@@ -24,7 +24,7 @@ Client's domain (ai.clientbiz.com)
                ▼
 ┌──────────────────────────────────────┐
 │  Wirebot Hub (your VPS)              │
-│  Clawdbot Gateway                    │
+│  OpenClaw Gateway                    │
 │  Per-client agent + session + memory │
 │  Skills, cron, channels              │
 └──────────────────────────────────────┘
@@ -146,7 +146,7 @@ Separate from the gateway admin token. Use gateway token for this client's acces
 ```bash
 # Per-client tokens can be managed via the gateway auth system
 # For now: shared gateway token (all agents share it)
-# Future: per-agent token support when Clawdbot adds it
+# Future: per-agent token support when OpenClaw adds it
 ```
 
 ---
@@ -155,7 +155,7 @@ Separate from the gateway admin token. Use gateway token for this client's acces
 
 ### Tech Stack
 
-- **Vanilla HTML/CSS/JS** or **Lit** (same as Clawdbot UI, familiar)
+- **Vanilla HTML/CSS/JS** or **Lit** (same as OpenClaw UI, familiar)
 - No framework dependency — keeps bundle small, deploys anywhere
 - WebSocket client for real-time chat streaming
 - HTTP client for REST API calls (fallback)
@@ -190,7 +190,7 @@ wirebot-client/
 
 ### Communication Protocol
 
-The frontend uses the **same WebSocket RPC** as the Clawdbot Control UI:
+The frontend uses the **same WebSocket RPC** as the OpenClaw Control UI:
 
 | Feature | RPC Methods |
 |---------|-------------|
@@ -258,7 +258,7 @@ Static site deploy. brand.json baked in at build time. API calls go directly to 
 ## Security
 
 - **Client token** is per-deployment, not the admin gateway token
-- **Agent scoping**: `x-clawdbot-agent-id` header ensures client only accesses their agent
+- **Agent scoping**: `x-openclaw-agent-id` header ensures client only accesses their agent
 - **Server-side enforcement**: gateway agent config + tool policies enforce tier limits regardless of frontend
 - **No admin RPC exposed**: frontend never calls `config.get`, `config.apply`, `logs.tail`, `update.run`, etc.
 - **CORS**: gateway must allow the client's domain for direct API calls
@@ -299,5 +299,5 @@ The trust modes (TRUST_MODES.md) map directly to the `tier` field in `brand.json
 - [PROVISIONING.md](./PROVISIONING.md) — Client provisioning
 - [OPERATIONS.md](./OPERATIONS.md) — Gateway management
 - [PLUGIN.md](./PLUGIN.md) — WordPress integration (higher-level)
-- Clawdbot docs: `gateway/openai-http-api` — HTTP API reference
-- Clawdbot docs: `web/control-ui` — WebSocket RPC reference
+- OpenClaw docs: `gateway/openai-http-api` — HTTP API reference
+- OpenClaw docs: `web/control-ui` — WebSocket RPC reference

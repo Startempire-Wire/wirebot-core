@@ -162,7 +162,7 @@ Alerts come from the scoreboard reading structured state — not from Letta deci
 ### [MEMORY.md](./MEMORY.md) — Root Architecture
 - ✅ Correctly positions Letta as "structured, queryable state"
 - ✅ "This is not conversational memory. It is structured, queryable state."
-- ⚠️ Still says "OpenClaw memory" in places — was Clawdbot, now OpenClaw. Partially updated.
+- ⚠️ Still says "OpenClaw memory" in places — was OpenClaw, now OpenClaw. Partially updated.
 - **No conflicts** with this design. State feeder is an enhancement, not a rewrite.
 
 ### [LETTA_INTEGRATION.md](./LETTA_INTEGRATION.md) — Integration Guide
@@ -188,17 +188,17 @@ Alerts come from the scoreboard reading structured state — not from Letta deci
 - **Action:** After implementation, update audit fix #4 status.
 
 ### [MEM0_PLUGIN.md](./MEM0_PLUGIN.md) — Mem0 Details
-- ⚠️ Outdated — still says "Clawdbot", references old config format, says "not yet deployed"
+- ⚠️ Outdated — still says "OpenClaw", references old config format, says "not yet deployed"
 - ⚠️ Shows skeleton plugin tools — actual implementation is in memory bridge, not this plugin
 - **No conflicts** with Letta design. Mem0 and Letta have clean ownership boundaries.
-- **Action:** Update Clawdbot→OpenClaw, mark as deployed, reference memory bridge as actual implementation.
+- **Action:** Update OpenClaw→OpenClaw, mark as deployed, reference memory bridge as actual implementation.
 
-### [CLAWDBOT_MEMORY_DEEP_DIVE.md](./CLAWDBOT_MEMORY_DEEP_DIVE.md) — memory-core Internals
-- ⚠️ Title and content still say "Clawdbot" throughout
+### [OPENCLAW_MEMORY_DEEP_DIVE.md](./OPENCLAW_MEMORY_DEEP_DIVE.md) — memory-core Internals
+- ⚠️ Title and content still say "OpenClaw" throughout
 - ✅ Correctly scoped to memory-core (workspace file indexing)
-- ✅ "Wirebot uses Clawdbot memory as-is and adds Letta + Mem0" — correct framing
+- ✅ "Wirebot uses OpenClaw memory as-is and adds Letta + Mem0" — correct framing
 - **No conflicts.** memory-core is unaffected by state feeder.
-- **Action:** Rename Clawdbot→OpenClaw throughout.
+- **Action:** Rename OpenClaw→OpenClaw throughout.
 
 ### [MEMORY_APPROVAL_SYSTEM.md](./MEMORY_APPROVAL_SYSTEM.md) — Queue Design
 - ✅ Covers extraction → queue → human review → approve/reject
@@ -213,12 +213,12 @@ Alerts come from the scoreboard reading structured state — not from Letta deci
 |-----|-------|-----|
 | `LETTA_INTEGRATION.md` | Says "not yet deployed" | Update status: deployed, active, kimi model |
 | `LETTA_INTEGRATION.md` | No mention of state feeder | Add cross-ref to this doc |
-| `MEM0_PLUGIN.md` | Says "Clawdbot", "not yet deployed", shows skeleton | Update: OpenClaw, deployed, reference memory bridge |
-| `CLAWDBOT_MEMORY_DEEP_DIVE.md` | Filename and content say "Clawdbot" | Rename file + content to OpenClaw |
-| `MEMORY_BRIDGE_STRATEGY.md` | Says "Clawdbot" in places | Update to OpenClaw |
+| `MEM0_PLUGIN.md` | Says "OpenClaw", "not yet deployed", shows skeleton | Update: OpenClaw, deployed, reference memory bridge |
+| `OPENCLAW_MEMORY_DEEP_DIVE.md` | Filename and content say "OpenClaw" | Rename file + content to OpenClaw |
+| `MEMORY_BRIDGE_STRATEGY.md` | Says "OpenClaw" in places | Update to OpenClaw |
 | `MEMORY_ARCHITECTURE_AUDIT.md` | Fix #4 incomplete | Update after state feeder ships |
 | `MEMORY_APPROVAL_SYSTEM.md` | Missing Letta as approved-memory consumer | Add to approval flow |
-| 26 docs total | Still reference "Clawdbot" | Batch find/replace Clawdbot→OpenClaw |
+| 26 docs total | Still reference "OpenClaw" | Batch find/replace OpenClaw→OpenClaw |
 
 ---
 
@@ -236,20 +236,22 @@ Alerts come from the scoreboard reading structured state — not from Letta deci
 **Runtime:** LLM via OpenRouter `z-ai/glm-4.5-air:free` (kimi key expired)
 **Backlog:** 193 approved memories + 712 events, catching up at ~2 msgs/min
 
-### Phase 2: Agent Prompt Update (est. 30 min)
-1. Update Letta system prompt — subsystem role, not agent role
-2. Clarify block maintenance rules in prompt
-3. Test: send approved memory → verify block update
+### Phase 2: Agent Prompt Update ✅ COMPLETE (2026-02-04)
+1. ✅ System prompt: subsystem role, state_feeder section, efficiency rules
+2. ✅ Block maintenance rules: surgical updates, 1-2 sentence responses
+3. ✅ Confirmed working: feeder messages processed, blocks updated
 
-### Phase 3: Scoreboard Reads State (est. 2 hours)
-1. Alerts table + API endpoints
-2. Scoreboard cron reads Letta blocks → generates alerts (goal deadlines, KPI drops)
-3. WINS dashboard alert display
+### Phase 3: Scoreboard Reads State ✅ COMPLETE (2026-02-04)
+1. ✅ `alerts` table + GET/POST `/v1/alerts` endpoints
+2. ✅ Hourly `lettaAlertChecker()` reads goals block, parses deadlines
+3. ✅ WINS dashboard alert strip (color-coded, dismissible, dark mode)
+4. ✅ Alert types: `goal_overdue` (critical), `goal_deadline` (warning)
 
-### Phase 4: Doc Cleanup (est. 1 hour)
-1. Batch Clawdbot→OpenClaw across all 26 docs
-2. Update deployment statuses
-3. Add cross-references between memory docs
+### Phase 4: Doc Cleanup ✅ COMPLETE (2026-02-04)
+1. ✅ Batch Clawdbot→OpenClaw across 29 docs
+2. ✅ Renamed `CLAWDBOT_MEMORY_DEEP_DIVE.md` → `OPENCLAW_MEMORY_DEEP_DIVE.md`
+3. ✅ Updated deployment statuses (Letta + Mem0 marked as deployed)
+4. ✅ Added cross-references (LETTA_INTEGRATION → LETTA_STATE_ENGINE)
 
 ---
 
@@ -269,7 +271,7 @@ Alerts come from the scoreboard reading structured state — not from Letta deci
 - [MEMORY_BRIDGE_STRATEGY.md](./MEMORY_BRIDGE_STRATEGY.md) — Write-Through, Read-Cascade design
 - [MEMORY_ARCHITECTURE_AUDIT.md](./MEMORY_ARCHITECTURE_AUDIT.md) — Planned vs actual vs corrected
 - [MEM0_PLUGIN.md](./MEM0_PLUGIN.md) — Mem0 fact store details
-- [CLAWDBOT_MEMORY_DEEP_DIVE.md](./CLAWDBOT_MEMORY_DEEP_DIVE.md) — memory-core internals
+- [OPENCLAW_MEMORY_DEEP_DIVE.md](./OPENCLAW_MEMORY_DEEP_DIVE.md) — memory-core internals
 - [MEMORY_APPROVAL_SYSTEM.md](./MEMORY_APPROVAL_SYSTEM.md) — Extraction queue + human review
 - [LETTA_INTEGRATION.md](./LETTA_INTEGRATION.md) — Letta API usage + per-user agents
 - [LLM_MODEL_INVENTORY.md](./LLM_MODEL_INVENTORY.md) — All model references including Letta

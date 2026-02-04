@@ -1,6 +1,6 @@
 # Pairing + Allowlist
 
-> **Clawdbot default DM policy = pairing.**
+> **OpenClaw default DM policy = pairing.**
 
 ---
 
@@ -9,7 +9,7 @@
 Pairing + allowlist files are stored in the credentials dir:
 
 ```
-~/.clawdbot/credentials/
+~/.openclaw/credentials/
   telegram-pairing.json
   telegram-allowFrom.json
   discord-pairing.json
@@ -19,8 +19,8 @@ Pairing + allowlist files are stored in the credentials dir:
 ```
 
 Path resolves via:
-- `CLAWDBOT_STATE_DIR/credentials` (preferred)
-- `~/.clawdbot/credentials`
+- `OPENCLAW_STATE_DIR/credentials` (preferred)
+- `~/.openclaw/credentials`
 
 ---
 
@@ -28,13 +28,13 @@ Path resolves via:
 
 ```bash
 # list pending pairing
-clawdbot pairing list --channel telegram
+openclaw pairing list --channel telegram
 
 # approve
-clawdbot pairing approve telegram ABCD1234
+openclaw pairing approve telegram ABCD1234
 
 # reject
-clawdbot pairing reject telegram ABCD1234
+openclaw pairing reject telegram ABCD1234
 ```
 
 ---
@@ -62,14 +62,14 @@ Recommended:
 
 Example (server‑side):
 ```bash
-clawdbot pairing approve telegram <code>
+openclaw pairing approve telegram <code>
 ```
 
 ### Allowlist File Write (server‑side)
 
 ```bash
 # Example: add user to allowFrom
-cat > "$CLAWDBOT_STATE_DIR/credentials/telegram-allowFrom.json" <<'EOF'
+cat > "$OPENCLAW_STATE_DIR/credentials/telegram-allowFrom.json" <<'EOF'
 {
   "version": 1,
   "allowFrom": ["123456789", "*"]

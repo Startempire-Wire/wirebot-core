@@ -1,4 +1,4 @@
-# Provisioning (Clawdbot)
+# Provisioning (OpenClaw)
 
 > **Top tier = dedicated container. Lower tiers = shared gateway.**
 
@@ -11,11 +11,11 @@ All user state lives under `/data/wirebot/users/`:
 ```
 /data/wirebot/
 ├── bin/
-│   ├── clawdbot-gateway.sh          # Launcher (wirebot, 750)
+│   ├── openclaw-gateway.sh          # Launcher (wirebot, 750)
 │   └── inject-gateway-secrets.sh    # Secret injector (root, 700)
 └── users/
     └── <user_id>/                   # Per-user state (wirebot, 700)
-        ├── clawdbot.json            # Gateway config (600)
+        ├── openclaw.json            # Gateway config (600)
         ├── credentials/             # Channel pairing + allowlists
         ├── cron/                    # Cron job definitions
         ├── devices/                 # Paired devices
@@ -39,9 +39,9 @@ All user state lives under `/data/wirebot/users/`:
 ### Environment Variables
 
 ```bash
-CLAWDBOT_STATE_DIR=/data/wirebot/users/<user_id>
-CLAWDBOT_CONFIG_PATH=/data/wirebot/users/<user_id>/clawdbot.json
-CLAWDBOT_GATEWAY_PORT=<unique-port>
+OPENCLAW_STATE_DIR=/data/wirebot/users/<user_id>
+OPENCLAW_CONFIG_PATH=/data/wirebot/users/<user_id>/openclaw.json
+OPENCLAW_GATEWAY_PORT=<unique-port>
 ```
 
 ### Provisioning Steps
@@ -71,7 +71,7 @@ chown -R wirebot:wirebot "$state_dir"
 chmod -R 700 "$state_dir"
 
 # 2. Write config
-cat > "$state_dir/clawdbot.json" << EOF
+cat > "$state_dir/openclaw.json" << EOF
 {
   "gateway": {
     "port": ${port},
@@ -89,8 +89,8 @@ cat > "$state_dir/clawdbot.json" << EOF
   "plugins": { "allow": ["memory-core"] }
 }
 EOF
-chmod 600 "$state_dir/clawdbot.json"
-chown wirebot:wirebot "$state_dir/clawdbot.json"
+chmod 600 "$state_dir/openclaw.json"
+chown wirebot:wirebot "$state_dir/openclaw.json"
 
 # 3. Create auth-profiles.json (using rbw for API keys)
 OR_KEY=$(~/.cargo/bin/rbw get "openrouter.ai" --field "Cursor Code Editor API Key" 2>/dev/null || true)
@@ -118,8 +118,8 @@ echo "Token: ${token}"
 For multiple dedicated containers, create per-user service units:
 
 ```bash
-# Template: /etc/systemd/system/clawdbot-gateway@.service
-# Usage: systemctl start clawdbot-gateway@user_id
+# Template: /etc/systemd/system/openclaw-gateway@.service
+# Usage: systemctl start openclaw-gateway@user_id
 ```
 
 ---
@@ -151,9 +151,9 @@ peer_id="$3"
 
 # Add agent to config via CLI
 as-user wirebot 'source ~/.nvm/nvm.sh && \
-  export CLAWDBOT_STATE_DIR=/data/wirebot/users/verious \
-  CLAWDBOT_CONFIG_PATH=/data/wirebot/users/verious/clawdbot.json; \
-  clawdbot config set agents.list --json "[...existing, {\"id\": \"'$user_id'\"}]"'
+  export OPENCLAW_STATE_DIR=/data/wirebot/users/verious \
+  OPENCLAW_CONFIG_PATH=/data/wirebot/users/verious/openclaw.json; \
+  openclaw config set agents.list --json "[...existing, {\"id\": \"'$user_id'\"}]"'
 
 # Add binding
 # (config.patch via RPC is recommended for atomicity)
@@ -165,17 +165,17 @@ as-user wirebot 'source ~/.nvm/nvm.sh && \
 
 Default DM policy is **pairing** (users must be approved before chatting).
 
-Pairing files stored in: `$CLAWDBOT_STATE_DIR/credentials/`
+Pairing files stored in: `$OPENCLAW_STATE_DIR/credentials/`
 
 ```bash
 # List pending pairing requests
-clawdbot pairing list --channel telegram
+openclaw pairing list --channel telegram
 
 # Approve a user
-clawdbot pairing approve telegram ABCD1234
+openclaw pairing approve telegram ABCD1234
 
 # Or write allowlist directly
-cat > "$CLAWDBOT_STATE_DIR/credentials/telegram-allowFrom.json" << 'EOF'
+cat > "$OPENCLAW_STATE_DIR/credentials/telegram-allowFrom.json" << 'EOF'
 { "version": 1, "allowFrom": ["123456789"] }
 EOF
 ```

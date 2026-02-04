@@ -1,12 +1,12 @@
-# Wirebot Gateway (Clawdbot)
+# Wirebot Gateway (OpenClaw)
 
-> **Clawdbot is the gateway. No custom gateway build.**
+> **OpenClaw is the gateway. No custom gateway build.**
 
 ---
 
 ## Overview
 
-Wirebot uses the **Clawdbot Gateway** as its control plane.
+Wirebot uses the **OpenClaw Gateway** as its control plane.
 
 Capabilities built-in:
 - WebSocket control plane
@@ -27,24 +27,24 @@ Capabilities built-in:
 The gateway runs as a **systemd service**:
 
 ```bash
-systemctl status clawdbot-gateway    # Check status
-systemctl restart clawdbot-gateway   # Restart
-systemctl stop clawdbot-gateway      # Stop
+systemctl status openclaw-gateway    # Check status
+systemctl restart openclaw-gateway   # Restart
+systemctl stop openclaw-gateway      # Stop
 ```
 
 See [OPERATIONS.md](./OPERATIONS.md) for full service management.
 
 ### Config File (JSON5)
 
-**Path:** `/data/wirebot/users/verious/clawdbot.json`
+**Path:** `/data/wirebot/users/verious/openclaw.json`
 
-**Not** the default `~/.clawdbot/clawdbot.json` — overridden via environment variables:
+**Not** the default `~/.openclaw/openclaw.json` — overridden via environment variables:
 
 | Variable | Value |
 |----------|-------|
-| `CLAWDBOT_STATE_DIR` | `/data/wirebot/users/verious` |
-| `CLAWDBOT_CONFIG_PATH` | `/data/wirebot/users/verious/clawdbot.json` |
-| `CLAWDBOT_GATEWAY_PORT` | `18789` |
+| `OPENCLAW_STATE_DIR` | `/data/wirebot/users/verious` |
+| `OPENCLAW_CONFIG_PATH` | `/data/wirebot/users/verious/openclaw.json` |
+| `OPENCLAW_GATEWAY_PORT` | `18789` |
 
 ### Current Config (Production)
 
@@ -75,7 +75,7 @@ See [OPERATIONS.md](./OPERATIONS.md) for full service management.
 
 ## Gateway Auth
 
-Clawdbot supports token/password auth on the WebSocket connection:
+OpenClaw supports token/password auth on the WebSocket connection:
 
 ```json5
 {
@@ -89,9 +89,9 @@ Clawdbot supports token/password auth on the WebSocket connection:
 ```
 
 **Security rules:**
-- Gateway token is stored in `clawdbot.json` (mode 600, wirebot-owned)
+- Gateway token is stored in `openclaw.json` (mode 600, wirebot-owned)
 - **WordPress plugin must never expose this token to the client** — use server-side proxy calls
-- Token is required even on loopback (Clawdbot default since recent versions)
+- Token is required even on loopback (OpenClaw default since recent versions)
 - Control UI authenticates via `connect.params.auth.token` (stored in browser settings)
 
 ### Trusted Proxies
@@ -126,7 +126,7 @@ Tunnel service: `cloudflared-wirebot.service`
 
 ## Shared Gateway (Lower Tiers)
 
-Use a **single** Clawdbot gateway with multiple agents and bindings:
+Use a **single** OpenClaw gateway with multiple agents and bindings:
 
 ```json5
 {
@@ -156,9 +156,9 @@ See [SHARED_GATEWAY_CONFIG.md](./SHARED_GATEWAY_CONFIG.md) for a full example.
 Each top-tier user gets their **own** gateway instance with unique port and state dir:
 
 ```
-CLAWDBOT_STATE_DIR=/data/wirebot/users/<user_id>
-CLAWDBOT_CONFIG_PATH=/data/wirebot/users/<user_id>/clawdbot.json
-CLAWDBOT_GATEWAY_PORT=18xxx
+OPENCLAW_STATE_DIR=/data/wirebot/users/<user_id>
+OPENCLAW_CONFIG_PATH=/data/wirebot/users/<user_id>/openclaw.json
+OPENCLAW_GATEWAY_PORT=18xxx
 ```
 
 See [DEDICATED_GATEWAY_CONFIG.md](./DEDICATED_GATEWAY_CONFIG.md) and [PROVISIONING.md](./PROVISIONING.md).
@@ -167,7 +167,7 @@ See [DEDICATED_GATEWAY_CONFIG.md](./DEDICATED_GATEWAY_CONFIG.md) and [PROVISIONI
 
 ## HTTP Endpoints (Optional)
 
-Clawdbot can expose OpenAI-compatible REST endpoints:
+OpenClaw can expose OpenAI-compatible REST endpoints:
 
 ```json5
 {
@@ -186,20 +186,20 @@ Clawdbot can expose OpenAI-compatible REST endpoints:
 
 ## Control UI + WebChat
 
-Clawdbot serves Control UI and WebChat by default on the gateway port:
+OpenClaw serves Control UI and WebChat by default on the gateway port:
 
 - **Local:** `http://127.0.0.1:18789/`
 - **Public:** `https://helm.wirebot.chat/` (via tunnel)
 
 Features: chat, channels, sessions, cron, skills, config editor, logs, debug tools.
 
-See [Clawdbot Control UI docs](https://docs.clawd.bot/web/control-ui) for full reference.
+See [OpenClaw Control UI docs](https://docs.clawd.bot/web/control-ui) for full reference.
 
 ---
 
 ## Hot Reload
 
-Clawdbot watches the config file and supports hot-reload:
+OpenClaw watches the config file and supports hot-reload:
 
 - `gateway.reload.mode: "hybrid"` (default): hot-apply safe changes, restart for critical ones
 - Other modes: `hot`, `restart`, `off`
@@ -210,35 +210,35 @@ Clawdbot watches the config file and supports hot-reload:
 
 ```bash
 # All commands need env vars set
-export CLAWDBOT_STATE_DIR=/data/wirebot/users/verious
-export CLAWDBOT_CONFIG_PATH=/data/wirebot/users/verious/clawdbot.json
+export OPENCLAW_STATE_DIR=/data/wirebot/users/verious
+export OPENCLAW_CONFIG_PATH=/data/wirebot/users/verious/openclaw.json
 
 # Gateway
-clawdbot gateway probe          # Deep health check
-clawdbot gateway health         # Quick health
+openclaw gateway probe          # Deep health check
+openclaw gateway health         # Quick health
 
 # Models
-clawdbot models status          # Auth overview
-clawdbot models status --probe  # Live auth probe
+openclaw models status          # Auth overview
+openclaw models status --probe  # Live auth probe
 
 # Config
-clawdbot config get             # View config
-clawdbot doctor                 # Diagnose issues
-clawdbot doctor --fix           # Auto-fix issues
+openclaw config get             # View config
+openclaw doctor                 # Diagnose issues
+openclaw doctor --fix           # Auto-fix issues
 
 # Channels
-clawdbot channels list          # List connected channels
-clawdbot channels login         # Connect a channel (WhatsApp QR, etc.)
+openclaw channels list          # List connected channels
+openclaw channels login         # Connect a channel (WhatsApp QR, etc.)
 
 # Sessions
-clawdbot sessions list          # Active sessions
+openclaw sessions list          # Active sessions
 ```
 
 ---
 
 ## SMS Reality
 
-Clawdbot does **not** include Twilio SMS. See [SMS_OPTIONS.md](./SMS_OPTIONS.md) for alternatives.
+OpenClaw does **not** include Twilio SMS. See [SMS_OPTIONS.md](./SMS_OPTIONS.md) for alternatives.
 
 ---
 
@@ -255,4 +255,4 @@ Clawdbot does **not** include Twilio SMS. See [SMS_OPTIONS.md](./SMS_OPTIONS.md)
 - [PROVISIONING.md](./PROVISIONING.md) — User provisioning
 - [INSTALLATION.md](./INSTALLATION.md) — Initial setup
 - [WHITE_LABEL.md](./WHITE_LABEL.md) — Client-facing frontend (uses HTTP + WS APIs)
-- [Clawdbot Gateway Docs](https://docs.clawd.bot/gateway) — Foundation reference
+- [OpenClaw Gateway Docs](https://docs.clawd.bot/gateway) — Foundation reference

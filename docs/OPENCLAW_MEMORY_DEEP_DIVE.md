@@ -1,4 +1,4 @@
-# Clawdbot Memory Deep Dive
+# OpenClaw Memory Deep Dive
 
 > **Built‑in memory system: Markdown source → hybrid index → recall tools.**
 
@@ -6,7 +6,7 @@
 
 ## Overview
 
-Clawdbot memory is a **two‑layer Markdown store** plus a **hybrid search index**.
+OpenClaw memory is a **two‑layer Markdown store** plus a **hybrid search index**.
 Memory is plain files in the agent workspace. Indexes are derived data.
 
 ---
@@ -30,7 +30,7 @@ Memory is plain files in the agent workspace. Indexes are derived data.
 ## Index Layout (Derived Data)
 
 ```
-~/.clawdbot/memory/
+~/.openclaw/memory/
 ├── main.sqlite
 └── work.sqlite
 ```
@@ -73,7 +73,7 @@ Why hybrid?
 
 ## Memory Read Tools
 
-Clawdbot exposes memory tools (example shown):
+OpenClaw exposes memory tools (example shown):
 
 ```json
 {
@@ -106,7 +106,7 @@ When the context window is near limit:
 
 ## What Wirebot Adds
 
-Wirebot uses Clawdbot memory as‑is and adds:
+Wirebot uses OpenClaw memory as‑is and adds:
 - **Letta** for structured business state
 - **Mem0** for cross‑surface sync (browser → agents)
 

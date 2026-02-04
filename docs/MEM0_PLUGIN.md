@@ -1,19 +1,19 @@
 # Mem0 Plugin (memory-mem0)
 
-> **Optional memory slot for Mem0 (does not replace Clawdbot memory by default).**
+> **Optional memory slot for Mem0 (does not replace OpenClaw memory by default).**
 
 ---
 
 ## Role
 
-Clawdbot already includes a full memory system (Markdown + hybrid search). The Mem0
+OpenClaw already includes a full memory system (Markdown + hybrid search). The Mem0
 plugin is **additive** and is mainly for:
 
 - Browser sync (OpenMemory → Mem0 → Wirebot)
 - Cross‑surface memory sharing
 - Vector/graph memory outside the gateway
 
-If you want Clawdbot’s memory tools to still use its built‑in memory, keep
+If you want OpenClaw’s memory tools to still use its built‑in memory, keep
 `memory-core` as the slot and call Mem0 via Wirebot skills.
 
 ---
@@ -33,7 +33,7 @@ Tools:
 
 ---
 
-## Config (clawdbot.json)
+## Config (openclaw.json)
 
 ```json5
 plugins: {
@@ -83,7 +83,7 @@ ChatGPT/Claude (browser)
   → OpenMemory extension
   → Mem0 server
   → Wirebot skill (fetch + store)
-  → Clawdbot agent context
+  → OpenClaw agent context
 ```
 
 ---
@@ -100,6 +100,6 @@ ChatGPT/Claude (browser)
 
 - [MEMORY.md](./MEMORY.md) — Full memory stack
 - [ARCHITECTURE.md](./ARCHITECTURE.md) — System architecture
-- [CURRENT_STATE.md](./CURRENT_STATE.md) — Mem0 deployment status (not yet deployed)
+- [CURRENT_STATE.md](./CURRENT_STATE.md) — Mem0 deployment status (deployed, active since 2026-01-30)
 - [LAUNCH_ORDER.md](./LAUNCH_ORDER.md) — When Mem0 is needed (Phase 0 remaining)
 - [LETTA_INTEGRATION.md](./LETTA_INTEGRATION.md) — Structured state companion

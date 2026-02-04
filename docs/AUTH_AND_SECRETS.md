@@ -8,8 +8,8 @@
 
 1. **No plaintext secrets on disk** — all new secrets stored in Bitwarden vault, retrieved via `rbw`
 2. **Runtime injection only** — secrets written to tmpfs (`/run/wirebot/`) at service start, cleared on reboot
-3. **Auth profiles for Clawdbot** — provider credentials stored in `auth-profiles.json` per agent
-4. **OAuth bidirectional sync** — Clawdbot auto-refreshes Anthropic tokens and writes back to Claude Code
+3. **Auth profiles for OpenClaw** — provider credentials stored in `auth-profiles.json` per agent
+4. **OAuth bidirectional sync** — OpenClaw auto-refreshes Anthropic tokens and writes back to Claude Code
 
 ---
 
@@ -42,8 +42,8 @@ Secrets available as env vars (OPENROUTER_API_KEY, etc.)
 
 1. Add entry to Bitwarden vault (web UI or `rbw add`)
 2. Add retrieval line to `/data/wirebot/bin/inject-gateway-secrets.sh`
-3. Add env var reference to `/data/wirebot/bin/clawdbot-gateway.sh` or `clawdbot.json` env block
-4. Restart service: `systemctl restart clawdbot-gateway`
+3. Add env var reference to `/data/wirebot/bin/openclaw-gateway.sh` or `openclaw.json` env block
+4. Restart service: `systemctl restart openclaw-gateway`
 
 ```bash
 # Example: adding a Brave Search API key
@@ -56,9 +56,9 @@ BRAVE_SEARCH_API_KEY=${BRAVE_KEY}
 
 ---
 
-## Auth Profiles (Clawdbot Provider Auth)
+## Auth Profiles (OpenClaw Provider Auth)
 
-Clawdbot uses **auth profiles** for API keys and OAuth tokens. These live per-agent:
+OpenClaw uses **auth profiles** for API keys and OAuth tokens. These live per-agent:
 
 ```
 /data/wirebot/users/verious/agents/<agentId>/agent/auth-profiles.json
@@ -109,9 +109,9 @@ The Anthropic provider uses OAuth tokens synced from Claude Code credentials on 
 ### How It Works
 
 1. Claude Code (`/root/.claude/.credentials.json`) holds OAuth tokens (access + refresh)
-2. Tokens were copied into Clawdbot's `auth-profiles.json` as `anthropic:claude-cli`
-3. Clawdbot auto-refreshes expired tokens using the refresh token
-4. Clawdbot writes refreshed tokens back to Claude Code credentials (bidirectional sync)
+2. Tokens were copied into OpenClaw's `auth-profiles.json` as `anthropic:claude-cli`
+3. OpenClaw auto-refreshes expired tokens using the refresh token
+4. OpenClaw writes refreshed tokens back to Claude Code credentials (bidirectional sync)
 
 ### Token Lifecycle
 
@@ -125,7 +125,7 @@ Claude Code login (manual, infrequent)
 auth-profiles.json → anthropic:claude-cli
     │
     ▼ (auto-refresh on expiry)
-Clawdbot runtime refreshes → updates auth-profiles.json
+OpenClaw runtime refreshes → updates auth-profiles.json
     │
     ▼ (bidirectional write-back)
 Claude Code credentials updated
@@ -145,7 +145,7 @@ If the refresh token itself expires or gets invalidated:
 # On the server, re-login to Claude Code
 claude login
 
-# Then copy fresh credentials to Clawdbot
+# Then copy fresh credentials to OpenClaw
 # (see TROUBLESHOOTING.md for the procedure)
 ```
 
@@ -153,7 +153,7 @@ claude login
 
 ## Gateway Auth (Token)
 
-The Clawdbot Gateway itself uses token auth for WebSocket connections:
+The OpenClaw Gateway itself uses token auth for WebSocket connections:
 
 ```json5
 {
@@ -167,7 +167,7 @@ The Clawdbot Gateway itself uses token auth for WebSocket connections:
 }
 ```
 
-- **Token location:** `gateway.auth.token` in `/data/wirebot/users/verious/clawdbot.json`
+- **Token location:** `gateway.auth.token` in `/data/wirebot/users/verious/openclaw.json`
 - **Who uses it:** Control UI, WebChat, CLI probe commands, WordPress plugin (server-side proxy)
 - **Never expose** the gateway token to client-side JavaScript
 
@@ -187,7 +187,7 @@ The Cloudflare tunnel connects from localhost. Config:
 
 ## Model Failover
 
-Clawdbot rotates auth profiles and falls back across models:
+OpenClaw rotates auth profiles and falls back across models:
 
 1. **Auth profile rotation** — within the current provider (round-robin, cooldowns)
 2. **Model fallback** — to next model in `agents.defaults.model.fallbacks`
@@ -202,9 +202,9 @@ Clawdbot rotates auth profiles and falls back across models:
 
 ```bash
 as-user wirebot 'source ~/.nvm/nvm.sh && \
-  export CLAWDBOT_STATE_DIR=/data/wirebot/users/verious \
-  CLAWDBOT_CONFIG_PATH=/data/wirebot/users/verious/clawdbot.json; \
-  clawdbot models status --probe'
+  export OPENCLAW_STATE_DIR=/data/wirebot/users/verious \
+  OPENCLAW_CONFIG_PATH=/data/wirebot/users/verious/openclaw.json; \
+  openclaw models status --probe'
 ```
 
 ---
@@ -214,7 +214,7 @@ as-user wirebot 'source ~/.nvm/nvm.sh && \
 | Path | Mode | Owner | Contains |
 |------|------|-------|----------|
 | `auth-profiles.json` | `600` | wirebot | OAuth tokens + API keys |
-| `clawdbot.json` | `600` | wirebot | Gateway token |
+| `openclaw.json` | `600` | wirebot | Gateway token |
 | `/run/wirebot/gateway.env` | `600` | wirebot | Runtime env secrets |
 | `/run/wirebot/` | `700` | wirebot | Runtime secret dir (tmpfs) |
 | `inject-gateway-secrets.sh` | `700` | root | rbw access script |
@@ -230,5 +230,5 @@ as-user wirebot 'source ~/.nvm/nvm.sh && \
 - [CURRENT_STATE.md](./CURRENT_STATE.md) — Current auth status
 - Server policy: `/root/.agent-kb/BITWARDEN_RBW.md` — rbw reference
 - Server policy: `/root/.agent-kb/SAFETY_RULES.md` — Secret storage rules
-- Clawdbot docs: `concepts/model-failover` — Full failover mechanics
-- Clawdbot docs: `concepts/oauth` — OAuth exchange + sync details
+- OpenClaw docs: `concepts/model-failover` — Full failover mechanics
+- OpenClaw docs: `concepts/oauth` — OAuth exchange + sync details

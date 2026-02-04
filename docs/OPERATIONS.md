@@ -15,8 +15,8 @@
 └──────────────┬─────────────────────┘
                │
 ┌──────────────▼─────────────────────┐
-│  Clawdbot Gateway                  │
-│  clawdbot-gateway.service          │
+│  OpenClaw Gateway                  │
+│  openclaw-gateway.service          │
 │  Port: 18789 (loopback)           │
 │  User: wirebot                     │
 │  PID type: simple (Node.js)       │
@@ -29,13 +29,13 @@
 
 ### Unit File
 
-**Path:** `/etc/systemd/system/clawdbot-gateway.service`
+**Path:** `/etc/systemd/system/openclaw-gateway.service`
 
 Key properties:
 - **Type:** `simple` (foreground Node.js process)
 - **User:** `wirebot`
 - **ExecStartPre:** `+/data/wirebot/bin/inject-gateway-secrets.sh` (runs as root, injects secrets from rbw)
-- **ExecStart:** `/data/wirebot/bin/clawdbot-gateway.sh`
+- **ExecStart:** `/data/wirebot/bin/openclaw-gateway.sh`
 - **Restart:** `on-failure` (10s delay)
 - **Hardening:** `ProtectSystem=strict`, `ProtectHome=read-only`, `NoNewPrivileges=true`, `PrivateTmp=true`
 - **ReadWritePaths:** `/data/wirebot`, `/home/wirebot/logs`, `/home/wirebot/.nvm`, `/run/wirebot`
@@ -44,34 +44,34 @@ Key properties:
 
 ```bash
 # Service lifecycle
-systemctl start clawdbot-gateway
-systemctl stop clawdbot-gateway
-systemctl restart clawdbot-gateway
-systemctl status clawdbot-gateway
+systemctl start openclaw-gateway
+systemctl stop openclaw-gateway
+systemctl restart openclaw-gateway
+systemctl status openclaw-gateway
 
 # Enable/disable on boot
-systemctl enable clawdbot-gateway
-systemctl disable clawdbot-gateway
+systemctl enable openclaw-gateway
+systemctl disable openclaw-gateway
 
 # View recent logs
-journalctl -u clawdbot-gateway -n 50 --no-pager
+journalctl -u openclaw-gateway -n 50 --no-pager
 
 # Follow live logs
-journalctl -u clawdbot-gateway -f
+journalctl -u openclaw-gateway -f
 ```
 
 ---
 
 ## Launcher Script
 
-**Path:** `/data/wirebot/bin/clawdbot-gateway.sh`
+**Path:** `/data/wirebot/bin/openclaw-gateway.sh`
 
 The launcher:
 1. Sources NVM (Node 22 via `/home/wirebot/.nvm/nvm.sh`)
-2. Sets `CLAWDBOT_STATE_DIR`, `CLAWDBOT_CONFIG_PATH`, `CLAWDBOT_GATEWAY_PORT`
+2. Sets `OPENCLAW_STATE_DIR`, `OPENCLAW_CONFIG_PATH`, `OPENCLAW_GATEWAY_PORT`
 3. Sources runtime secrets from `/run/wirebot/gateway.env` (written by ExecStartPre)
 4. Sets `NODE_OPTIONS=--max-old-space-size=1024` (prevent OOM)
-5. Execs `clawdbot gateway run --port 18789 --bind loopback`
+5. Execs `openclaw gateway run --port 18789 --bind loopback`
 
 **Note:** The launcher runs as `wirebot` user. Secrets are injected by root via `inject-gateway-secrets.sh` before the main process starts.
 
@@ -97,9 +97,9 @@ See [AUTH_AND_SECRETS.md](./AUTH_AND_SECRETS.md) for full details.
 
 | Log | Path | Contents |
 |-----|------|----------|
-| Gateway log | `/home/wirebot/logs/clawdbot-gateway.log` | Clawdbot gateway stdout/stderr |
-| Clawdbot daily log | `/tmp/clawdbot/clawdbot-YYYY-MM-DD.log` | Clawdbot internal rotating log |
-| Systemd journal | `journalctl -u clawdbot-gateway` | Service start/stop/crash events |
+| Gateway log | `/home/wirebot/logs/openclaw-gateway.log` | OpenClaw gateway stdout/stderr |
+| OpenClaw daily log | `/tmp/openclaw/openclaw-YYYY-MM-DD.log` | OpenClaw internal rotating log |
+| Systemd journal | `journalctl -u openclaw-gateway` | Service start/stop/crash events |
 
 ### Log Rotation
 
@@ -107,10 +107,10 @@ Gateway log is appended by systemd (`StandardOutput=append:`). Manual rotation:
 
 ```bash
 # Rotate (truncate, gateway keeps writing)
-as-user wirebot 'cp ~/logs/clawdbot-gateway.log ~/logs/clawdbot-gateway.log.1 && > ~/logs/clawdbot-gateway.log'
+as-user wirebot 'cp ~/logs/openclaw-gateway.log ~/logs/openclaw-gateway.log.1 && > ~/logs/openclaw-gateway.log'
 
 # Or restart to get a clean log
-systemctl restart clawdbot-gateway
+systemctl restart openclaw-gateway
 ```
 
 ---
@@ -120,9 +120,9 @@ systemctl restart clawdbot-gateway
 Typical gateway startup takes **15–25 seconds**:
 
 1. **0s** — ExecStartPre injects secrets from rbw
-2. **2s** — systemd starts main process (clawdbot launcher)
-3. **3s** — NVM loads, Node starts clawdbot binary
-4. **10–20s** — Clawdbot initializes (config validation, channel setup, skill loading)
+2. **2s** — systemd starts main process (openclaw launcher)
+3. **3s** — NVM loads, Node starts openclaw binary
+4. **10–20s** — OpenClaw initializes (config validation, channel setup, skill loading)
 5. **15–25s** — Gateway listening on ws://127.0.0.1:18789
 
 **Important:** Health checks and port probes must account for this delay.
@@ -134,7 +134,7 @@ Typical gateway startup takes **15–25 seconds**:
 ### Graceful Restart (Preferred)
 
 ```bash
-systemctl restart clawdbot-gateway
+systemctl restart openclaw-gateway
 ```
 
 Sends SIGTERM → gateway shuts down cleanly → systemd starts fresh instance.
@@ -142,20 +142,20 @@ Sends SIGTERM → gateway shuts down cleanly → systemd starts fresh instance.
 ### Force Kill (Last Resort)
 
 ```bash
-systemctl kill -s SIGKILL clawdbot-gateway
-systemctl start clawdbot-gateway
+systemctl kill -s SIGKILL openclaw-gateway
+systemctl start openclaw-gateway
 ```
 
 ### Config Reload (Hot)
 
-Clawdbot supports hot-reload for safe config changes:
+OpenClaw supports hot-reload for safe config changes:
 
 ```bash
 # Via CLI
 as-user wirebot 'source ~/.nvm/nvm.sh && \
-  export CLAWDBOT_STATE_DIR=/data/wirebot/users/verious \
-  CLAWDBOT_CONFIG_PATH=/data/wirebot/users/verious/clawdbot.json; \
-  clawdbot gateway call config.patch --params '"'"'{"raw": "{...}", "baseHash": "<hash>"}'"'"''
+  export OPENCLAW_STATE_DIR=/data/wirebot/users/verious \
+  OPENCLAW_CONFIG_PATH=/data/wirebot/users/verious/openclaw.json; \
+  openclaw gateway call config.patch --params '"'"'{"raw": "{...}", "baseHash": "<hash>"}'"'"''
 ```
 
 Or edit config and let the file watcher pick it up (default `gateway.reload.mode: "hybrid"`).
@@ -174,7 +174,7 @@ Or edit config and let the file watcher pick it up (default `gateway.reload.mode
 
 | Hostname | Origin |
 |----------|--------|
-| `helm.wirebot.chat` | `http://127.0.0.1:18789` (Clawdbot Gateway) |
+| `helm.wirebot.chat` | `http://127.0.0.1:18789` (OpenClaw Gateway) |
 | `api.wirebot.chat` | `http://localhost:8100` (not yet active) |
 
 ### Commands
@@ -191,12 +191,12 @@ systemctl status cloudflared-wirebot
 | Path | Mode | Owner | Purpose |
 |------|------|-------|---------|
 | `/data/wirebot/users/verious/` | `700` | wirebot | State dir root |
-| `/data/wirebot/users/verious/clawdbot.json` | `600` | wirebot | Gateway config |
+| `/data/wirebot/users/verious/openclaw.json` | `600` | wirebot | Gateway config |
 | `/data/wirebot/users/verious/agents/*/agent/auth-profiles.json` | `600` | wirebot | Auth secrets |
-| `/data/wirebot/bin/clawdbot-gateway.sh` | `750` | wirebot | Launcher script |
+| `/data/wirebot/bin/openclaw-gateway.sh` | `750` | wirebot | Launcher script |
 | `/data/wirebot/bin/inject-gateway-secrets.sh` | `700` | root | Secret injector |
 | `/run/wirebot/gateway.env` | `600` | wirebot | Runtime secrets (tmpfs) |
-| `/etc/systemd/system/clawdbot-gateway.service` | `644` | root | Systemd unit |
+| `/etc/systemd/system/openclaw-gateway.service` | `644` | root | Systemd unit |
 
 ---
 
@@ -204,9 +204,9 @@ systemctl status cloudflared-wirebot
 
 | Variable | Value | Source |
 |----------|-------|--------|
-| `CLAWDBOT_STATE_DIR` | `/data/wirebot/users/verious` | Launcher script |
-| `CLAWDBOT_CONFIG_PATH` | `/data/wirebot/users/verious/clawdbot.json` | Launcher script |
-| `CLAWDBOT_GATEWAY_PORT` | `18789` | Launcher script |
+| `OPENCLAW_STATE_DIR` | `/data/wirebot/users/verious` | Launcher script |
+| `OPENCLAW_CONFIG_PATH` | `/data/wirebot/users/verious/openclaw.json` | Launcher script |
+| `OPENCLAW_GATEWAY_PORT` | `18789` | Launcher script |
 | `OPENROUTER_API_KEY` | `sk-or-v1-...` | rbw vault → `/run/wirebot/gateway.env` |
 | `NODE_OPTIONS` | `--max-old-space-size=1024` | Launcher script |
 | `HOME` | `/home/wirebot` | Systemd Environment= |

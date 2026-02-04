@@ -143,12 +143,12 @@
 
 ## Legacy / Inactive References
 
-### 13. clawdbot.json (DEAD — replaced by openclaw.json)
+### 13. openclaw.json (DEAD — replaced by openclaw.json)
 
 | Field | Value |
 |-------|-------|
-| **File** | `/data/wirebot/users/verious/clawdbot.json` |
-| **Status** | **Not loaded by any service.** Legacy config from clawdbot era. |
+| **File** | `/data/wirebot/users/verious/openclaw.json` |
+| **Status** | **Not loaded by any service.** Legacy config from openclaw era. |
 | **Models** | `kimi-coding/k2p5` → `zai/glm-4.7` → `openrouter/openrouter/auto` |
 | **memorySearch** | `https://openrouter.ai/api/v1/` |
 | **Action** | Safe to delete or archive. |
@@ -159,7 +159,7 @@
 |-------|-------|
 | **File** | `/home/wirebot/clawd/MEMORY.md` |
 | **Line** | 9 |
-| **Content** | `Runtime: Clawdbot v2026.1.24-3 on Node v22.22.0` |
+| **Content** | `Runtime: OpenClaw v2026.1.24-3 on Node v22.22.0` |
 | **Action** | Update to `OpenClaw v2026.2.2-3` |
 
 ---
@@ -213,8 +213,8 @@
 
 1. ~~**Fix Letta**~~ ✅ Done — kimi-coding/k2p5 via gateway, letta/letta-free for embeddings
 2. ~~**Hardcoded model in `generateDraftForTask()`**~~ ✅ Done — `envOr("DRAFT_MODEL", "kimi-coding/k2p5")`
-3. ~~**Update MEMORY.md**~~ ✅ Done — Clawdbot → OpenClaw throughout
-4. **Archive clawdbot.json** — No longer loaded by anything
+3. ~~**Update MEMORY.md**~~ ✅ Done — OpenClaw → OpenClaw throughout
+4. **Archive openclaw.json** — No longer loaded by anything
 5. **Monitor OpenRouter** — Key still injected by `inject-gateway-secrets.sh` but nothing actively uses it
 
 ---

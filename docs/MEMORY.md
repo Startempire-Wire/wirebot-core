@@ -133,7 +133,7 @@ Per‑user isolation across all layers:
 
 ## See Also
 
-- [CLAWDBOT_MEMORY_DEEP_DIVE.md](./CLAWDBOT_MEMORY_DEEP_DIVE.md) — OpenClaw memory internals
+- [OPENCLAW_MEMORY_DEEP_DIVE.md](./OPENCLAW_MEMORY_DEEP_DIVE.md) — OpenClaw memory internals
 - [MEM0_PLUGIN.md](./MEM0_PLUGIN.md) — Mem0 plugin details
 - [LETTA_INTEGRATION.md](./LETTA_INTEGRATION.md) — Structured state layer
 - [GATEWAY.md](./GATEWAY.md) — Gateway config reference

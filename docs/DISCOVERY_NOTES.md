@@ -95,7 +95,7 @@ Goal: **Grow the business owner's MRR**
 ### Technical Ideas from Brainstorm
 
 - SMS/MMS via Twilio (CORE)
-- LLM connection (CORE) — ✅ already have via Clawdbot gateway
+- LLM connection (CORE) — ✅ already have via OpenClaw gateway
 - TODO robustness like "Remember The Milk"
 - TODO protocol: todo.txt format or p2ppsr protocol
 - Multi-agent system behind unified Wirebot face
@@ -192,7 +192,7 @@ startempirewire.com (MemberPress + WordPress Auth + BuddyBoss + Discord + OAuth/
 
 ### What's Extra in Wirebot-Core (Not in Big Picture)
 
-1. **Clawdbot gateway infrastructure** — The big picture doesn't specify implementation; Clawdbot is our execution layer
+1. **OpenClaw gateway infrastructure** — The big picture doesn't specify implementation; OpenClaw is our execution layer
 2. **Letta memory integration** — Advanced memory stack beyond what brainstorm specified
 3. **Multiple auth providers** — Anthropic OAuth + OpenRouter (implementation detail)
 4. **Cloudflare tunnel architecture** — Deployment detail
@@ -273,11 +273,11 @@ The WHITE_LABEL.md concept was wrong. This is not a "white-label chat frontend."
 | Product/Service Scalability Analyzer | ❌ | ❌ | ❌ | ✅ |
 | SMS/MMS Channel (Twilio) | ❌ | ❌ | ❌ | ✅ |
 
-### How Clawdbot Powers This
+### How OpenClaw Powers This
 
-The Clawdbot gateway is the AI engine underneath. The dashboard frontend calls:
+The OpenClaw gateway is the AI engine underneath. The dashboard frontend calls:
 
-| Dashboard Feature | Clawdbot API |
+| Dashboard Feature | OpenClaw API |
 |-------------------|--------------|
 | "Ask Wire Bot" input | `chat.send` (WebSocket) or `/v1/chat/completions` (HTTP) |
 | Intelligent Suggestions | `chat.send` with system prompt for suggestions |
@@ -286,7 +286,7 @@ The Clawdbot gateway is the AI engine underneath. The dashboard frontend calls:
 | Task prioritization | Agent skill: wirebot-accountability |
 | Business analysis | Agent skill: wirebot-core + RAG context |
 
-The **business data** (tasks, progress, checklist state, network connections) lives in a **separate data layer** — not in Clawdbot. Clawdbot reads it for RAG context but doesn't own it.
+The **business data** (tasks, progress, checklist state, network connections) lives in a **separate data layer** — not in OpenClaw. OpenClaw reads it for RAG context but doesn't own it.
 
 ### Data Architecture
 
@@ -296,7 +296,7 @@ The **business data** (tasks, progress, checklist state, network connections) li
 │  (Dashboard + AI input)                  │
 ├─────────────────┬───────────────────────┤
 │  Business Data   │  AI Engine            │
-│  (REST API)      │  (Clawdbot Gateway)   │
+│  (REST API)      │  (OpenClaw Gateway)   │
 │  ┌─────────────┐ │  ┌─────────────────┐  │
 │  │ Tasks/       │ │  │ chat.send       │  │
 │  │ Checklists   │ │  │ (with business  │  │
@@ -311,7 +311,7 @@ The **business data** (tasks, progress, checklist state, network connections) li
 │         ▼        │  │ - core          │  │
 │  PostgreSQL /    │  └────────┬────────┘  │
 │  SQLite / WP API │           │           │
-│  (TBD)           │    Clawdbot Gateway   │
+│  (TBD)           │    OpenClaw Gateway   │
 │                  │    port 18789         │
 └─────────────────┴───────────────────────┘
 ```
@@ -338,7 +338,7 @@ This is dramatically different from the chat-first approach in WHITE_LABEL.md.
 ### Must Build (MVP)
 
 1. **Business Setup Checklist Engine** — The data model for Idea/Launch/Growth tasks with priority levels, completion state, progress calculation
-2. **Dashboard Frontend** — Mobile-first, matching the Figma mockup, connected to Clawdbot for AI features
+2. **Dashboard Frontend** — Mobile-first, matching the Figma mockup, connected to OpenClaw for AI features
 3. **Accountability Cadence** — Daily standup cron jobs with structured prompts
 4. **User Onboarding Flow** — Collect business info, create agent context
 

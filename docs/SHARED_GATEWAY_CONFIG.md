@@ -34,7 +34,7 @@
 ## Notes
 
 - `bindings` must include channel + peer id.
-- Default DM policy is pairing; approve via `clawdbot pairing approve`.
+- Default DM policy is pairing; approve via `openclaw pairing approve`.
 
 ---
 

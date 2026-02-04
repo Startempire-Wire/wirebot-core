@@ -3,9 +3,9 @@
 ```php
 // On channel connect callback
 function wirebot_on_channel_pairing($channel, $pairing_code, $user_id) {
-    // Approve pairing in Clawdbot
+    // Approve pairing in OpenClaw
     $cmd = sprintf(
-        'clawdbot pairing approve %s %s',
+        'openclaw pairing approve %s %s',
         escapeshellarg($channel),
         escapeshellarg($pairing_code)
     );
@@ -18,7 +18,7 @@ function wirebot_on_channel_pairing($channel, $pairing_code, $user_id) {
 
 // Alternative: write allowFrom file directly
 function wirebot_allowlist_user($channel, $user_id_or_handle) {
-    $path = getenv('CLAWDBOT_STATE_DIR') . "/credentials/{$channel}-allowFrom.json";
+    $path = getenv('OPENCLAW_STATE_DIR') . "/credentials/{$channel}-allowFrom.json";
     $data = [
         'version' => 1,
         'allowFrom' => [$user_id_or_handle]

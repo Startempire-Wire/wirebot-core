@@ -1,23 +1,23 @@
-# Wirebot Launch Order (Clawdbot + Dual-Path)
+# Wirebot Launch Order (OpenClaw + Dual-Path)
 
-> **Clawdbot base. Full power available day 0.**
+> **OpenClaw base. Full power available day 0.**
 >
 > See [CURRENT_STATE.md](./CURRENT_STATE.md) for what's actually deployed.
 
 ---
 
-## Phase 0: Foundation (Clawdbot) — 🟡 In Progress
+## Phase 0: Foundation (OpenClaw) — 🟡 In Progress
 
-**Goal:** Your Clawdbot + shared gateway + provisioning ready.
+**Goal:** Your OpenClaw + shared gateway + provisioning ready.
 
 ### Deliverables
 
 | # | Component | Status | Notes |
 |---|-----------|--------|-------|
-| 1 | Clawdbot install (yours) | ✅ Done | v2026.1.24-3, Node 22.22.0 |
+| 1 | OpenClaw install (yours) | ✅ Done | v2026.1.24-3, Node 22.22.0 |
 | 2 | Gateway config + auth | ✅ Done | Token auth, loopback, systemd service |
 | 3 | Auth profiles (Anthropic + OpenRouter) | ✅ Done | OAuth + API key from rbw |
-| 4 | Systemd service + rbw secrets | ✅ Done | `clawdbot-gateway.service`, auto-restart |
+| 4 | Systemd service + rbw secrets | ✅ Done | `openclaw-gateway.service`, auto-restart |
 | 5 | Cloudflare tunnel | ✅ Done | helm.wirebot.chat → 127.0.0.1:18789 |
 | 6 | Wirebot skills | ✅ Done | 4 skills loaded via extraDirs |
 | 7 | Operations docs | ✅ Done | Full ops, auth, monitoring, troubleshooting |
@@ -29,12 +29,12 @@
 
 ### Key Config Facts (Actual)
 
-- Config file: `/data/wirebot/users/verious/clawdbot.json` (JSON5, mode 600)
+- Config file: `/data/wirebot/users/verious/openclaw.json` (JSON5, mode 600)
 - State dir: `/data/wirebot/users/verious/` (mode 700)
 - Skills dir: `/home/wirebot/wirebot-core/skills/` (4 skills)
 - Plugins: `memory-core` (built-in)
 - Auth: Anthropic OAuth (Claude Max 5x) + OpenRouter API key (rbw vault)
-- Service: `clawdbot-gateway.service` (systemd, enabled)
+- Service: `openclaw-gateway.service` (systemd, enabled)
 - Node: v22.22.0 via nvm
 - Secrets: rbw (Bitwarden vault) → tmpfs injection
 
@@ -60,7 +60,7 @@ Use daily. Refine skills + channel behavior.
 - Test memory recall quality
 - Tune model + skill behavior
 
-**Can partially start now** with Clawdbot memory (built-in) + skills, even without Letta/Mem0.
+**Can partially start now** with OpenClaw memory (built-in) + skills, even without Letta/Mem0.
 
 ---
 
@@ -87,7 +87,7 @@ Use daily. Refine skills + channel behavior.
 
 **Trigger:** ~50 users
 
-- Move Clawdbot + Letta + Mem0 to separate VPS
+- Move OpenClaw + Letta + Mem0 to separate VPS
 - Podman pods or lightweight orchestration
 - Dedicated gateway provisioning automation
 - Monitoring + alerting at scale

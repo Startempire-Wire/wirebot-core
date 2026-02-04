@@ -24,7 +24,7 @@
 
 ## Notes
 
-- Dedicated container uses its own `CLAWDBOT_STATE_DIR`.
+- Dedicated container uses its own `OPENCLAW_STATE_DIR`.
 - Ports must be unique per user.
 
 ---

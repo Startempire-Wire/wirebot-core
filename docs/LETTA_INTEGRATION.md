@@ -79,5 +79,6 @@ curl -X POST http://letta:8283/v1/agents/agent_user_123/messages \
 - [MEMORY.md](./MEMORY.md) — Full memory stack
 - [PROVISIONING.md](./PROVISIONING.md) — Per-user Letta agent creation
 - [ARCHITECTURE.md](./ARCHITECTURE.md) — Where Letta fits
-- [CURRENT_STATE.md](./CURRENT_STATE.md) — Letta deployment status (not yet deployed)
+- [CURRENT_STATE.md](./CURRENT_STATE.md) — Letta deployment status (deployed, active since 2026-02-03)
+- [LETTA_STATE_ENGINE.md](./LETTA_STATE_ENGINE.md) — State Feeder design + alerts system
 - [LAUNCH_ORDER.md](./LAUNCH_ORDER.md) — When Letta is needed (Phase 0 remaining)

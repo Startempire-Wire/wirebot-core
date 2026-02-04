@@ -1,6 +1,6 @@
-# Wirebot WordPress Plugin Specification (Clawdbot-Based)
+# Wirebot WordPress Plugin Specification (OpenClaw-Based)
 
-> **Product shell for Wirebot. Clawdbot is the runtime.**
+> **Product shell for Wirebot. OpenClaw is the runtime.**
 
 ---
 
@@ -10,7 +10,7 @@
 
 **Role:**
 - Identity + tier management
-- Provisioning (shared gateway vs dedicated Clawdbot)
+- Provisioning (shared gateway vs dedicated OpenClaw)
 - Channel setup UI
 - Network integration (Ring Leader)
 
@@ -22,7 +22,7 @@
 
 ### 1) Tier Routing
 
-- **Top tier:** provision dedicated Clawdbot container
+- **Top tier:** provision dedicated OpenClaw container
 - **Lower tiers:** register user in shared gateway
 
 ### 2) Provisioning
@@ -30,11 +30,11 @@
 Top tier provisioning script:
 
 ```
-./provision-clawdbot.sh <user_id>
+./provision-openclaw.sh <user_id>
 ```
 
 Script responsibilities:
-- Create state dir (`CLAWDBOT_STATE_DIR`)
+- Create state dir (`OPENCLAW_STATE_DIR`)
 - Write JSON5 config
 - Install Wirebot skills
 - Start gateway on unique port
@@ -70,16 +70,16 @@ For Track B:
 
 ---
 
-## Config Management (Clawdbot)
+## Config Management (OpenClaw)
 
-Clawdbot config is JSON5: `~/.clawdbot/clawdbot.json`
+OpenClaw config is JSON5: `~/.openclaw/openclaw.json`
 
 Use CLI for writes:
 
 ```bash
-clawdbot config set gateway.auth.token "<token>"
-clawdbot config set skills.load.extraDirs --json '["/home/wirebot/wirebot-core/skills"]'
-clawdbot config set plugins.load.paths --json '["/home/wirebot/wirebot-core/plugins"]'
+openclaw config set gateway.auth.token "<token>"
+openclaw config set skills.load.extraDirs --json '["/home/wirebot/wirebot-core/skills"]'
+openclaw config set plugins.load.paths --json '["/home/wirebot/wirebot-core/plugins"]'
 ```
 
 **Do not expose gateway token to clients.**
@@ -90,7 +90,7 @@ clawdbot config set plugins.load.paths --json '["/home/wirebot/wirebot-core/plug
 
 | Tier | Infrastructure | Notes |
 |------|----------------|-------|
-| Top tier | Dedicated Clawdbot container | Full channel access |
+| Top tier | Dedicated OpenClaw container | Full channel access |
 | Lower tiers | Shared gateway | Limited channels |
 
 ---
@@ -113,7 +113,7 @@ function get_wirebot_track() {
 
 ## Gateway Auth
 
-Clawdbot gateway uses token/password auth:
+OpenClaw gateway uses token/password auth:
 
 ```json5
 gateway: {
@@ -132,7 +132,7 @@ Wirebot skills live in:
 /home/wirebot/wirebot-core/skills
 ```
 
-Clawdbot loads via:
+OpenClaw loads via:
 ```json5
 skills: { load: { extraDirs: ["/home/wirebot/wirebot-core/skills"] } }
 ```
@@ -142,7 +142,7 @@ Custom plugins live in:
 /home/wirebot/wirebot-core/plugins
 ```
 
-Clawdbot loads via:
+OpenClaw loads via:
 ```json5
 plugins: { load: { paths: ["/home/wirebot/wirebot-core/plugins"] } }
 ```
@@ -169,7 +169,7 @@ All gated by membership tier.
 - Consent
 - Network identity
 
-**Clawdbot owns:**
+**OpenClaw owns:**
 - Sessions
 - Channel routing
 - Tool execution

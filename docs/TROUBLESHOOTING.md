@@ -1,6 +1,6 @@
 # Wirebot Troubleshooting
 
-> **Common failures, diagnosis, and fixes for the Clawdbot gateway and tunnel.**
+> **Common failures, diagnosis, and fixes for the OpenClaw gateway and tunnel.**
 
 ---
 
@@ -8,16 +8,16 @@
 
 ```bash
 # 1. Is the service running?
-systemctl status clawdbot-gateway
+systemctl status openclaw-gateway
 
 # 2. Is the port listening?
 ss -tlnp | grep 18789
 
 # 3. Can we probe the gateway?
 as-user wirebot 'source ~/.nvm/nvm.sh && \
-  export CLAWDBOT_STATE_DIR=/data/wirebot/users/verious \
-  CLAWDBOT_CONFIG_PATH=/data/wirebot/users/verious/clawdbot.json; \
-  clawdbot gateway probe'
+  export OPENCLAW_STATE_DIR=/data/wirebot/users/verious \
+  OPENCLAW_CONFIG_PATH=/data/wirebot/users/verious/openclaw.json; \
+  openclaw gateway probe'
 
 # 4. Is the tunnel running?
 systemctl status cloudflared-wirebot
@@ -38,11 +38,11 @@ curl -sI https://helm.wirebot.chat
 
 | Cause | Diagnosis | Fix |
 |-------|-----------|-----|
-| Service not running | `systemctl status clawdbot-gateway` shows inactive | `systemctl start clawdbot-gateway` |
+| Service not running | `systemctl status openclaw-gateway` shows inactive | `systemctl start openclaw-gateway` |
 | Service crashed (OOM) | Log shows `FATAL ERROR: Reached heap limit` | Increase `--max-old-space-size` in launcher |
 | Service still starting | Service active but port not yet open | Wait 15–25 seconds (see [OPERATIONS.md](./OPERATIONS.md#startup-timeline)) |
 | Port conflict | `ss -tlnp \| grep 18789` shows different process | Kill conflicting process, restart service |
-| Config validation failure | Gateway refuses to start, log shows schema error | Run `clawdbot doctor` to diagnose |
+| Config validation failure | Gateway refuses to start, log shows schema error | Run `openclaw doctor` to diagnose |
 
 ### 2. OOM (Out of Memory) Crash
 
@@ -50,16 +50,16 @@ curl -sI https://helm.wirebot.chat
 
 **Fix:**
 
-Edit `/data/wirebot/bin/clawdbot-gateway.sh`:
+Edit `/data/wirebot/bin/openclaw-gateway.sh`:
 
 ```bash
 # Increase heap size (current: 1024MB, increase if needed)
 export NODE_OPTIONS="--max-old-space-size=1536"
 ```
 
-Then restart: `systemctl restart clawdbot-gateway`
+Then restart: `systemctl restart openclaw-gateway`
 
-**Prevention:** Monitor RSS with `ps aux | grep clawdbot-gateway | awk '{print $6/1024 "MB"}'`
+**Prevention:** Monitor RSS with `ps aux | grep openclaw-gateway | awk '{print $6/1024 "MB"}'`
 
 ### 3. Anthropic Auth Error ("No API key found")
 
@@ -69,7 +69,7 @@ Then restart: `systemctl restart clawdbot-gateway`
 
 | Cause | Fix |
 |-------|-----|
-| `auth-profiles.json` missing | Create it (see [AUTH_AND_SECRETS.md](./AUTH_AND_SECRETS.md#auth-profiles-clawdbot-provider-auth)) |
+| `auth-profiles.json` missing | Create it (see [AUTH_AND_SECRETS.md](./AUTH_AND_SECRETS.md#auth-profiles-openclaw-provider-auth)) |
 | Wrong agent dir | Check which agent dir the gateway resolves (may be `main` not `verious`) |
 | OAuth token expired + refresh failed | Re-copy from Claude Code: see below |
 | File permissions wrong | `chmod 600 auth-profiles.json && chown wirebot:wirebot auth-profiles.json` |
@@ -118,7 +118,7 @@ done
 rm /tmp/auth-profiles.json
 
 # 5. Restart gateway
-systemctl restart clawdbot-gateway
+systemctl restart openclaw-gateway
 ```
 
 ### 4. OpenRouter Auth Error
@@ -140,7 +140,7 @@ cat /run/wirebot/gateway.env | grep OPENROUTER  # Should show the key
 
 # Re-inject
 /data/wirebot/bin/inject-gateway-secrets.sh
-systemctl restart clawdbot-gateway
+systemctl restart openclaw-gateway
 ```
 
 ### 5. Cloudflare Tunnel Down (helm.wirebot.chat unreachable)
@@ -180,15 +180,15 @@ systemctl restart cloudflared-wirebot
 
 ```bash
 as-user wirebot 'source ~/.nvm/nvm.sh && \
-  export CLAWDBOT_STATE_DIR=/data/wirebot/users/verious \
-  CLAWDBOT_CONFIG_PATH=/data/wirebot/users/verious/clawdbot.json; \
-  clawdbot doctor'
+  export OPENCLAW_STATE_DIR=/data/wirebot/users/verious \
+  OPENCLAW_CONFIG_PATH=/data/wirebot/users/verious/openclaw.json; \
+  openclaw doctor'
 
 # Auto-fix if safe
 as-user wirebot 'source ~/.nvm/nvm.sh && \
-  export CLAWDBOT_STATE_DIR=/data/wirebot/users/verious \
-  CLAWDBOT_CONFIG_PATH=/data/wirebot/users/verious/clawdbot.json; \
-  clawdbot doctor --fix'
+  export OPENCLAW_STATE_DIR=/data/wirebot/users/verious \
+  OPENCLAW_CONFIG_PATH=/data/wirebot/users/verious/openclaw.json; \
+  openclaw doctor --fix'
 ```
 
 ---
@@ -205,32 +205,32 @@ as-user wirebot 'source ~/.nvm/nvm.sh && \
 | `FATAL ERROR: Reached heap limit` | OOM crash — increase heap |
 | `No API key found for provider` | Missing auth-profiles.json |
 | `[heartbeat] started` | ✅ Health monitoring active |
-| `Config validation failed` | Bad config — run `clawdbot doctor` |
+| `Config validation failed` | Bad config — run `openclaw doctor` |
 
 ### Tailing Logs
 
 ```bash
 # Live gateway log
-tail -f /home/wirebot/logs/clawdbot-gateway.log
+tail -f /home/wirebot/logs/openclaw-gateway.log
 
 # Systemd journal (includes service events)
-journalctl -u clawdbot-gateway -f
+journalctl -u openclaw-gateway -f
 
 # Filter for errors only
-tail -f /home/wirebot/logs/clawdbot-gateway.log | grep -i -E "error|fatal|fail|diagnostic"
+tail -f /home/wirebot/logs/openclaw-gateway.log | grep -i -E "error|fatal|fail|diagnostic"
 ```
 
 ---
 
 ## Recovery Checklist (After Outage)
 
-1. `systemctl status clawdbot-gateway` — is the service running?
+1. `systemctl status openclaw-gateway` — is the service running?
 2. `ss -tlnp | grep 18789` — is the port listening?
 3. `systemctl status cloudflared-wirebot` — is the tunnel up?
 4. `curl -s http://127.0.0.1:18789/` — does the gateway respond?
 5. `curl -sI https://helm.wirebot.chat` — does the public URL work?
-6. Check auth: `clawdbot models status --probe` — are providers working?
-7. Check logs: `tail -50 /home/wirebot/logs/clawdbot-gateway.log` — any errors?
+6. Check auth: `openclaw models status --probe` — are providers working?
+7. Check logs: `tail -50 /home/wirebot/logs/openclaw-gateway.log` — any errors?
 
 ---
 

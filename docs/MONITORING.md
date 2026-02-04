@@ -8,7 +8,7 @@
 
 ```bash
 # One-liner: check everything
-systemctl is-active clawdbot-gateway && ss -tlnp | grep -q 18789 && echo "Gateway: UP" || echo "Gateway: DOWN"
+systemctl is-active openclaw-gateway && ss -tlnp | grep -q 18789 && echo "Gateway: UP" || echo "Gateway: DOWN"
 systemctl is-active cloudflared-wirebot && echo "Tunnel: UP" || echo "Tunnel: DOWN"
 ```
 
@@ -20,7 +20,7 @@ systemctl is-active cloudflared-wirebot && echo "Tunnel: UP" || echo "Tunnel: DO
 
 ```bash
 ss -tlnp | grep 18789
-# Expected: LISTEN ... 127.0.0.1:18789 ... clawdbot-gatewa
+# Expected: LISTEN ... 127.0.0.1:18789 ... openclaw-gatewa
 ```
 
 ### HTTP Probe (Control UI)
@@ -34,9 +34,9 @@ curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:18789/
 
 ```bash
 as-user wirebot 'source ~/.nvm/nvm.sh && \
-  export CLAWDBOT_STATE_DIR=/data/wirebot/users/verious \
-  CLAWDBOT_CONFIG_PATH=/data/wirebot/users/verious/clawdbot.json; \
-  clawdbot gateway probe'
+  export OPENCLAW_STATE_DIR=/data/wirebot/users/verious \
+  OPENCLAW_CONFIG_PATH=/data/wirebot/users/verious/openclaw.json; \
+  openclaw gateway probe'
 # Expected: "Connect: ok ... RPC: ok"
 ```
 
@@ -44,9 +44,9 @@ as-user wirebot 'source ~/.nvm/nvm.sh && \
 
 ```bash
 as-user wirebot 'source ~/.nvm/nvm.sh && \
-  export CLAWDBOT_STATE_DIR=/data/wirebot/users/verious \
-  CLAWDBOT_CONFIG_PATH=/data/wirebot/users/verious/clawdbot.json; \
-  clawdbot models status --probe'
+  export OPENCLAW_STATE_DIR=/data/wirebot/users/verious \
+  OPENCLAW_CONFIG_PATH=/data/wirebot/users/verious/openclaw.json; \
+  openclaw models status --probe'
 # Expected: anthropic → ok, openrouter → ok
 ```
 
@@ -64,21 +64,21 @@ curl -s -o /dev/null -w "%{http_code}" https://helm.wirebot.chat
 ### Service Status
 
 ```bash
-systemctl status clawdbot-gateway
+systemctl status openclaw-gateway
 systemctl status cloudflared-wirebot
 ```
 
 ### Restart Count
 
 ```bash
-systemctl show clawdbot-gateway --property=NRestarts
+systemctl show openclaw-gateway --property=NRestarts
 # NRestarts=0 is ideal; >0 means crashes occurred
 ```
 
 ### Uptime
 
 ```bash
-systemctl show clawdbot-gateway --property=ActiveEnterTimestamp
+systemctl show openclaw-gateway --property=ActiveEnterTimestamp
 ```
 
 ---
@@ -89,19 +89,19 @@ systemctl show clawdbot-gateway --property=ActiveEnterTimestamp
 
 ```bash
 # Errors only
-tail -f /home/wirebot/logs/clawdbot-gateway.log | grep -i -E "error|fatal|fail|diagnostic"
+tail -f /home/wirebot/logs/openclaw-gateway.log | grep -i -E "error|fatal|fail|diagnostic"
 
 # Auth issues
-tail -f /home/wirebot/logs/clawdbot-gateway.log | grep -i -E "auth|api.key|cooldown|expired"
+tail -f /home/wirebot/logs/openclaw-gateway.log | grep -i -E "auth|api.key|cooldown|expired"
 
 # Connection events
-tail -f /home/wirebot/logs/clawdbot-gateway.log | grep -i -E "connected|disconnected|listening"
+tail -f /home/wirebot/logs/openclaw-gateway.log | grep -i -E "connected|disconnected|listening"
 ```
 
 ### Log Size Check
 
 ```bash
-du -sh /home/wirebot/logs/clawdbot-gateway.log
+du -sh /home/wirebot/logs/openclaw-gateway.log
 # Alert if >100MB — consider rotation
 ```
 
@@ -113,14 +113,14 @@ du -sh /home/wirebot/logs/clawdbot-gateway.log
 
 ```bash
 # RSS of gateway process
-ps aux | grep clawdbot-gateway | grep -v grep | awk '{printf "%.0fMB\n", $6/1024}'
+ps aux | grep openclaw-gateway | grep -v grep | awk '{printf "%.0fMB\n", $6/1024}'
 # Warning threshold: >800MB (heap limit is 1024MB)
 ```
 
 ### Process Check
 
 ```bash
-pgrep -f clawdbot-gateway > /dev/null && echo "Process: running" || echo "Process: NOT running"
+pgrep -f openclaw-gateway > /dev/null && echo "Process: running" || echo "Process: NOT running"
 ```
 
 ---
@@ -139,8 +139,8 @@ LOG="/home/wirebot/logs/watchdog.log"
 # Check gateway
 if ! ss -tlnp | grep -q 18789; then
     echo "$(date -Iseconds) ALERT: Gateway not listening on 18789" >> "$LOG"
-    systemctl restart clawdbot-gateway
-    echo "$(date -Iseconds) ACTION: Restarted clawdbot-gateway" >> "$LOG"
+    systemctl restart openclaw-gateway
+    echo "$(date -Iseconds) ACTION: Restarted openclaw-gateway" >> "$LOG"
 fi
 
 # Check tunnel
@@ -172,7 +172,7 @@ fi
 
 ## Health Dashboard (Control UI)
 
-The Clawdbot Control UI provides a built-in dashboard at:
+The OpenClaw Control UI provides a built-in dashboard at:
 
 - **Local:** `http://127.0.0.1:18789/`
 - **Public:** `https://helm.wirebot.chat/` (via Cloudflare tunnel)

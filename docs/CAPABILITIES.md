@@ -1,4 +1,4 @@
-# Wirebot Capability Matrix (Clawdbot-Based)
+# Wirebot Capability Matrix (OpenClaw-Based)
 
 > **Track × Tier × Infrastructure × Channels**
 
@@ -8,8 +8,8 @@
 
 | Type | Description |
 |------|-------------|
-| **Dedicated** | Full Clawdbot container per user (top tier) |
-| **Shared** | Single Clawdbot gateway with multi-tenant agents (lower tiers) |
+| **Dedicated** | Full OpenClaw container per user (top tier) |
+| **Shared** | Single OpenClaw gateway with multi-tenant agents (lower tiers) |
 
 ---
 
@@ -41,13 +41,13 @@
 
 | Channel | Availability | Notes |
 |---------|-------------|-------|
-| Web UI | ✅ | WordPress plugin / Clawdbot WebChat |
+| Web UI | ✅ | WordPress plugin / OpenClaw WebChat |
 | Discord | ✅ | Multi-tenant bot |
 | Telegram | ✅ | Multi-tenant bot |
 | SMS | ⚠️ | Android/iMessage or email‑to‑SMS (unreliable) |
 | WhatsApp | ❌ | Requires dedicated container |
 
-### Dedicated Clawdbot (Top Tier)
+### Dedicated OpenClaw (Top Tier)
 
 | Channel | Availability | Notes |
 |---------|-------------|-------|
@@ -56,7 +56,7 @@
 | Telegram | ✅ | Full access |
 | WhatsApp | ✅ | Own session (QR) |
 | SMS | ⚠️ | Android/iMessage or email‑to‑SMS (unreliable) |
-| Other Clawdbot channels | ✅ | Slack, Signal, etc. |
+| Other OpenClaw channels | ✅ | Slack, Signal, etc. |
 
 ---
 
@@ -68,7 +68,7 @@
 | Basic | Shared | Web only |
 | Standard | Shared | Web + Discord/Telegram |
 | Premium | Shared | Web + Discord/Telegram + SMS* |
-| Power | Dedicated | Full Clawdbot channels |
+| Power | Dedicated | Full OpenClaw channels |
 
 *SMS depends on Android/iMessage or email‑to‑SMS gateway (unreliable).
 
@@ -82,7 +82,7 @@
 | FreeWire | Shared | Web only | ❌ |
 | Wire | Shared | Web + Discord/Telegram | ✅ |
 | ExtraWire | Shared | Full shared channels | ✅ Deep |
-| Sovereign | Dedicated | Full Clawdbot channels | ✅ Deep |
+| Sovereign | Dedicated | Full OpenClaw channels | ✅ Deep |
 
 ---
 
@@ -101,10 +101,10 @@
 
 ## Notes / Caveats
 
-- SMS is not built into Clawdbot (no Twilio by default).
+- SMS is not built into OpenClaw (no Twilio by default).
 - Supported SMS paths: Android node, iMessage SMS, or email‑to‑SMS gateway.
 - Toll‑free SMS provider possible later (no A2P 10DLC).
-- Clawdbot default DM policy is **pairing**.
+- OpenClaw default DM policy is **pairing**.
 - Shared gateway must use `agents.list + bindings` for routing.
 
 ---

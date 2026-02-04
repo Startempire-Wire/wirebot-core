@@ -1,4 +1,4 @@
-# Wirebot Trust Modes (Clawdbot-Based)
+# Wirebot Trust Modes (OpenClaw-Based)
 
 > **Trust modes are product policy. Enforced via tiers + skills + channels.**
 
@@ -10,7 +10,7 @@ Trust modes still apply, but enforcement is **not** a custom gateway.
 
 Enforcement points:
 - WordPress plugin (tier + entitlements)
-- Clawdbot config (skills allowlist, channel enablement)
+- OpenClaw config (skills allowlist, channel enablement)
 - Dedicated vs shared infrastructure
 
 ---
@@ -22,7 +22,7 @@ Enforcement points:
 | 0 | Public / Demo | Anyone | Shared gateway |
 | 1 | Standard Founder | Paid users | Shared gateway |
 | 2 | Advanced Trusted | Vetted users | Shared gateway |
-| 3 | Sovereign | Owner + top tier | **Dedicated Clawdbot** |
+| 3 | Sovereign | Owner + top tier | **Dedicated OpenClaw** |
 
 ---
 
@@ -69,7 +69,7 @@ channels: {
 
 ### 4) Dedicated vs Shared
 
-Mode 3 = dedicated Clawdbot container.
+Mode 3 = dedicated OpenClaw container.
 Lower modes = shared gateway with bindings.
 
 ---
@@ -92,7 +92,7 @@ Lower modes = shared gateway with bindings.
 - More channels
 
 ### Mode 3 — Sovereign
-- Dedicated Clawdbot container
+- Dedicated OpenClaw container
 - Full channels (including WhatsApp)
 - Full skills + autonomy
 
@@ -100,7 +100,7 @@ Lower modes = shared gateway with bindings.
 
 ## Notes
 
-- Clawdbot default DM policy is **pairing**.
+- OpenClaw default DM policy is **pairing**.
 - For SMB onboarding, automate pairing or set `dmPolicy: "open"` + allowlist.
 
 ---
