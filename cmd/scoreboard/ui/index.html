@@ -10,18 +10,18 @@
     <link rel="manifest" href="/manifest.json" />
     <title>Wirebot Scoreboard</title>
     <script>
-      // 1. Kill stale service workers that cache-lock old CSS
+      // 1. One-time migration: purge old cache-first SW (v1-v3)
       (function() {
-        if ('serviceWorker' in navigator) {
+        if (!localStorage.getItem('sw_migrated_v4') && 'serviceWorker' in navigator) {
           navigator.serviceWorker.getRegistrations().then(function(regs) {
             regs.forEach(function(r) { r.unregister(); });
           });
-          // Also clear all caches to purge old assets
           if ('caches' in window) {
             caches.keys().then(function(keys) {
               keys.forEach(function(k) { caches.delete(k); });
             });
           }
+          localStorage.setItem('sw_migrated_v4', '1');
         }
       })();
       // 2. Apply theme BEFORE CSS loads to prevent flash-of-wrong-theme
