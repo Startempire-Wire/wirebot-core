@@ -36,6 +36,25 @@
   let selfReportCount = $state(0);
   let showFirstVisit = $state(false);
 
+  // ── Theme ──
+  let theme = $state('system'); // 'dark' | 'light' | 'system'
+
+  function applyTheme(t) {
+    const root = document.documentElement;
+    if (t === 'system') {
+      const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+      root.setAttribute('data-theme', prefersDark ? 'dark' : 'light');
+    } else {
+      root.setAttribute('data-theme', t);
+    }
+  }
+
+  function setTheme(t) {
+    theme = t;
+    localStorage.setItem('theme', t);
+    applyTheme(t);
+  }
+
   // ── SPA Navigation with Back Button Support ──
   function navigateTo(newView) {
     if (newView === view) return;
@@ -819,6 +838,15 @@ Tracked with Wirebot — your AI business operating partner`;
   }
 
   onMount(() => {
+    // Theme initialization
+    const savedTheme = localStorage.getItem('theme') || 'system';
+    theme = savedTheme;
+    applyTheme(savedTheme);
+    // Listen for system theme changes
+    window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
+      if (theme === 'system') applyTheme('system');
+    });
+
     restoreSession();
     handleOAuthCallback();
     canShare = !!navigator.share;
@@ -931,6 +959,22 @@ Tracked with Wirebot — your AI business operating partner`;
       {:else if view === 'settings'}
         <div class="settings-view">
           <div class="s-hdr"><h2>⚙️ Settings</h2></div>
+
+          <!-- Theme Switcher -->
+          <div class="s-group">
+            <label>Appearance</label>
+            <div class="theme-switcher">
+              <button class="theme-btn" class:active={theme === 'light'} onclick={() => setTheme('light')}>
+                ☀️ Light
+              </button>
+              <button class="theme-btn" class:active={theme === 'dark'} onclick={() => setTheme('dark')}>
+                🌙 Dark
+              </button>
+              <button class="theme-btn" class:active={theme === 'system'} onclick={() => setTheme('system')}>
+                💻 System
+              </button>
+            </div>
+          </div>
 
           <!-- Auth: Login or Session -->
           {#if loggedInUser}
@@ -1490,10 +1534,44 @@ Tracked with Wirebot — your AI business operating partner`;
 {/if}
 
 <style>
+  /* ── Theme Variables ── */
+  :root, :global([data-theme="dark"]) {
+    --bg: #0a0a0f;
+    --bg-card: #111118;
+    --bg-elevated: #1a1a24;
+    --text: #ddd;
+    --text-secondary: #888;
+    --text-muted: #555;
+    --border: #1e1e2e;
+    --border-light: #2a2a40;
+    --accent: #7c7cff;
+    --accent-dim: #5c5ccc;
+    --accent-bg: rgba(124,124,255,0.12);
+    --success: #2ecc71;
+    --warning: #ffc800;
+    --error: #ff4444;
+  }
+  :global([data-theme="light"]) {
+    --bg: #f5f5f7;
+    --bg-card: #ffffff;
+    --bg-elevated: #f0f0f5;
+    --text: #1a1a2e;
+    --text-secondary: #555;
+    --text-muted: #888;
+    --border: #e0e0e8;
+    --border-light: #d0d0d8;
+    --accent: #5c5ccc;
+    --accent-dim: #7c7cff;
+    --accent-bg: rgba(92,92,204,0.1);
+    --success: #27ae60;
+    --warning: #f39c12;
+    --error: #e74c3c;
+  }
+
   :global(*) { margin: 0; padding: 0; box-sizing: border-box; }
   :global(html, body) {
-    background: #0a0a0f;
-    color: #ddd;
+    background: var(--bg);
+    color: var(--text);
     width: 100%;
     height: 100%;
     overflow-x: hidden;
@@ -1660,29 +1738,45 @@ Tracked with Wirebot — your AI business operating partner`;
     flex-direction: column;
     gap: 16px;
   }
-  .s-hdr h2 { font-size: 16px; font-weight: 700; border-bottom: 1px solid #1e1e30; padding-bottom: 6px; }
+  .s-hdr h2 { font-size: 16px; font-weight: 700; border-bottom: 1px solid var(--border); padding-bottom: 6px; color: var(--text); }
   .s-group { display: flex; flex-direction: column; gap: 6px; }
-  .s-group label { font-size: 12px; font-weight: 600; color: #7c7cff; letter-spacing: 0.05em; }
+  .s-group label { font-size: 12px; font-weight: 600; color: var(--accent); letter-spacing: 0.05em; }
+
+  /* Theme Switcher */
+  .theme-switcher {
+    display: flex; gap: 8px;
+  }
+  .theme-btn {
+    flex: 1; padding: 10px 12px; border-radius: 8px;
+    background: var(--bg-card); border: 1px solid var(--border);
+    color: var(--text-secondary); font-size: 13px; cursor: pointer;
+    transition: all 0.2s;
+  }
+  .theme-btn:hover { border-color: var(--accent-dim); }
+  .theme-btn.active {
+    background: var(--accent-bg); border-color: var(--accent);
+    color: var(--accent); font-weight: 600;
+  }
   .s-group input {
-    background: #111118;
-    border: 1px solid #2a2a40;
+    background: var(--bg-card);
+    border: 1px solid var(--border-light);
     border-radius: 8px;
     padding: 10px;
-    color: #ddd;
+    color: var(--text);
     font-size: 13px;
     outline: none;
   }
-  .s-group input:focus { border-color: #7c7cff; }
-  .s-hint { font-size: 11px; opacity: 0.35; }
+  .s-group input:focus { border-color: var(--accent); }
+  .s-hint { font-size: 11px; color: var(--text-muted); }
 
   /* Login / Session */
   .btn-sso {
     display: block; text-align: center; text-decoration: none;
-    background: #7c7cff; color: #fff; border-radius: 8px;
+    background: var(--accent); color: #fff; border-radius: 8px;
     padding: 14px; font-size: 15px; font-weight: 700;
     transition: background 0.15s;
   }
-  .btn-sso:active { background: #5c5cdd; }
+  .btn-sso:active { background: var(--accent-dim); }
 
   .btn-login {
     background: #7c7cff; color: #fff; border: none; border-radius: 8px;
@@ -1693,17 +1787,17 @@ Tracked with Wirebot — your AI business operating partner`;
   .btn-login:disabled { opacity: 0.5; cursor: default; }
 
   .session-card {
-    background: #111118; border: 1px solid #2a2a40; border-radius: 10px;
+    background: var(--bg-card); border: 1px solid var(--border-light); border-radius: 10px;
     padding: 14px; display: flex; flex-direction: column; gap: 10px;
   }
   .sc-header { display: flex; align-items: center; gap: 12px; }
   .sc-avatar {
     width: 48px; height: 48px; border-radius: 50%;
-    border: 2px solid #2a2a40; object-fit: cover; flex-shrink: 0;
+    border: 2px solid var(--border-light); object-fit: cover; flex-shrink: 0;
   }
   .sc-identity { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-  .sc-name { font-size: 16px; font-weight: 700; color: #eee; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .sc-username { font-size: 12px; color: #555; }
+  .sc-name { font-size: 16px; font-weight: 700; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .sc-username { font-size: 12px; color: var(--text-muted); }
 
   .sc-badges { display: flex; gap: 6px; flex-wrap: wrap; }
   .admin-badge {
@@ -2042,31 +2136,31 @@ Tracked with Wirebot — your AI business operating partner`;
   .login-screen {
     display: flex; justify-content: center; align-items: center;
     min-height: 100dvh; width: 100%; padding: 24px;
-    background: #0a0a12;
+    background: var(--bg);
   }
   .login-card {
     width: min(400px, 100%);
     text-align: center;
   }
   .login-logo { font-size: 48px; margin-bottom: 12px; }
-  .login-title { font-size: 22px; font-weight: 800; color: #eee; margin-bottom: 6px; }
-  .login-sub { font-size: 14px; color: #666; margin-bottom: 28px; }
+  .login-title { font-size: 22px; font-weight: 800; color: var(--text); margin-bottom: 6px; }
+  .login-sub { font-size: 14px; color: var(--text-secondary); margin-bottom: 28px; }
   .login-sso {
     display: block; padding: 16px; font-size: 16px; font-weight: 700;
     margin-bottom: 20px;
   }
   .login-manual {
-    text-align: left; background: #12121e; border-radius: 12px;
-    border: 1px solid #1e1e30; padding: 16px; margin-bottom: 20px;
+    text-align: left; background: var(--bg-card); border-radius: 12px;
+    border: 1px solid var(--border); padding: 16px; margin-bottom: 20px;
   }
   .login-manual summary {
-    cursor: pointer; color: #888; font-size: 13px; margin-bottom: 12px;
+    cursor: pointer; color: var(--text-secondary); font-size: 13px; margin-bottom: 12px;
   }
   .login-manual input {
-    width: 100%; padding: 12px; background: #1a1a2e; border: 1px solid #333;
-    border-radius: 8px; color: #fff; font-size: 15px; margin-bottom: 10px;
+    width: 100%; padding: 12px; background: var(--bg-elevated); border: 1px solid var(--border-light);
+    border-radius: 8px; color: var(--text); font-size: 15px; margin-bottom: 10px;
   }
-  .login-manual input:focus { outline: none; border-color: #7c7cff; }
+  .login-manual input:focus { outline: none; border-color: var(--accent); }
   .login-privacy {
     font-size: 12px; color: #444; margin-top: 8px;
   }
