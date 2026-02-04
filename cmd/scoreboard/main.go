@@ -9206,12 +9206,18 @@ func (s *Server) extractFromGDriveIndex(files []map[string]string, accessToken s
 			log.Printf("[gdrive-extract] Error on %s: %v", name, err)
 			continue
 		}
+		queueOK := true
 		for _, m := range memories {
 			m.SourceType = "gdrive"
-			s.QueueMemoryForApproval(m)
+			if err := s.QueueMemoryForApproval(m); err != nil {
+				log.Printf("[gdrive-extract] Queue error for %s: %v", name, err)
+				queueOK = false
+			}
 		}
 
-		processed[fileID] = true
+		if queueOK {
+			processed[fileID] = true
+		}
 		extracted++
 		time.Sleep(2 * time.Second) // Rate limit LLM calls
 	}
@@ -9457,12 +9463,18 @@ func (s *Server) extractFromDropboxIndex(files []map[string]string, accessToken 
 			log.Printf("[dropbox-extract] Error on %s: %v", name, err)
 			continue
 		}
+		queueOK := true
 		for _, m := range memories {
 			m.SourceType = "dropbox"
-			s.QueueMemoryForApproval(m)
+			if err := s.QueueMemoryForApproval(m); err != nil {
+				log.Printf("[dropbox-extract] Queue error for %s: %v", name, err)
+				queueOK = false
+			}
 		}
 
-		processed[path] = true
+		if queueOK {
+			processed[path] = true
+		}
 		extracted++
 		time.Sleep(2 * time.Second)
 	}
