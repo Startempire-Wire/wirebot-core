@@ -311,14 +311,17 @@ func (s *Server) QueueMemoryForApproval(m MemoryExtraction) error {
 		INSERT INTO memory_queue (id, memory_text, source_type, source_file, source_context, confidence, status, reviewed_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, CASE WHEN ?='approved' THEN CURRENT_TIMESTAMP ELSE NULL END)`,
 		id, m.MemoryText, m.SourceType, sourceFile, m.SourceContext, m.Confidence, status, status)
+	if err != nil {
+		return err
+	}
 
-	// If auto-approved, fan out to all memory layers
+	// If auto-approved AND recorded in DB, fan out to all memory layers
 	if status == "approved" {
 		go s.writebackApprovedMemory(m.MemoryText)
 		log.Printf("[memory-queue] Auto-approved (conf=%.2f, type=%s): %s", m.Confidence, m.SourceType, m.MemoryText[:min(60, len(m.MemoryText))])
 	}
 
-	return err
+	return nil
 }
 
 // containsAmbiguousEntities checks for location/person/org names that need human disambiguation.
