@@ -242,11 +242,11 @@
     <!-- Gauges row -->
     <div class="sys-gauges">
       <div class="sys-gauge">
-        <div class="sys-gauge-label">💾 Disk</div>
+        <div class="sys-gauge-label">💾 Wirebot Disk</div>
         <div class="sys-gauge-bar">
           <div class="sys-gauge-fill" style="width:{health.disk_percent}%; background:{diskColor(health.disk_percent)}"></div>
         </div>
-        <div class="sys-gauge-val">{health.disk_percent}%</div>
+        <div class="sys-gauge-val">{health.disk_percent}%{#if health.disk_limit_mb} · {(health.disk_used_mb / 1024).toFixed(1)}/{(health.disk_limit_mb / 1024).toFixed(0)}GB{/if}</div>
       </div>
       <div class="sys-gauge">
         <div class="sys-gauge-label">📋 Queue</div>

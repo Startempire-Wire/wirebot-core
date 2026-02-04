@@ -1242,8 +1242,9 @@ func (s *Server) handleSystemHealth(w http.ResponseWriter, r *http.Request) {
 
 	// Disk quota via quota command (returns 0 if unavailable)
 	diskPct := 0
-	if out, err := exec.Command("sh", "-c", `quota -u wirebot 2>/dev/null | awk '/\/dev\//{getline; printf "%.0f", $1/$2*100}'`).Output(); err == nil {
-		fmt.Sscanf(string(out), "%d", &diskPct)
+	diskUsedMB, diskLimitMB := 0, 0
+	if out, err := exec.Command("sh", "-c", `quota -u wirebot 2>/dev/null | awk '/\/dev\//{getline; printf "%d %d %d", $1/$2*100, $1/1024, $2/1024}'`).Output(); err == nil {
+		fmt.Sscanf(string(out), "%d %d %d", &diskPct, &diskUsedMB, &diskLimitMB)
 	}
 
 	allUp := true
@@ -1265,6 +1266,8 @@ func (s *Server) handleSystemHealth(w http.ResponseWriter, r *http.Request) {
 		"memory_pending":   pending,
 		"memory_approved":  approved,
 		"disk_percent":     diskPct,
+		"disk_used_mb":     diskUsedMB,
+		"disk_limit_mb":    diskLimitMB,
 		"checked_at":       time.Now().Format(time.RFC3339),
 	})
 }
