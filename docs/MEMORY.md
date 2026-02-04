@@ -1,12 +1,12 @@
-# Wirebot Memory Architecture (Clawdbot + Letta + Mem0)
+# Wirebot Memory Architecture (OpenClaw + Letta + Mem0)
 
-> **Clawdbot memory is built‑in. Wirebot adds structured state + cross‑surface sync.**
+> **OpenClaw memory is built‑in. Wirebot adds structured state + cross‑surface sync.**
 
 ---
 
 ## Principle
 
-Clawdbot already provides a full memory system (markdown + hybrid search + compaction).
+OpenClaw already provides a full memory system (markdown + hybrid search + compaction).
 Wirebot **layers on top**:
 
 - **Letta** for structured business state
@@ -14,7 +14,7 @@ Wirebot **layers on top**:
 
 ---
 
-## Clawdbot Memory (Built‑In)
+## OpenClaw Memory (Built‑In)
 
 ### Two‑Layer Markdown Store
 
@@ -59,7 +59,7 @@ finalScore = (0.7 * vectorScore) + (0.3 * textScore)
 
 ---
 
-## Wirebot Additions (On Top of Clawdbot)
+## Wirebot Additions (On Top of OpenClaw)
 
 ### Letta — Structured Business State
 
@@ -73,10 +73,10 @@ This is not conversational memory. It is **structured, queryable state**.
 
 ### Mem0 — Cross‑Surface Sync
 
-Mem0 is **not a replacement** for Clawdbot memory. Use it to:
+Mem0 is **not a replacement** for OpenClaw memory. Use it to:
 - Sync browser chats (OpenMemory extension → Mem0 → Wirebot)
 - Share memories across devices/surfaces
-- Store long‑term vector/graph memory outside Clawdbot
+- Store long‑term vector/graph memory outside OpenClaw
 
 ---
 
@@ -84,7 +84,7 @@ Mem0 is **not a replacement** for Clawdbot memory. Use it to:
 
 | Layer | System | Purpose |
 |------|--------|---------|
-| **Core memory** | **Clawdbot built‑in** | Daily logs + long‑term memory + hybrid search |
+| **Core memory** | **OpenClaw built‑in** | Daily logs + long‑term memory + hybrid search |
 | **Structured state** | **Letta** | Business context + accountability |
 | **Cross‑surface** | **Mem0** | Browser sync + shared vector/graph memory |
 
@@ -101,9 +101,9 @@ Mem0 is **not a replacement** for Clawdbot memory. Use it to:
 
 ## Memory Tool Slot
 
-Default: **Clawdbot memory‑core** (built‑in system).
+Default: **OpenClaw memory‑core** (built‑in system).
 
-If you want Clawdbot’s memory tools to point at Mem0 instead:
+If you want OpenClaw’s memory tools to point at Mem0 instead:
 
 ```json5
 plugins: { slots: { memory: "memory-mem0" } }
@@ -117,7 +117,7 @@ Otherwise keep **memory‑core** and call Mem0 via Wirebot skills.
 
 Per‑user isolation across all layers:
 
-- Clawdbot agent + workspace
+- OpenClaw agent + workspace
 - Mem0 namespace: `memory_<user_id>` (or `wirebot_<user_id>`)
 - Letta agent: `agent_<user_id>`
 
@@ -125,7 +125,7 @@ Per‑user isolation across all layers:
 
 ## Retention
 
-- Clawdbot: local, configurable
+- OpenClaw: local, configurable
 - Letta: long‑term until deletion
 - Mem0: long‑term, GDPR deletable
 
@@ -133,7 +133,7 @@ Per‑user isolation across all layers:
 
 ## See Also
 
-- [CLAWDBOT_MEMORY_DEEP_DIVE.md](./CLAWDBOT_MEMORY_DEEP_DIVE.md) — Clawdbot memory internals
+- [CLAWDBOT_MEMORY_DEEP_DIVE.md](./CLAWDBOT_MEMORY_DEEP_DIVE.md) — OpenClaw memory internals
 - [MEM0_PLUGIN.md](./MEM0_PLUGIN.md) — Mem0 plugin details
 - [LETTA_INTEGRATION.md](./LETTA_INTEGRATION.md) — Structured state layer
 - [GATEWAY.md](./GATEWAY.md) — Gateway config reference

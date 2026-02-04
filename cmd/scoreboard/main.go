@@ -6595,7 +6595,7 @@ Write the draft now:`, bizName, title)
 	}
 
 	reqBody, _ := json.Marshal(map[string]interface{}{
-		"model": "kimi-coding/k2p5",
+		"model": envOr("DRAFT_MODEL", "kimi-coding/k2p5"),
 		"messages": []map[string]string{
 			{"role": "user", "content": prompt},
 		},
