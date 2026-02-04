@@ -229,7 +229,7 @@
     transform: translateX(-50%);
     width: 24px;
     height: 2px;
-    background: #7c7cff;
+    background: var(--accent);
     border-radius: 0 0 2px 2px;
   }
   .tab.middle.active::before { display: none; }
@@ -246,7 +246,7 @@
     height: 16px;
     padding: 0 4px;
     border-radius: 8px;
-    background: #ff4444;
+    background: var(--error);
     color: white;
     font-size: 9px;
     font-weight: 700;
@@ -256,7 +256,7 @@
   }
 
   /* Edit mode */
-  nav.edit-mode { background: #0a0a12; }
+  nav.edit-mode { background: var(--bg); }
   nav.edit-mode .tab {
     cursor: grab;
     animation: wiggle 0.3s ease-in-out infinite;
@@ -305,8 +305,8 @@
   }
   .edit-toggle:hover { opacity: 1; }
   nav.edit-mode .edit-toggle {
-    background: #7c7cff;
-    color: #0a0a12;
+    background: var(--accent);
+    color: var(--bg);
     opacity: 1;
   }
 
@@ -330,7 +330,7 @@
   .reset-btn {
     background: rgba(255, 80, 80, 0.1);
     border: 1px solid rgba(255, 80, 80, 0.3);
-    color: #ff5050;
+    color: var(--error);
     padding: 4px 8px;
     border-radius: 4px;
     font-size: 10px;

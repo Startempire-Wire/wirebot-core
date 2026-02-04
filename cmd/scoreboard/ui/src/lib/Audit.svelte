@@ -220,22 +220,22 @@
     padding: 0.5rem;
     border-radius: 8px;
     border: 1px solid #333;
-    background: #1a1a1a;
-    color: #fff;
+    background: var(--bg-card);
+    color: var(--text);
   }
   
   .refresh-btn {
     padding: 0.5rem 0.75rem;
     border-radius: 8px;
     border: 1px solid #333;
-    background: #1a1a1a;
+    background: var(--bg-card);
     cursor: pointer;
   }
   
   .loading, .empty {
     text-align: center;
     padding: 2rem;
-    color: #888;
+    color: var(--text-secondary);
   }
   
   .interactions-list {
@@ -245,7 +245,7 @@
   }
   
   .interaction-card {
-    background: #1a1a1a;
+    background: var(--bg-card);
     border-radius: 12px;
     padding: 1rem;
     border: 1px solid #333;
@@ -268,7 +268,7 @@
   }
   
   .channel, .user, .time {
-    color: #888;
+    color: var(--text-secondary);
   }
   
   .message {
@@ -280,16 +280,16 @@
   }
   
   .user-msg {
-    background: #2a2a3a;
+    background: var(--bg-elevated);
   }
   
   .bot-msg {
-    background: #1a2a1a;
+    background: var(--success-bg);
   }
   
   .tools {
     font-size: 0.75rem;
-    color: #888;
+    color: var(--text-secondary);
     margin-top: 0.5rem;
   }
   
@@ -310,7 +310,7 @@
     font-size: 0.75rem;
     padding: 0.2rem 0.5rem;
     border-radius: 4px;
-    background: #333;
+    background: var(--bg-elevated);
   }
   
   .fb-badge.good { background: #166534; }
@@ -326,7 +326,7 @@
     padding: 0.5rem 1rem;
     border-radius: 8px;
     border: 1px solid #333;
-    background: #252525;
+    background: var(--bg-elevated);
     cursor: pointer;
     font-size: 1.1rem;
     transition: all 0.2s;
@@ -350,7 +350,7 @@
   }
   
   .modal {
-    background: #1a1a1a;
+    background: var(--bg-card);
     border-radius: 16px;
     padding: 1.5rem;
     max-width: 400px;
@@ -363,7 +363,7 @@
   }
   
   .modal-context {
-    background: #252525;
+    background: var(--bg-elevated);
     padding: 0.75rem;
     border-radius: 8px;
     margin-bottom: 1rem;
@@ -375,8 +375,8 @@
     padding: 0.75rem;
     border-radius: 8px;
     border: 1px solid #333;
-    background: #252525;
-    color: #fff;
+    background: var(--bg-elevated);
+    color: var(--text);
     resize: vertical;
     font-family: inherit;
   }
@@ -396,12 +396,12 @@
   }
   
   .cancel-btn {
-    background: #333;
-    color: #fff;
+    background: var(--bg-elevated);
+    color: var(--text);
   }
   
   .submit-btn {
     background: #3b82f6;
-    color: #fff;
+    color: var(--text);
   }
 </style>

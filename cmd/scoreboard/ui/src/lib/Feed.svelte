@@ -509,7 +509,7 @@
   }
 
   /* ── Tabs ── */
-  .tab-bar { display: flex; margin-bottom: 12px; border-radius: 8px; overflow: hidden; background: #12121e; }
+  .tab-bar { display: flex; margin-bottom: 12px; border-radius: 8px; overflow: hidden; background: var(--bg-card); }
   .tab {
     flex: 1; padding: 8px 4px; background: transparent; border: none;
     color: var(--text-muted); font-size: 13px; font-weight: 600; cursor: pointer;
@@ -531,7 +531,7 @@
 
   /* ── Project group ── */
   .proj-group {
-    background: #111119; border: 1px solid #1e1e2e; border-radius: 10px;
+    background: var(--bg-card); border: 1px solid var(--border); border-radius: 10px;
     margin-bottom: 8px; overflow: hidden;
   }
   .proj-row {
@@ -548,11 +548,11 @@
   .proj-label { font-size: 14px; font-weight: 600; color: var(--text); }
   .proj-biz { font-size: 10px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; }
   .rename-input {
-    background: #0a0a14; border: 1px solid #7c7cff; border-radius: 5px;
+    background: var(--bg); border: 1px solid var(--accent); border-radius: 5px;
     color: var(--text); font-size: 13px; font-weight: 600; padding: 3px 8px;
     width: 140px; outline: none;
   }
-  .rename-input:focus { border-color: #9b9bff; box-shadow: 0 0 0 2px rgba(124,124,255,0.15); }
+  .rename-input:focus { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(124,124,255,0.15); }
   .btn-rename {
     background: none; border: none; color: var(--text-muted); font-size: 12px;
     cursor: pointer; padding: 2px 4px; opacity: 0;
@@ -564,10 +564,10 @@
   @media (hover: none) { .btn-rename { opacity: 0.5; } }
 
   .proj-pending-count {
-    background: rgba(255,170,0,0.12); color: #ffaa00; font-size: 12px;
+    background: rgba(255,170,0,0.12); color: var(--warning); font-size: 12px;
     font-weight: 700; padding: 2px 8px; border-radius: 10px; flex-shrink: 0;
   }
-  .proj-count-ok { font-size: 11px; color: #2ecc71; margin-left: auto; }
+  .proj-count-ok { font-size: 11px; color: var(--success); margin-left: auto; }
 
   /* ── Project action bar ── */
   .proj-action-bar {
@@ -578,12 +578,12 @@
     border: none; cursor: pointer; -webkit-tap-highlight-color: transparent;
   }
   .btn-approve-proj {
-    background: rgba(46,204,113,0.1); color: #2ecc71;
+    background: rgba(46,204,113,0.1); color: var(--success);
     border: 1px solid rgba(46,204,113,0.25);
   }
   .btn-approve-proj:active { background: rgba(46,204,113,0.25); }
   .btn-reject-proj {
-    background: rgba(255,68,68,0.06); color: #ff4444;
+    background: rgba(255,68,68,0.06); color: var(--error);
     border: 1px solid rgba(255,68,68,0.15);
   }
   .btn-reject-proj:active { background: rgba(255,68,68,0.2); }
@@ -614,21 +614,21 @@
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   }
   .commit-meta {
-    font-size: 10px; color: #3a3a4a; display: flex; align-items: center;
+    font-size: 10px; color: var(--text-muted); display: flex; align-items: center;
     gap: 4px; margin-top: 2px;
   }
   .cm-lane { font-weight: 600; }
   .cm-sep { opacity: 0.3; }
-  .cm-link { color: #4a9eff; text-decoration: none; }
-  .cm-pts { color: #2ecc71; font-weight: 600; }
-  .commit-empty { padding: 12px 40px; color: #333; font-size: 12px; text-align: center; }
+  .cm-link { color: var(--accent); text-decoration: none; }
+  .cm-pts { color: var(--success); font-weight: 600; }
+  .commit-empty { padding: 12px 40px; color: var(--text-muted); font-size: 12px; text-align: center; }
 
   /* ── Project score bar (All projects section) ── */
-  .proj-summary { border-color: #151522; }
+  .proj-summary { border-color: var(--border); }
   .proj-score-bar { display: flex; gap: 4px; align-items: center; flex-shrink: 0; }
-  .ps-approved { font-size: 13px; font-weight: 700; color: #2ecc71; }
-  .ps-pending { font-size: 11px; color: #ffaa00; }
-  .ps-rejected { font-size: 11px; color: #ff4444; }
+  .ps-approved { font-size: 13px; font-weight: 700; color: var(--success); }
+  .ps-pending { font-size: 11px; color: var(--warning); }
+  .ps-rejected { font-size: 11px; color: var(--error); }
 
   /* ── Project detail panel ── */
   .proj-detail {
@@ -638,8 +638,8 @@
   .pd-row { display: flex; justify-content: space-between; padding: 3px 0; font-size: 12px; }
   .pd-label { color: var(--text-muted); }
   .pd-val { color: var(--text-secondary); }
-  .pd-ok { color: #2ecc71; }
-  .pd-no { color: #ff4444; }
+  .pd-ok { color: var(--success); }
+  .pd-no { color: var(--error); }
 
   .commit-actions { display: flex; gap: 4px; flex-shrink: 0; padding-top: 1px; }
   .btn-sm {
@@ -648,9 +648,9 @@
     display: flex; align-items: center; justify-content: center;
     -webkit-tap-highlight-color: transparent;
   }
-  .btn-sm.ok { background: rgba(46,204,113,0.1); color: #2ecc71; }
+  .btn-sm.ok { background: rgba(46,204,113,0.1); color: var(--success); }
   .btn-sm.ok:active { background: rgba(46,204,113,0.25); }
-  .btn-sm.no { background: rgba(255,68,68,0.06); color: #ff4444; }
+  .btn-sm.no { background: rgba(255,68,68,0.06); color: var(--error); }
   .btn-sm.no:active { background: rgba(255,68,68,0.2); }
   .acting-sm { color: var(--text-muted); font-size: 11px; }
 
@@ -676,14 +676,14 @@
   .fi-sep { opacity: 0.3; }
   .fi-pending-badge {
     font-size: 9px; font-weight: 700; background: rgba(255,170,0,0.15);
-    color: #ffaa00; padding: 1px 5px; border-radius: 3px;
+    color: var(--warning); padding: 1px 5px; border-radius: 3px;
   }
   .fi-biz-tag {
     font-size: 9px; font-weight: 600; background: rgba(124,124,255,0.1);
     color: var(--accent); padding: 1px 5px; border-radius: 3px;
   }
   .fi-delta { font-size: 14px; font-weight: 700; font-variant-numeric: tabular-nums; color: var(--text-muted); flex-shrink: 0; }
-  .fi-delta.positive { color: #2ecc71; }
+  .fi-delta.positive { color: var(--success); }
 
   /* Business filter pills */
   .biz-pills {

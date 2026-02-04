@@ -111,7 +111,7 @@
     padding-bottom: 6px;
   }
   .w-header h2 { font-size: 16px; font-weight: 700; color: #ff4a9e; }
-  .w-season { font-size: 12px; color: #555; }
+  .w-season { font-size: 12px; color: var(--text-muted); }
 
   .empty { text-align: center; padding: 40px 0; }
   .empty-icon { font-size: 40px; margin-bottom: 8px; }
@@ -121,7 +121,7 @@
   .cards { display: flex; flex-direction: column; gap: 8px; }
 
   .card {
-    background: #111118;
+    background: var(--bg-card);
     border-radius: 12px;
     padding: 14px;
     text-align: center;
@@ -138,13 +138,13 @@
   .card-row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 
   .patterns, .artifacts {
-    background: #111118;
+    background: var(--bg-card);
     border-radius: 12px;
     padding: 14px;
   }
-  .patterns h3, .artifacts h3 { font-size: 13px; font-weight: 600; margin-bottom: 8px; color: #7c7cff; }
+  .patterns h3, .artifacts h3 { font-size: 13px; font-weight: 600; margin-bottom: 8px; color: var(--accent); }
   .pat { font-size: 13px; padding: 4px 0; opacity: 0.7; }
-  .pat strong { color: #ddd; opacity: 1; }
+  .pat strong { color: var(--text); opacity: 1; }
 
   .artifact {
     display: flex;
@@ -156,14 +156,14 @@
   }
   .a-rank { opacity: 0.4; font-weight: 700; width: 24px; }
   .a-title { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .a-pts { color: #2ecc71; font-weight: 700; }
+  .a-pts { color: var(--success); font-weight: 700; }
 
   .share {
     text-align: center;
     padding: 12px 0;
   }
   .share a {
-    color: #7c7cff;
+    color: var(--accent);
     text-decoration: none;
     font-size: 14px;
     padding: 8px 16px;

@@ -262,7 +262,7 @@
     background: linear-gradient(135deg, #7c7cff20, #a78bfa15);
     border: 1px solid #7c7cff30;
     border-radius: 12px;
-    color: #c8c8ff;
+    color: var(--accent);
     font-size: 14px;
     font-weight: 600;
     cursor: pointer;
@@ -270,5 +270,5 @@
     transition: border-color 0.2s;
     margin-bottom: 20px;
   }
-  .wrapped-btn:hover { border-color: #7c7cff60; }
+  .wrapped-btn:hover { border-color: var(--accent-border); }
 </style>

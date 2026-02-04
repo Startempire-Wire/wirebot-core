@@ -473,12 +473,12 @@
   .flow-header { display: flex; align-items: center; gap: 8px; padding: 16px 0 12px; }
   .back-btn {
     background: rgba(124,124,255,0.08); border: 1px solid rgba(124,124,255,0.15);
-    color: #7c7cff; font-size: 14px; cursor: pointer;
+    color: var(--accent); font-size: 14px; cursor: pointer;
     padding: 6px 12px; border-radius: 8px;
     -webkit-tap-highlight-color: transparent;
   }
-  .flow-title { flex: 1; font-size: 16px; font-weight: 600; color: #fff; text-align: center; }
-  .flow-step { font-size: 12px; color: #888; font-variant-numeric: tabular-nums; }
+  .flow-title { flex: 1; font-size: 16px; font-weight: 600; color: var(--text); text-align: center; }
+  .flow-step { font-size: 12px; color: var(--text-secondary); font-variant-numeric: tabular-nums; }
 
   .progress-track { height: 3px; background: rgba(255,255,255,0.08); border-radius: 2px; margin-bottom: 24px; overflow: hidden; }
   .progress-fill { height: 100%; background: linear-gradient(90deg, #7c7cff, #ff7cff); transition: width 0.4s ease; border-radius: 2px; }
@@ -487,7 +487,7 @@
   .question-area { transition: opacity 0.3s, transform 0.3s; }
   .question-area.slide-out { opacity: 0; transform: translateX(-20px); }
 
-  .q-prompt { font-size: 18px; font-weight: 500; color: #fff; margin-bottom: 20px; line-height: 1.4; }
+  .q-prompt { font-size: 18px; font-weight: 500; color: var(--text); margin-bottom: 20px; line-height: 1.4; }
 
   /* ── Forced Choice (ASI) ── */
   .choice-cards { display: flex; flex-direction: column; gap: 12px; }
@@ -496,7 +496,7 @@
     padding: 16px; border-radius: 12px;
     background: rgba(255,255,255,0.04);
     border: 1px solid rgba(255,255,255,0.1);
-    cursor: pointer; color: #fff; text-align: left;
+    cursor: pointer; color: var(--text); text-align: left;
     transition: all 0.2s;
   }
   .choice-card:hover, .choice-card:active {
@@ -506,13 +506,13 @@
   }
   .choice-letter {
     width: 32px; height: 32px; border-radius: 50%;
-    background: rgba(124,124,255,0.15); color: #7c7cff;
+    background: rgba(124,124,255,0.15); color: var(--accent);
     display: flex; align-items: center; justify-content: center;
     font-weight: 700; font-size: 14px; flex-shrink: 0;
   }
   .choice-text { flex: 1; font-size: 15px; line-height: 1.3; }
-  .choice-dim { font-size: 10px; color: #555; }
-  .choice-vs { text-align: center; color: #555; font-size: 12px; }
+  .choice-dim { font-size: 10px; color: var(--text-muted); }
+  .choice-vs { text-align: center; color: var(--text-muted); font-size: 12px; }
 
   /* ── Scenario Pick (CSI, COG) ── */
   .scenario-options { display: flex; flex-direction: column; gap: 8px; }
@@ -520,7 +520,7 @@
     padding: 14px 16px; border-radius: 12px;
     background: rgba(255,255,255,0.04);
     border: 1px solid rgba(255,255,255,0.1);
-    cursor: pointer; color: #fff; text-align: left;
+    cursor: pointer; color: var(--text); text-align: left;
     transition: all 0.2s;
   }
   .scenario-btn:hover, .scenario-btn:active {
@@ -532,18 +532,18 @@
   /* ── Slider (RDS) ── */
   .slider-area { display: flex; flex-direction: column; gap: 12px; }
   .slider-labels { display: flex; justify-content: space-between; }
-  .s-min, .s-max { font-size: 11px; color: #888; }
+  .s-min, .s-max { font-size: 11px; color: var(--text-secondary); }
   input[type="range"] {
     width: 100%; height: 6px; -webkit-appearance: none; appearance: none;
     background: rgba(255,255,255,0.1); border-radius: 3px; outline: none;
   }
   input[type="range"]::-webkit-slider-thumb {
     -webkit-appearance: none; width: 28px; height: 28px; border-radius: 50%;
-    background: #7c7cff; cursor: pointer; border: 3px solid #1a1a2e;
+    background: var(--accent); cursor: pointer; border: 3px solid var(--bg-elevated);
   }
-  .slider-value { text-align: center; font-size: 32px; font-weight: 700; color: #7c7cff; }
+  .slider-value { text-align: center; font-size: 32px; font-weight: 700; color: var(--accent); }
   .slider-submit {
-    padding: 12px; border-radius: 10px; background: #7c7cff; color: #fff;
+    padding: 12px; border-radius: 10px; background: var(--accent); color: var(--text);
     border: none; font-size: 15px; font-weight: 600; cursor: pointer;
     transition: transform 0.15s;
   }
@@ -562,32 +562,32 @@
   .drag-item:active { cursor: grabbing; }
   .drag-item.dragging { opacity: 0.5; background: rgba(124,124,255,0.1); }
   .drag-rank {
-    font-size: 14px; font-weight: 700; color: #7c7cff;
+    font-size: 14px; font-weight: 700; color: var(--accent);
     width: 24px; text-align: center;
   }
   .drag-info { flex: 1; }
-  .drag-name { font-size: 14px; font-weight: 600; color: #fff; }
-  .drag-desc { font-size: 11px; color: #888; margin-top: 2px; }
-  .drag-handle { color: #555; font-size: 18px; }
+  .drag-name { font-size: 14px; font-weight: 600; color: var(--text); }
+  .drag-desc { font-size: 11px; color: var(--text-secondary); margin-top: 2px; }
+  .drag-handle { color: var(--text-muted); font-size: 18px; }
   .etm-submit {
     width: 100%; padding: 14px; border-radius: 10px;
-    background: #7c7cff; color: #fff; border: none;
+    background: var(--accent); color: var(--text); border: none;
     font-size: 15px; font-weight: 600; cursor: pointer;
   }
 
   /* ── Done ── */
   .flow-done, .flow-submitting { text-align: center; padding: 60px 20px; }
   .done-icon { font-size: 48px; margin-bottom: 16px; }
-  .flow-done h3 { color: #fff; font-size: 20px; margin: 0 0 8px; }
-  .flow-done p { color: #888; font-size: 14px; margin: 0 0 24px; }
+  .flow-done h3 { color: var(--text); font-size: 20px; margin: 0 0 8px; }
+  .flow-done p { color: var(--text-secondary); font-size: 14px; margin: 0 0 24px; }
   .done-btn {
     padding: 12px 32px; border-radius: 10px;
-    background: #7c7cff; color: #fff; border: none;
+    background: var(--accent); color: var(--text); border: none;
     font-size: 15px; font-weight: 600; cursor: pointer;
   }
   .pulse { font-size: 40px; animation: pulse 1.5s ease-in-out infinite; }
   @keyframes pulse { 0%,100% { opacity: 0.5; } 50% { opacity: 1; } }
-  .flow-submitting p { color: #888; font-size: 14px; margin-top: 12px; }
+  .flow-submitting p { color: var(--text-secondary); font-size: 14px; margin-top: 12px; }
 
   /* Global transition */
   .flow.transitioning .question-area { opacity: 0; }

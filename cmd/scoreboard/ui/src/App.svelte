@@ -1539,33 +1539,75 @@ Tracked with Wirebot — your AI business operating partner`;
     --bg: #0a0a0f;
     --bg-card: #111118;
     --bg-elevated: #1a1a24;
+    --bg-overlay: rgba(0,0,0,0.85);
+    --bg-hover: rgba(255,255,255,0.03);
     --text: #ddd;
     --text-secondary: #888;
     --text-muted: #555;
+    --text-bright: #fff;
+    --text-on-accent: #fff;
     --border: #1e1e2e;
     --border-light: #2a2a40;
+    --border-active: #252535;
     --accent: #7c7cff;
     --accent-dim: #5c5ccc;
     --accent-bg: rgba(124,124,255,0.12);
+    --accent-border: rgba(124,124,255,0.3);
     --success: #2ecc71;
+    --success-bg: rgba(46,204,113,0.12);
+    --success-border: #1a3a1a;
     --warning: #ffc800;
+    --warning-bg: rgba(255,200,0,0.12);
+    --warning-border: #2e2a1a;
     --error: #ff4444;
+    --error-bg: rgba(255,68,68,0.12);
+    /* Badge backgrounds */
+    --badge-admin-bg: #2e1a0a;
+    --badge-admin-text: #ff9500;
+    --badge-free-bg: #222;
+    --badge-freewire-bg: #1a2a1a;
+    --badge-wire-bg: #1a1a2e;
+    --badge-extrawire-bg: #2e1a2e;
+    /* Lane colors */
+    --lane-revenue-bg: #1a2a1a;
+    --lane-shipping-bg: #2e2a1a;
   }
   :global([data-theme="light"]) {
     --bg: #f5f5f7;
     --bg-card: #ffffff;
     --bg-elevated: #f0f0f5;
+    --bg-overlay: rgba(0,0,0,0.5);
+    --bg-hover: rgba(0,0,0,0.03);
     --text: #1a1a2e;
     --text-secondary: #555;
     --text-muted: #888;
+    --text-bright: #1a1a2e;
+    --text-on-accent: #fff;
     --border: #e0e0e8;
     --border-light: #d0d0d8;
+    --border-active: #c0c0c8;
     --accent: #5c5ccc;
     --accent-dim: #7c7cff;
-    --accent-bg: rgba(92,92,204,0.1);
+    --accent-bg: rgba(92,92,204,0.08);
+    --accent-border: rgba(92,92,204,0.25);
     --success: #27ae60;
+    --success-bg: rgba(39,174,96,0.1);
+    --success-border: #c8e6c9;
     --warning: #f39c12;
+    --warning-bg: rgba(243,156,18,0.1);
+    --warning-border: #fff3cd;
     --error: #e74c3c;
+    --error-bg: rgba(231,76,60,0.1);
+    /* Badge backgrounds - lighter for light mode */
+    --badge-admin-bg: #fff3e0;
+    --badge-admin-text: #e65100;
+    --badge-free-bg: #f0f0f0;
+    --badge-freewire-bg: #e8f5e9;
+    --badge-wire-bg: #e8eaf6;
+    --badge-extrawire-bg: #fce4ec;
+    /* Lane colors */
+    --lane-revenue-bg: #e8f5e9;
+    --lane-shipping-bg: #fff8e1;
   }
 
   :global(*) { margin: 0; padding: 0; box-sizing: border-box; }
@@ -1671,7 +1713,7 @@ Tracked with Wirebot — your AI business operating partner`;
   .first-visit-overlay {
     position: fixed;
     inset: 0;
-    background: rgba(0,0,0,0.9);
+    background: var(--bg-overlay);
     z-index: 300;
     display: flex;
     align-items: center;
@@ -1711,7 +1753,7 @@ Tracked with Wirebot — your AI business operating partner`;
     font-size: 13px;
     color: var(--text-secondary);
     padding: 6px 10px;
-    background: rgba(255,255,255,0.02);
+    background: var(--bg-hover);
     border-radius: 8px;
   }
   .fv-q-icon { font-size: 18px; flex-shrink: 0; }
@@ -1772,14 +1814,14 @@ Tracked with Wirebot — your AI business operating partner`;
   /* Login / Session */
   .btn-sso {
     display: block; text-align: center; text-decoration: none;
-    background: var(--accent); color: #fff; border-radius: 8px;
+    background: var(--accent); color: var(--text-on-accent); border-radius: 8px;
     padding: 14px; font-size: 15px; font-weight: 700;
     transition: background 0.15s;
   }
   .btn-sso:active { background: var(--accent-dim); }
 
   .btn-login {
-    background: var(--accent); color: #fff; border: none; border-radius: 8px;
+    background: var(--accent); color: var(--text-on-accent); border: none; border-radius: 8px;
     padding: 12px; font-size: 14px; font-weight: 700; cursor: pointer;
     margin-top: 4px; transition: background 0.15s;
   }
@@ -1802,7 +1844,7 @@ Tracked with Wirebot — your AI business operating partner`;
   .sc-badges { display: flex; gap: 6px; flex-wrap: wrap; }
   .admin-badge {
     font-size: 10px; font-weight: 700; padding: 2px 8px; border-radius: 4px;
-    background: #2e1a0a; color: #ff9500; text-transform: uppercase; letter-spacing: 0.05em;
+    background: var(--badge-admin-bg); color: var(--badge-admin-text); text-transform: uppercase; letter-spacing: 0.05em;
   }
   .role-badge {
     font-size: 10px; font-weight: 600; padding: 2px 8px; border-radius: 4px;
@@ -1821,9 +1863,9 @@ Tracked with Wirebot — your AI business operating partner`;
     text-transform: uppercase; letter-spacing: 0.05em;
   }
   .tier-free { background: var(--bg-card); color: var(--text-secondary); }
-  .tier-freewire { background: #1a2a1a; color: #4caf50; }
+  .tier-freewire { background: var(--badge-freewire-bg); color: var(--success); }
   .tier-wire { background: var(--bg-elevated); color: var(--accent); }
-  .tier-extrawire { background: #2e1a2e; color: #ff7cff; }
+  .tier-extrawire { background: var(--badge-extrawire-bg); color: #d946ef; }
 
   /* Equalizer strip inside profile card */
   .eq-strip {
@@ -1876,11 +1918,11 @@ Tracked with Wirebot — your AI business operating partner`;
     display: flex; align-items: center; gap: 6px; justify-content: center;
     -webkit-tap-highlight-color: transparent;
   }
-  .eq-cta-retake { background: rgba(255,255,255,0.05); border-color: var(--border-light); color: var(--text-secondary); }
+  .eq-cta-retake { background: var(--bg-hover); border-color: var(--border-light); color: var(--text-secondary); }
   .eq-cta-sub { font-size: 10px; font-weight: 400; color: var(--text-secondary); }
 
   .btn-discord-audit {
-    background: linear-gradient(135deg, #5865F2, #7289DA); color: #fff; border: none; border-radius: 8px;
+    background: linear-gradient(135deg, #5865F2, #7289DA); color: var(--text-on-accent); border: none; border-radius: 8px;
     padding: 10px 16px; font-size: 13px; cursor: pointer; display: flex; flex-direction: column;
     align-items: flex-start; gap: 2px; width: 100%; text-align: left;
   }
@@ -1888,7 +1930,7 @@ Tracked with Wirebot — your AI business operating partner`;
   .btn-discord-audit .btn-sub { font-size: 10px; opacity: 0.8; }
 
   .btn-memory-review {
-    background: linear-gradient(135deg, #7c3aed, #a855f7); color: #fff; border: none; border-radius: 8px;
+    background: linear-gradient(135deg, #7c3aed, #a855f7); color: var(--text-on-accent); border: none; border-radius: 8px;
     padding: 10px 16px; font-size: 13px; cursor: pointer; display: flex; flex-direction: column;
     align-items: flex-start; gap: 2px; width: 100%; text-align: left; margin-top: 8px;
   }
@@ -1951,7 +1993,7 @@ Tracked with Wirebot — your AI business operating partner`;
     color: var(--text-muted); font-size: 12px; cursor: pointer;
     text-align: center; transition: all 0.2s; margin-top: 8px;
   }
-  .int-add-another:hover { border-color: #7c7cff40; color: var(--accent); }
+  .int-add-another:hover { border-color: var(--accent-border); color: var(--accent); }
 
   /* Grouped integrations */
   .int-grouped-section { display: flex; flex-direction: column; gap: 8px; }
@@ -1959,7 +2001,7 @@ Tracked with Wirebot — your AI business operating partner`;
     background: var(--bg); border: 1px solid #1a1a2a; border-radius: 12px;
     overflow: hidden;
   }
-  .int-group[open] { border-color: #252535; }
+  .int-group[open] { border-color: var(--border-active); }
   .int-group-header {
     display: flex; align-items: center; gap: 10px;
     padding: 12px 14px; cursor: pointer; list-style: none;
@@ -1992,7 +2034,7 @@ Tracked with Wirebot — your AI business operating partner`;
   .int-child-dot.active { background: #2ecc71; }
   .int-child-dot.error { background: #ff4444; }
   .int-child-info { flex: 1; min-width: 0; }
-  .int-child-name { font-size: 12px; font-weight: 500; color: #bbb; display: flex; align-items: center; gap: 6px; }
+  .int-child-name { font-size: 12px; font-weight: 500; color: var(--text-secondary); display: flex; align-items: center; gap: 6px; }
   .int-child-meta { font-size: 10px; color: var(--text-muted); margin-top: 1px; }
   .int-child-remove {
     background: none; border: none; color: var(--text-muted); font-size: 12px;
@@ -2020,7 +2062,7 @@ Tracked with Wirebot — your AI business operating partner`;
     border-radius: 10px; cursor: pointer; transition: border-color 0.2s;
     color: inherit;
   }
-  .int-rec-card:hover { border-color: #7c7cff40; }
+  .int-rec-card:hover { border-color: var(--accent-border); }
   .int-rec-icon { font-size: 20px; }
   .int-rec-name { font-size: 12px; font-weight: 600; color: var(--text-secondary); }
 
@@ -2093,7 +2135,7 @@ Tracked with Wirebot — your AI business operating partner`;
     color: var(--text-muted); font-size: 12px; cursor: pointer; margin-top: 10px;
     text-align: center; transition: border-color 0.2s;
   }
-  .int-browse-toggle:hover { border-color: #7c7cff40; color: var(--text-secondary); }
+  .int-browse-toggle:hover { border-color: var(--accent-border); color: var(--text-secondary); }
 
   /* Browse all list */
   .int-lane-group { display: flex; flex-direction: column; gap: 4px; margin-top: 8px; }
@@ -2102,9 +2144,9 @@ Tracked with Wirebot — your AI business operating partner`;
     font-size: 9px; font-weight: 700; padding: 2px 8px; border-radius: 3px;
     text-transform: uppercase; letter-spacing: 0.05em;
   }
-  .lane-revenue { background: #1a2a1a; color: #2ecc71; }
+  .lane-revenue { background: var(--lane-revenue-bg); color: var(--success); }
   .lane-distribution { background: var(--bg-elevated); color: var(--accent); }
-  .lane-shipping { background: #2e2a1a; color: #ffaa00; }
+  .lane-shipping { background: var(--lane-shipping-bg); color: var(--warning); }
   .lane-systems { background: var(--bg-elevated); color: var(--text-secondary); }
 
   .int-browse-item {
@@ -2113,8 +2155,8 @@ Tracked with Wirebot — your AI business operating partner`;
     border-radius: 8px; cursor: pointer; transition: border-color 0.15s;
     color: inherit; width: 100%;
   }
-  .int-browse-item:hover { border-color: #7c7cff30; }
-  .int-browse-item.int-connected { border-color: #1a3a1a; }
+  .int-browse-item:hover { border-color: var(--accent-border); }
+  .int-browse-item.int-connected { border-color: var(--success-border); }
   .int-browse-item.int-coming { opacity: 0.35; cursor: default; }
   .int-icon { font-size: 18px; flex-shrink: 0; width: 24px; text-align: center; }
   .int-browse-name { font-size: 12px; color: var(--text-secondary); flex: 1; }
@@ -2171,7 +2213,7 @@ Tracked with Wirebot — your AI business operating partner`;
   }
   .pairing-backdrop {
     position: absolute; inset: 0;
-    background: rgba(0,0,0,0.6); backdrop-filter: blur(4px);
+    background: var(--bg-overlay); backdrop-filter: blur(4px);
     animation: backdrop-fade 200ms ease-out;
   }
   @keyframes backdrop-fade {
@@ -2208,7 +2250,7 @@ Tracked with Wirebot — your AI business operating partner`;
     padding: 20px 20px 8px; flex-shrink: 0;
     position: sticky; top: 0; background: var(--bg); z-index: 2;
   }
-  .pi-title { font-size: 20px; font-weight: 700; color: #fff; }
+  .pi-title { font-size: 20px; font-weight: 700; color: var(--text-on-accent); }
   .pi-close {
     width: 36px; height: 36px; border-radius: 50%;
     background: rgba(255,50,50,0.08); border: 1px solid rgba(255,50,50,0.2);
@@ -2225,7 +2267,7 @@ Tracked with Wirebot — your AI business operating partner`;
   .pi-card {
     display: flex; align-items: center; gap: 12px;
     padding: 14px 16px; border-radius: 14px;
-    background: rgba(255,255,255,0.03);
+    background: var(--bg-hover);
     border: 1px solid rgba(255,255,255,0.08);
     cursor: pointer; text-align: left;
     transition: all 0.2s;
@@ -2238,7 +2280,7 @@ Tracked with Wirebot — your AI business operating partner`;
   }
   .pi-icon { font-size: 24px; flex-shrink: 0; }
   .pi-info { flex: 1; }
-  .pi-name { font-size: 15px; font-weight: 600; color: #fff; }
+  .pi-name { font-size: 15px; font-weight: 600; color: var(--text-on-accent); }
   .pi-sub { font-size: 11px; color: var(--text-secondary); margin-top: 2px; }
   .pi-go { font-size: 16px; color: var(--accent); opacity: 0.6; }
   .pi-footer {

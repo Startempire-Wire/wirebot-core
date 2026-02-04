@@ -58,13 +58,13 @@
     left: 50%;
     transform: translateX(-50%);
     width: max(200px, min(280px, 70vw));
-    background: #1a1a2e;
+    background: var(--bg-elevated);
     border: 1px solid #2a2a4a;
     border-radius: 8px;
     padding: 10px 12px;
     font-size: 12px;
     line-height: 1.5;
-    color: #bbb;
+    color: var(--text);
     z-index: 100;
     box-shadow: 0 4px 20px rgba(0,0,0,0.5);
     display: flex;
