@@ -857,9 +857,8 @@ Tracked with Wirebot — your AI business operating partner`;
       loadIntegrations();
     }
     const interval = setInterval(() => { if (loggedInUser) fetchAll(); }, 30000);
-    if ('serviceWorker' in navigator) {
-      navigator.serviceWorker.register('/sw.js').catch(() => {});
-    }
+    // SW disabled — network-first app, no offline needed
+    // Old SWs purged by inline script in index.html
     if (!localStorage.getItem('wb_visited')) {
       showFirstVisit = true;
     }
