@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -147,7 +148,7 @@ people referenced, locations mentioned, and business concepts explored.`
 	}
 
 	return fmt.Sprintf(`You are extracting PERSONAL FACTS about the document author from their writing.
-%s
+
 DOCUMENT TYPE: %s
 FILE: %s
 %s---
@@ -192,7 +193,7 @@ REASONING: One sentence explaining why you assigned that confidence level.
 
 Extract as many facts as the evidence supports — do not artificially limit to 3-5. Rich documents may yield 10+ facts.
 If no personal facts can be extracted with real quotes, return: []`,
-		metaContext, docType, docPath,
+		docType, docPath,
 		func() string {
 			if metaContext != "" {
 				return "METADATA:\n" + metaContext
@@ -514,10 +515,10 @@ func (s *Server) QueueMemoryForApproval(m MemoryExtraction) error {
 	}
 	if len(newTokens) >= 3 {
 		// Check against items from same source file (most likely duplicates)
+		isDupe := false
 		rows, err := s.db.Query(`SELECT memory_text FROM memory_queue WHERE source_file LIKE ? LIMIT 100`,
 			strings.Split(m.SourceFile, " [")[0]+"%")
 		if err == nil {
-			defer rows.Close()
 			for rows.Next() {
 				var existingText string
 				rows.Scan(&existingText)
@@ -528,22 +529,25 @@ func (s *Server) QueueMemoryForApproval(m MemoryExtraction) error {
 						existingTokens[t] = true
 					}
 				}
-				// Count overlap
 				overlap := 0
 				for t := range newTokens {
 					if existingTokens[t] {
 						overlap++
 					}
 				}
-				// If 80%+ token overlap in both directions, it's a near-duplicate
-				if len(newTokens) > 0 && len(existingTokens) > 0 {
+				if len(existingTokens) > 0 {
 					fwd := float64(overlap) / float64(len(newTokens))
 					rev := float64(overlap) / float64(len(existingTokens))
 					if fwd >= 0.8 && rev >= 0.8 {
-						return nil // near-duplicate, skip
+						isDupe = true
+						break
 					}
 				}
 			}
+			rows.Close()
+		}
+		if isDupe {
+			return nil // near-duplicate, skip
 		}
 	}
 
@@ -775,9 +779,14 @@ func (s *Server) handleMemoryExtractVault(w http.ResponseWriter, r *http.Request
 	}()
 }
 
+// convoExtractMu guards lastConvoExtractTime for the API endpoint rate limiter.
+var convoExtractMu sync.Mutex
+var lastConvoExtractTime time.Time
+
 // POST /v1/memory/extract-conversation — Extract memories from a conversation exchange.
 // Called by the wirebot-memory-bridge plugin's agent_end hook to route Discord/gateway
 // conversations through the same approval pipeline as wins portal chat.
+// Rate-limited to once per 2 minutes (same as extractConversationToQueue).
 func (s *Server) handleMemoryExtractConversation(w http.ResponseWriter, r *http.Request) {
 	cors(w)
 	if r.Method != "POST" {
@@ -794,11 +803,22 @@ func (s *Server) handleMemoryExtractConversation(w http.ResponseWriter, r *http.
 		return
 	}
 
-	// Fire extraction in background (same as extractConversationToQueue but bypasses rate limiter)
+	if len(body.UserMessage) < 20 {
+		writeJSON(w, map[string]interface{}{"ok": true, "message": "Skipped (too short)"})
+		return
+	}
+
+	// Rate limit: at most once per 2 minutes (shares window with extractConversationToQueue)
+	convoExtractMu.Lock()
+	if time.Since(lastConvoExtractTime) < 2*time.Minute {
+		convoExtractMu.Unlock()
+		writeJSON(w, map[string]interface{}{"ok": true, "message": "Skipped (rate limited)"})
+		return
+	}
+	lastConvoExtractTime = time.Now()
+	convoExtractMu.Unlock()
+
 	go func() {
-		if len(body.UserMessage) < 20 {
-			return
-		}
 		messages := []map[string]string{
 			{"role": "user", "content": body.UserMessage},
 			{"role": "assistant", "content": body.AssistantMessage},

@@ -6999,13 +6999,21 @@ func (s *Server) handleMemoryQueueAction(w http.ResponseWriter, r *http.Request)
 	switch action {
 	case "approve":
 		finalText := item.MemoryText
-		// Store to Mem0 + MEMORY.md + Letta (if business-relevant)
+		_, err := s.db.Exec(`UPDATE memory_queue SET status='approved', reviewed_at=CURRENT_TIMESTAMP WHERE id=?`, id)
+		if err != nil {
+			http.Error(w, `{"error":"db update failed"}`, 500)
+			return
+		}
+		// Only writeback after confirmed DB update
 		go s.writebackApprovedMemory(finalText)
-		s.db.Exec(`UPDATE memory_queue SET status='approved', reviewed_at=CURRENT_TIMESTAMP WHERE id=?`, id)
 		json.NewEncoder(w).Encode(map[string]interface{}{"ok": true, "action": "approved", "memory": finalText})
 
 	case "reject":
-		s.db.Exec(`UPDATE memory_queue SET status='rejected', reviewed_at=CURRENT_TIMESTAMP WHERE id=?`, id)
+		_, err := s.db.Exec(`UPDATE memory_queue SET status='rejected', reviewed_at=CURRENT_TIMESTAMP WHERE id=?`, id)
+		if err != nil {
+			http.Error(w, `{"error":"db update failed"}`, 500)
+			return
+		}
 		json.NewEncoder(w).Encode(map[string]interface{}{"ok": true, "action": "rejected"})
 
 	case "correct":
@@ -7016,10 +7024,14 @@ func (s *Server) handleMemoryQueueAction(w http.ResponseWriter, r *http.Request)
 			http.Error(w, `{"error":"correction required"}`, 400)
 			return
 		}
-		// Store corrected version to all memory layers
-		go s.writebackApprovedMemory(body.Correction)
-		s.db.Exec(`UPDATE memory_queue SET status='corrected', correction=?, reviewed_at=CURRENT_TIMESTAMP WHERE id=?`,
+		_, err := s.db.Exec(`UPDATE memory_queue SET status='corrected', correction=?, reviewed_at=CURRENT_TIMESTAMP WHERE id=?`,
 			body.Correction, id)
+		if err != nil {
+			http.Error(w, `{"error":"db update failed"}`, 500)
+			return
+		}
+		// Only writeback after confirmed DB update
+		go s.writebackApprovedMemory(body.Correction)
 		json.NewEncoder(w).Encode(map[string]interface{}{"ok": true, "action": "corrected", "memory": body.Correction})
 
 	default:

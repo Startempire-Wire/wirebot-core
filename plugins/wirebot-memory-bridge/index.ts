@@ -10,11 +10,15 @@
  *   Writes go to the appropriate system based on data type.
  *   Reads cascade: memory-core → Mem0 → Letta blocks.
  *
- * Provides 3 tools + 1 lifecycle hook:
+ * Provides 6 tools + 2 lifecycle hooks:
  *   - wirebot_recall: cascading search across all layers
  *   - wirebot_remember: store durable fact in Mem0
  *   - wirebot_business_state: read/update Letta memory blocks
- *   - agent_end hook: async fact extraction to Mem0
+ *   - wirebot_memory_queue: review/approve/reject pending memories
+ *   - wirebot_checklist: multi-business checklist engine
+ *   - wirebot_score: scoreboard query & event submission
+ *   - agent_start hook: write SCOREBOARD_STATE.md to workspace
+ *   - agent_end hook: fact extraction to Mem0 + scoreboard queue + Letta
  */
 
 import { Type } from "@sinclair/typebox";
@@ -100,27 +104,6 @@ async function mem0Store(
     return { ok: resp.ok };
   } catch {
     return { ok: false };
-  }
-}
-
-async function mem0List(
-  baseUrl: string,
-  namespace: string,
-): Promise<Array<{ memory: string; id: string }>> {
-  try {
-    const resp = await fetch(`${baseUrl}/v1/list`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ namespace }),
-      signal: AbortSignal.timeout(5000),
-    });
-    if (!resp.ok) return [];
-    const data = (await resp.json()) as {
-      results?: Array<{ memory: string; id: string }>;
-    };
-    return data.results ?? [];
-  } catch {
-    return [];
   }
 }
 
@@ -1147,7 +1130,7 @@ const wirebotMemoryBridge = {
           // For "intent" action
           intent_text: Type.Optional(Type.String({ description: "Today's intent statement" })),
         }),
-        async execute(toolCallId: string, params: Record<string, unknown>) {
+        async execute(_toolCallId, params) {
           const p = params as {
             action: string;
             event_type?: string;
@@ -1423,14 +1406,16 @@ const wirebotMemoryBridge = {
             );
           }
 
+          // Compute last user/assistant once for Flows 1b and 2
+          const lastUser = conversation.filter((m) => m.role === "user").pop();
+          const lastAssistant = conversation.filter((m) => m.role === "assistant").pop();
+
           // ── Flow 1b: Also route through scoreboard's extraction queue ──
           // This feeds the approval pipeline → MEMORY.md (the vector-indexed store).
           // Without this, Mem0 gets facts but MEMORY.md doesn't, causing divergence.
           // Uses POST /v1/memory/extract-conversation endpoint on the scoreboard.
-          try {
-            const lastUser = conversation.filter((m) => m.role === "user").pop();
-            const lastAssistant = conversation.filter((m) => m.role === "assistant").pop();
-            if (lastUser && lastAssistant && lastUser.content.length >= 20) {
+          if (lastUser && lastAssistant && lastUser.content.length >= 20) {
+            try {
               const extractResp = await fetch(`${scoreboardUrl}/v1/memory/extract-conversation`, {
                 method: "POST",
                 headers: {
@@ -1446,9 +1431,9 @@ const wirebotMemoryBridge = {
               if (extractResp.ok) {
                 api.logger.info("wirebot-memory-bridge: routed conversation to scoreboard extraction queue");
               }
+            } catch {
+              // Scoreboard routing is best-effort
             }
-          } catch {
-            // Scoreboard routing is best-effort
           }
 
           // ── Flow 2: Route business-relevant context to Letta agent ──
@@ -1456,10 +1441,6 @@ const wirebotMemoryBridge = {
           // We detect if the conversation contains business-relevant info and
           // send it as a message to the Letta agent for intelligent processing.
           try {
-            const lastUser = conversation.filter((m) => m.role === "user").pop();
-            const lastAssistant = conversation
-              .filter((m) => m.role === "assistant")
-              .pop();
             if (lastUser && lastAssistant) {
               const combined = (
                 lastUser.content +
