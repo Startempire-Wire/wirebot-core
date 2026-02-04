@@ -1,24 +1,32 @@
 /**
  * Wirebot Memory Bridge
  *
- * OpenClaw extension that coordinates three memory systems:
- *   - memory-core (embedded): workspace file recall (instant)
- *   - Mem0 (:8200): LLM-extracted conversation facts (~200ms)
+ * OpenClaw plugin that coordinates Wirebot's memory + state systems.
+ *
+ * Architecture:
+ *   - memory-core (OpenClaw built-in): workspace file recall (instant)
+ *   - Mem0 (:8200): conversation fact storage + semantic search (~200ms)
  *   - Letta (:8283): structured self-editing business state (~100ms reads)
+ *   - Scoreboard (:8100): execution scoring, events, memory queue, alerts
+ *   - State Feeder (scoreboard goroutine): approved memories + events → Letta
  *
- * Pattern: Write-Through, Read-Cascade
- *   Writes go to the appropriate system based on data type.
- *   Reads cascade: memory-core → Mem0 → Letta blocks.
+ * Data flow:
+ *   Conversation → Bridge agent_end → Mem0 (facts) + Scoreboard queue
+ *   Scoreboard queue → Human review → Approved → State Feeder → Letta
+ *   (Single controlled path to Letta, rate-limited, watermarked)
  *
- * Provides 6 tools + 2 lifecycle hooks:
- *   - wirebot_recall: cascading search across all layers
+ * Tools (6):
+ *   - wirebot_recall: cascading search (Mem0 + Letta blocks + archival)
  *   - wirebot_remember: store durable fact in Mem0
- *   - wirebot_business_state: read/update Letta memory blocks
+ *   - wirebot_business_state: read/update/message Letta memory blocks
  *   - wirebot_memory_queue: review/approve/reject pending memories
- *   - wirebot_checklist: multi-business checklist engine
+ *   - wirebot_checklist: multi-business setup checklist engine
  *   - wirebot_score: scoreboard query & event submission
- *   - agent_start hook: write SCOREBOARD_STATE.md to workspace
- *   - agent_end hook: fact extraction to Mem0 + scoreboard queue + Letta
+ *
+ * Hooks (2):
+ *   - agent_start: parallel fetch (scoreboard + Letta blocks + alerts)
+ *     → writes SCOREBOARD_STATE.md for workspace context injection
+ *   - agent_end: extract facts → Mem0 + scoreboard queue (NOT direct to Letta)
  */
 
 import { Type } from "@sinclair/typebox";
@@ -1256,49 +1264,80 @@ const wirebotMemoryBridge = {
 
     api.on("agent_start", async () => {
       try {
-        const resp = await fetch(`${scoreboardUrl}/v1/scoreboard?mode=dashboard`, {
-          headers: {
-            "Authorization": `Bearer ${scoreboardToken}`,
-            "Content-Type": "application/json",
-          },
-        });
-        if (!resp.ok) return;
-        const data = await resp.json() as Record<string, unknown>;
+        const headers = {
+          "Authorization": `Bearer ${scoreboardToken}`,
+          "Content-Type": "application/json",
+        };
+
+        // Parallel fetch: scoreboard + financial + integrations + Letta blocks + alerts
+        // (was sequential — saved ~400ms by parallelizing)
+        const [sbResp, fResp, iResp, lettaBlocks, alertsResp] = await Promise.all([
+          fetch(`${scoreboardUrl}/v1/scoreboard?mode=dashboard`, { headers }).catch(() => null),
+          fetch(`${scoreboardUrl}/v1/financial/snapshot`, { headers }).catch(() => null),
+          fetch(`${scoreboardUrl}/v1/integrations`, { headers }).catch(() => null),
+          lettaGetBlocks(cfg.lettaUrl, cfg.lettaAgentId),
+          fetch(`${scoreboardUrl}/v1/alerts`, { headers }).catch(() => null),
+        ]);
+
+        if (!sbResp || !sbResp.ok) return;
+        const data = await sbResp.json() as Record<string, unknown>;
 
         const sb = (data.scoreboard || data) as Record<string, unknown>;
         const lanes = (sb.lanes || {}) as Record<string, number>;
         const streak = (sb.streak || {}) as Record<string, number>;
         const feed = ((data.feed || []) as Array<{ artifact_title: string; timestamp: string }>);
 
-        // Financial snapshot (separate call)
         let financial = "";
-        try {
-          const fResp = await fetch(`${scoreboardUrl}/v1/financial/snapshot`, {
-            headers: { "Authorization": `Bearer ${scoreboardToken}` },
-          });
-          if (fResp.ok) {
-            const fData = await fResp.json() as Record<string, unknown>;
-            const rev30 = fData.revenue_30d || 0;
-            const mrr = fData.mrr_estimate || 0;
-            financial = `Revenue 30d: $${rev30} | MRR est: $${mrr}`;
-          }
-        } catch { /* non-critical */ }
+        if (fResp?.ok) {
+          const fData = await fResp.json() as Record<string, unknown>;
+          financial = `Revenue 30d: $${fData.revenue_30d || 0} | MRR est: $${fData.mrr_estimate || 0}`;
+        }
 
-        // Integration status
         let integrations = "";
-        try {
-          const iResp = await fetch(`${scoreboardUrl}/v1/integrations`, {
-            headers: { "Authorization": `Bearer ${scoreboardToken}` },
-          });
-          if (iResp.ok) {
-            const iData = await iResp.json() as { integrations?: Array<{ provider: string; display_name: string; status: string }> };
-            const active = (iData.integrations || []).filter(i => i.status === "active");
+        if (iResp?.ok) {
+          const iData = await iResp.json() as { integrations?: Array<{ provider: string; display_name: string; status: string }> };
+          const active = (iData.integrations || []).filter(i => i.status === "active");
+          if (active.length > 0) {
             integrations = `Connected: ${active.map(i => i.display_name).join(", ")} (${active.length} total)`;
           }
-        } catch { /* non-critical */ }
+        }
+
+        // Letta blocks → structured business context
+        let lettaSection = "";
+        if (lettaBlocks.length > 0) {
+          const blockLines: string[] = [];
+          for (const b of lettaBlocks) {
+            if (b.label === "goals" && b.value) {
+              // Extract just active goals (first 10 lines)
+              const lines = b.value.split("\n").filter((l: string) => l.trim()).slice(0, 10);
+              blockLines.push(`### Goals\n${lines.join("\n")}`);
+            } else if (b.label === "kpis" && b.value) {
+              blockLines.push(`### KPIs\n${b.value}`);
+            } else if (b.label === "business_stage" && b.value) {
+              // First 3 lines of business stage (score + level + profile summary)
+              const lines = b.value.split("\n").filter((l: string) => l.trim()).slice(0, 3);
+              blockLines.push(`### Business Stage\n${lines.join("\n")}`);
+            }
+          }
+          if (blockLines.length > 0) {
+            lettaSection = blockLines.join("\n\n");
+          }
+        }
+
+        // Active alerts
+        let alertsSection = "";
+        if (alertsResp?.ok) {
+          const alerts = await alertsResp.json() as Array<{ title: string; detail: string; severity: string }>;
+          if (alerts.length > 0) {
+            alertsSection = alerts.map(a => {
+              const icon = a.severity === "critical" ? "🔴" : a.severity === "warning" ? "🟡" : "ℹ️";
+              return `${icon} **${a.title}** — ${a.detail}`;
+            }).join("\n");
+          }
+        }
 
         const briefing = [
-          `# Scoreboard State (live)`,
+          `# Wirebot Context (live)`,
           ``,
           `Updated: ${new Date().toISOString()}`,
           ``,
@@ -1317,25 +1356,26 @@ const wirebotMemoryBridge = {
           ``,
           financial ? `## Financial\n${financial}\n` : "",
           integrations ? `## Integrations\n${integrations}\n` : "",
+          alertsSection ? `## ⚠️ Active Alerts\n${alertsSection}\n` : "",
+          lettaSection ? `## Business State (Letta)\n${lettaSection}\n` : "",
           feed.length > 0 ? `## Recent Activity\n${feed.slice(0, 5).map(e => `- ${e.artifact_title}`).join("\n")}` : "",
           ``,
-          `## What You Should Do With This Data`,
+          `## Behavioral Rules`,
           `- If score < 30 and signal is RED: focus on shipping (highest-weight lane)`,
           `- If stall > 8h: proactively ask what's blocking, suggest smallest shippable unit`,
           `- If intent not set: remind operator to set daily intent`,
           `- If streak > 7: celebrate consistency, protect the streak`,
           `- If revenue lane is 0: check if Stripe/Plaid/WooCommerce events are flowing`,
-          `- Reference specific lane scores and recent events in your responses`,
+          `- Reference specific lane scores, alerts, and KPIs in your responses`,
           `- When operator asks "how am I doing?" → read this data, don't guess`,
         ].filter(Boolean).join("\n");
 
-        // Write to workspace file — workspace bootstrap auto-includes this
         const fs = await import("fs");
         const path = "/home/wirebot/clawd/SCOREBOARD_STATE.md";
         fs.writeFileSync(path, briefing, "utf-8");
-        api.logger.info(`Scoreboard state written to workspace (score=${sb.score}, streak=${streak.current})`);
+        api.logger.info(`Wirebot context written (score=${sb.score}, streak=${streak.current}, blocks=${lettaBlocks.length}, alerts=${alertsSection ? "yes" : "none"})`);
       } catch (err) {
-        api.logger.warn(`Scoreboard state write failed: ${String(err)}`);
+        api.logger.warn(`Wirebot context write failed: ${String(err)}`);
       }
     });
 
@@ -1461,85 +1501,17 @@ const wirebotMemoryBridge = {
             }
           }
 
-          // ── Flow 2: Route business-relevant context to Letta agent ──
-          // Letta's agent self-edits its blocks (human, goals, kpis, business_stage)
-          // We detect if the conversation contains business-relevant info and
-          // send it as a message to the Letta agent for intelligent processing.
-          try {
-            if (lastUser && lastAssistant) {
-              const combined = (
-                lastUser.content +
-                " " +
-                lastAssistant.content
-              ).toLowerCase();
-
-              // Detect business-relevant topics
-              const businessKeywords = [
-                "revenue",
-                "goal",
-                "kpi",
-                "stage",
-                "milestone",
-                "shipped",
-                "launched",
-                "customer",
-                "beta tester",
-                "pricing",
-                "debt",
-                "break even",
-                "profit",
-                "business",
-                "startup",
-              ];
-              // Detect pairing-relevant topics
-              const pairingKeywords = [
-                "my name is",
-                "call me",
-                "timezone",
-                "i started",
-                "my business",
-                "i'm working on",
-                "i run",
-                "money",
-                "income",
-                "debt",
-                "accountability",
-                "mentor",
-                "prefer",
-                "success looks like",
-              ];
-
-              const isBusinessRelevant = businessKeywords.some((kw) =>
-                combined.includes(kw),
-              );
-              const isPairingRelevant = pairingKeywords.some((kw) =>
-                combined.includes(kw),
-              );
-
-              if (isBusinessRelevant || isPairingRelevant) {
-                // Truncate to avoid blowing Letta's context window with large messages
-                const userSnippet = lastUser.content.length > 2000 ? lastUser.content.slice(0, 2000) + "..." : lastUser.content;
-                const assistantSnippet = lastAssistant.content.length > 2000 ? lastAssistant.content.slice(0, 2000) + "..." : lastAssistant.content;
-                const context = isPairingRelevant
-                  ? `Pairing update from operator conversation:\nUser: ${userSnippet}\nAssistant: ${assistantSnippet}\n\nUpdate your human, goals, or business_stage blocks with any new information.`
-                  : `Business context from operator conversation:\nUser: ${userSnippet}\nAssistant: ${assistantSnippet}\n\nUpdate kpis, goals, or business_stage blocks if relevant.`;
-
-                lettaSendMessage(
-                  cfg.lettaUrl,
-                  cfg.lettaAgentId,
-                  context,
-                ).then((res) => {
-                  if (res.ok) {
-                    api.logger.info(
-                      `wirebot-memory-bridge: sent ${isPairingRelevant ? "pairing" : "business"} context to Letta agent`,
-                    );
-                  }
-                });
-              }
-            }
-          } catch {
-            // Letta routing is best-effort, don't fail the hook
-          }
+          // ── Flow 2: Letta updates handled by the State Feeder ──
+          // Previously this hook sent business-relevant conversations directly
+          // to Letta. That created a second uncontrolled path to Letta alongside
+          // the feeder, with no rate limiting or watermarks.
+          //
+          // Now: conversations go to the scoreboard extraction queue (Flow 1b above).
+          // The operator reviews and approves. The state feeder picks up approved
+          // memories and delivers them to Letta — single path, rate-limited,
+          // watermarked, no loops.
+          //
+          // See: cmd/scoreboard/letta_feeder.go
         } catch (err) {
           api.logger.warn(
             `wirebot-memory-bridge: agent_end hook error: ${String(err)}`,
