@@ -58,7 +58,7 @@ func classifyDocument(docPath, content string) (docType string, meta map[string]
 		docType = "client_note"
 	case strings.Contains(lower, "ai chats") || strings.Contains(lower, "chatgpt") || strings.Contains(lower, "grok"):
 		docType = "ai_chat"
-	case strings.Contains(lower, "book") || strings.Contains(lower, "books"):
+	case strings.Contains(lower, "/book") || strings.HasPrefix(lower, "book"):
 		docType = "book"
 	case strings.Contains(lower, "freewriting"):
 		docType = "freewriting"
