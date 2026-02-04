@@ -457,6 +457,7 @@ func main() {
 	mux.HandleFunc("/v1/memory/conflicts", s.auth(s.handleMemoryConflicts))
 	mux.HandleFunc("/v1/memory/extract-vault", s.auth(s.handleMemoryExtractVault))
 	mux.HandleFunc("/v1/memory/extract-conversation", s.auth(s.handleMemoryExtractConversation))
+	mux.HandleFunc("/v1/system/health", s.auth(s.handleSystemHealth))
 
 	// Wirebot chat proxy — full conversations with memory retention
 	mux.HandleFunc("/v1/chat", s.auth(s.handleChat))
@@ -1096,6 +1097,90 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	s.db.QueryRow("SELECT COUNT(*) FROM events").Scan(&eventCount)
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"status": "ok", "events": eventCount, "season": s.season.Name,
+	})
+}
+
+// ─── GET /v1/system/health — quick visual status of all services ────────────
+
+func (s *Server) handleSystemHealth(w http.ResponseWriter, r *http.Request) {
+	cors(w)
+	if r.Method == "OPTIONS" {
+		return
+	}
+
+	type svcStatus struct {
+		Name    string `json:"name"`
+		Status  string `json:"status"` // "up", "down", "degraded"
+		Latency int    `json:"latency_ms"`
+		Detail  string `json:"detail,omitempty"`
+	}
+
+	check := func(name, url string) svcStatus {
+		start := time.Now()
+		client := &http.Client{Timeout: 3 * time.Second}
+		resp, err := client.Get(url)
+		latency := int(time.Since(start).Milliseconds())
+		if err != nil {
+			return svcStatus{Name: name, Status: "down", Latency: latency, Detail: "unreachable"}
+		}
+		defer resp.Body.Close()
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		if resp.StatusCode >= 200 && resp.StatusCode < 400 {
+			// Try to extract detail from JSON
+			var d map[string]interface{}
+			detail := ""
+			if json.Unmarshal(body, &d) == nil {
+				if mem, ok := d["memories"]; ok {
+					detail = fmt.Sprintf("memories: %v", mem)
+				}
+				if st, ok := d["status"]; ok {
+					detail = fmt.Sprintf("%v", st)
+				}
+			}
+			return svcStatus{Name: name, Status: "up", Latency: latency, Detail: detail}
+		}
+		return svcStatus{Name: name, Status: "degraded", Latency: latency, Detail: fmt.Sprintf("HTTP %d", resp.StatusCode)}
+	}
+
+	services := []svcStatus{
+		{Name: "scoreboard", Status: "up", Latency: 0, Detail: "this service"},
+		check("gateway", "http://127.0.0.1:18789/__openclaw__/"),
+		check("mem0", "http://127.0.0.1:8200/health"),
+		check("letta", "http://127.0.0.1:8283/v1/health"),
+		check("memory-sync", "http://127.0.0.1:8201/health"),
+	}
+
+	// Memory queue counts
+	var pending, approved int
+	s.db.QueryRow("SELECT COUNT(*) FROM memory_queue WHERE status='pending'").Scan(&pending)
+	s.db.QueryRow("SELECT COUNT(*) FROM memory_queue WHERE status='approved'").Scan(&approved)
+
+	// Disk quota (read from /proc if available, otherwise skip)
+	diskPct := 0
+	if out, err := exec.Command("sh", "-c", `quota -u wirebot 2>/dev/null | awk '/\/dev\//{getline; printf "%.0f", $1/$2*100}'`).Output(); err == nil {
+		fmt.Sscanf(string(out), "%d", &diskPct)
+	}
+
+	allUp := true
+	for _, svc := range services {
+		if svc.Status != "up" {
+			allUp = false
+			break
+		}
+	}
+
+	overall := "healthy"
+	if !allUp {
+		overall = "degraded"
+	}
+
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"overall":          overall,
+		"services":         services,
+		"memory_pending":   pending,
+		"memory_approved":  approved,
+		"disk_percent":     diskPct,
+		"checked_at":       time.Now().Format(time.RFC3339),
 	})
 }
 
