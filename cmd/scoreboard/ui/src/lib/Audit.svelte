@@ -160,6 +160,13 @@
   function hasFeedback(interaction, type) {
     return (interaction.feedback || []).some(f => f.feedback_type === type);
   }
+  
+  // Teleport element to document.body so it escapes .content's transform stacking context.
+  // Without this, position:fixed modals are trapped inside the scrollable .content div.
+  function portal(node) {
+    document.body.appendChild(node);
+    return { destroy() { node.remove(); } };
+  }
 </script>
 
 <div class="audit-container">
@@ -295,11 +302,11 @@
 </div>
 
 {#if toast}
-  <div class="toast">{toast}</div>
+  <div class="toast" use:portal>{toast}</div>
 {/if}
 
 {#if feedbackModal}
-  <div class="modal-overlay" onclick={() => feedbackModal = null}>
+  <div class="modal-overlay" use:portal onclick={() => feedbackModal = null}>
     <div class="modal" onclick={(e) => e.stopPropagation()}>
       <h3>
         {feedbackType === 'good' ? '👍 What was good?' : 
