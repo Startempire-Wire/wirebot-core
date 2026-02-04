@@ -2225,19 +2225,21 @@ func (pe *PairingEngine) summarizeEvidence(sig Signal, ev *EvidenceEntry) string
 // ─── Effective Profile (for chat context injection) ──────────────────────────
 
 type EffectiveProfile struct {
-	ActionStyle    map[string]float64  `json:"action_style"`
-	DISC           map[string]float64  `json:"disc"`
-	Energy         map[string]float64  `json:"energy"`
-	Risk           map[string]float64  `json:"risk"`
-	Cognitive      map[string]float64  `json:"cognitive"`
-	Business       map[string]float64  `json:"business"`
-	Temporal       map[string]float64  `json:"temporal"`
-	Complement     ComplementVector    `json:"complement"`
-	Calibration    CalibrationParams   `json:"calibration"`
-	ActiveContexts []string            `json:"active_contexts"`
-	PairingScore   float64             `json:"pairing_score"`
-	Level          string              `json:"level"`
-	Accuracy       float64             `json:"accuracy"`
+	ActionStyle     map[string]float64  `json:"action_style"`
+	DISC            map[string]float64  `json:"disc"`
+	Energy          map[string]float64  `json:"energy"`
+	Risk            map[string]float64  `json:"risk"`
+	Cognitive       map[string]float64  `json:"cognitive"`
+	Business        map[string]float64  `json:"business"`
+	Temporal        map[string]float64  `json:"temporal"`
+	Complement      ComplementVector    `json:"complement"`
+	Calibration     CalibrationParams   `json:"calibration"`
+	ActiveContexts  []string            `json:"active_contexts"`
+	PairingScore    float64             `json:"pairing_score"`
+	Level           string              `json:"level"`
+	Accuracy        float64             `json:"accuracy"`
+	SelfReportCount int                 `json:"self_report_count"`
+	CompletedInstruments []string       `json:"completed_instruments"`
 }
 
 func (pe *PairingEngine) GetEffectiveProfile() EffectiveProfile {
@@ -2245,19 +2247,38 @@ func (pe *PairingEngine) GetEffectiveProfile() EffectiveProfile {
 	defer pe.mu.RUnlock()
 
 	p := pe.profile
+	// Count self-report answers and track which instruments are completed
+	instrumentQuestions := map[string]int{}
+	for _, a := range p.Answers {
+		instrumentQuestions[a.InstrumentID]++
+	}
+	// Instrument completion thresholds (min questions to count as done)
+	instrumentMin := map[string]int{
+		"ASI-12": 12, "CSI-8": 8, "ETM-6": 1, "RDS-6": 6,
+		"COG-8": 8, "BIZ-6": 6, "TIME-6": 6,
+	}
+	var completedInstruments []string
+	for inst, count := range instrumentQuestions {
+		if min, ok := instrumentMin[inst]; ok && count >= min {
+			completedInstruments = append(completedInstruments, inst)
+		}
+	}
+
 	eff := EffectiveProfile{
-		ActionStyle:  extractEffective(p.ActionStyle),
-		DISC:         extractEffective(p.CommunicationDNA),
-		Energy:       extractEffective(p.EnergyTopology),
-		Risk:         extractEffective(p.RiskDisposition),
-		Cognitive:    extractEffective(p.CognitiveStyle),
-		Business:     extractEffective(p.BusinessReality),
-		Temporal:     extractEffective(p.TemporalPatterns),
-		Complement:   p.Complement,
-		Calibration:  p.Calibration,
-		PairingScore: p.PairingScore.Composite,
-		Level:        p.PairingScore.Level,
-		Accuracy:     pe.computeAccuracy(),
+		ActionStyle:          extractEffective(p.ActionStyle),
+		DISC:                 extractEffective(p.CommunicationDNA),
+		Energy:               extractEffective(p.EnergyTopology),
+		Risk:                 extractEffective(p.RiskDisposition),
+		Cognitive:            extractEffective(p.CognitiveStyle),
+		Business:             extractEffective(p.BusinessReality),
+		Temporal:             extractEffective(p.TemporalPatterns),
+		Complement:           p.Complement,
+		Calibration:          p.Calibration,
+		PairingScore:         p.PairingScore.Composite,
+		Level:                p.PairingScore.Level,
+		Accuracy:             pe.computeAccuracy(),
+		SelfReportCount:      len(p.Answers),
+		CompletedInstruments: completedInstruments,
 	}
 
 	for wType, cw := range p.ContextWindows {

@@ -34,6 +34,7 @@
   let eqLevel = $state('');
   let eqAcc = $state(0);
   let selfReportCount = $state(0);
+  let completedInstruments = $state([]);
   let showFirstVisit = $state(false);
 
   // ── Theme ──
@@ -765,6 +766,7 @@ Tracked with Wirebot — your AI business operating partner`;
       eqLevel = eff.level || '';
       eqAcc = Math.round((eff.accuracy || 0) * 100);
       selfReportCount = eff.self_report_count || 0;
+      completedInstruments = eff.completed_instruments || [];
 
       // Build equalizer bars from all dimensions
       const colors = {
@@ -1399,62 +1401,24 @@ Tracked with Wirebot — your AI business operating partner`;
             </div>
             <div class="pi-desc">Each assessment helps Wirebot understand how you operate. Pick any to start.</div>
             <div class="pi-cards">
-              <button class="pi-card" onclick={() => pairingInstrument = 'ASI-12'}>
-                <span class="pi-icon">⚡</span>
-                <div class="pi-info">
-                  <div class="pi-name">Action Style</div>
-                  <div class="pi-sub">12 forced-choice pairs · 2 min</div>
-                </div>
-                <span class="pi-go">→</span>
-              </button>
-              <button class="pi-card" onclick={() => pairingInstrument = 'CSI-8'}>
-                <span class="pi-icon">💬</span>
-                <div class="pi-info">
-                  <div class="pi-name">Communication Style</div>
-                  <div class="pi-sub">8 scenario picks · 2 min</div>
-                </div>
-                <span class="pi-go">→</span>
-              </button>
-              <button class="pi-card" onclick={() => pairingInstrument = 'ETM-6'}>
-                <span class="pi-icon">🔋</span>
-                <div class="pi-info">
-                  <div class="pi-name">Energy Topology</div>
-                  <div class="pi-sub">Drag to sort · 1 min</div>
-                </div>
-                <span class="pi-go">→</span>
-              </button>
-              <button class="pi-card" onclick={() => pairingInstrument = 'RDS-6'}>
-                <span class="pi-icon">🎲</span>
-                <div class="pi-info">
-                  <div class="pi-name">Risk Disposition</div>
-                  <div class="pi-sub">6 sliders · 1 min</div>
-                </div>
-                <span class="pi-go">→</span>
-              </button>
-              <button class="pi-card" onclick={() => pairingInstrument = 'COG-8'}>
-                <span class="pi-icon">🧠</span>
-                <div class="pi-info">
-                  <div class="pi-name">Cognitive Style</div>
-                  <div class="pi-sub">8 scenario picks · 2 min</div>
-                </div>
-                <span class="pi-go">→</span>
-              </button>
-              <button class="pi-card" onclick={() => pairingInstrument = 'BIZ-6'}>
-                <span class="pi-icon">🏢</span>
-                <div class="pi-info">
-                  <div class="pi-name">Business Reality</div>
-                  <div class="pi-sub">6 context questions · 1 min</div>
-                </div>
-                <span class="pi-go">→</span>
-              </button>
-              <button class="pi-card" onclick={() => pairingInstrument = 'TIME-6'}>
-                <span class="pi-icon">⏰</span>
-                <div class="pi-info">
-                  <div class="pi-name">Temporal Patterns</div>
-                  <div class="pi-sub">6 schedule/rhythm questions · 1 min</div>
-                </div>
-                <span class="pi-go">→</span>
-              </button>
+              {#each [
+                { id: 'ASI-12', icon: '⚡', name: 'Action Style', sub: '12 forced-choice pairs · 2 min' },
+                { id: 'CSI-8', icon: '💬', name: 'Communication Style', sub: '8 scenario picks · 2 min' },
+                { id: 'ETM-6', icon: '🔋', name: 'Energy Topology', sub: 'Drag to sort · 1 min' },
+                { id: 'RDS-6', icon: '🎲', name: 'Risk Disposition', sub: '6 sliders · 1 min' },
+                { id: 'COG-8', icon: '🧠', name: 'Cognitive Style', sub: '8 scenario picks · 2 min' },
+                { id: 'BIZ-6', icon: '🏢', name: 'Business Reality', sub: '6 context questions · 1 min' },
+                { id: 'TIME-6', icon: '⏰', name: 'Temporal Patterns', sub: '6 schedule/rhythm questions · 1 min' },
+              ] as inst}
+                <button class="pi-card" class:pi-done={completedInstruments.includes(inst.id)} onclick={() => pairingInstrument = inst.id}>
+                  <span class="pi-icon">{inst.icon}</span>
+                  <div class="pi-info">
+                    <div class="pi-name">{inst.name} {#if completedInstruments.includes(inst.id)}<span class="pi-check">✓</span>{/if}</div>
+                    <div class="pi-sub">{completedInstruments.includes(inst.id) ? '✅ Complete — tap to retake' : inst.sub}</div>
+                  </div>
+                  <span class="pi-go">{completedInstruments.includes(inst.id) ? '↻' : '→'}</span>
+                </button>
+              {/each}
             </div>
             <div class="pi-footer">Takes ~10 minutes total. You can do them one at a time.</div>
           {/if}
@@ -2303,6 +2267,11 @@ Tracked with Wirebot — your AI business operating partner`;
     border-color: rgba(124,124,255,0.25);
     transform: scale(1.01);
   }
+  .pi-card.pi-done {
+    border-color: rgba(16,185,129,0.3);
+    opacity: 0.8;
+  }
+  .pi-check { color: #10b981; font-size: 0.8em; margin-left: 4px; }
   .pi-icon { font-size: 24px; flex-shrink: 0; }
   .pi-info { flex: 1; }
   .pi-name { font-size: 15px; font-weight: 600; color: var(--text-on-accent); }
