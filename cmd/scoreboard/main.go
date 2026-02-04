@@ -6925,7 +6925,7 @@ func (s *Server) handleMemoryQueue(w http.ResponseWriter, r *http.Request) {
 		// Also get counts
 		var pending, approved, rejected int
 		s.db.QueryRow("SELECT COUNT(*) FROM memory_queue WHERE status='pending'").Scan(&pending)
-		s.db.QueryRow("SELECT COUNT(*) FROM memory_queue WHERE status IN ('approved','corrected')").Scan(&approved)
+		s.db.QueryRow("SELECT COUNT(*) FROM memory_queue WHERE status='approved'").Scan(&approved)
 		s.db.QueryRow("SELECT COUNT(*) FROM memory_queue WHERE status='rejected'").Scan(&rejected)
 
 		json.NewEncoder(w).Encode(map[string]interface{}{
@@ -7024,7 +7024,7 @@ func (s *Server) handleMemoryQueueAction(w http.ResponseWriter, r *http.Request)
 			http.Error(w, `{"error":"correction required"}`, 400)
 			return
 		}
-		_, err := s.db.Exec(`UPDATE memory_queue SET status='corrected', correction=?, reviewed_at=CURRENT_TIMESTAMP WHERE id=?`,
+		_, err := s.db.Exec(`UPDATE memory_queue SET status='approved', correction=?, reviewed_at=CURRENT_TIMESTAMP WHERE id=?`,
 			body.Correction, id)
 		if err != nil {
 			http.Error(w, `{"error":"db update failed"}`, 500)

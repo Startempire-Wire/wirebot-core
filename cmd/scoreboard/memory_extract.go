@@ -833,7 +833,7 @@ func (s *Server) handleMemoryExtractConversation(w http.ResponseWriter, r *http.
 		return
 	}
 
-	// Rate limit: at most once per 2 minutes (shares window with extractConversationToQueue)
+	// Rate limit: at most once per 2 minutes (separate from wins portal's chatExtractMu)
 	convoExtractMu.Lock()
 	if time.Since(lastConvoExtractTime) < 2*time.Minute {
 		convoExtractMu.Unlock()
