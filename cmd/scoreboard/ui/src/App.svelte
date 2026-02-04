@@ -1054,10 +1054,10 @@ Tracked with Wirebot — your AI business operating partner`;
                   </button>
                 {/if}
 
-                <!-- Discord Training -->
+                <!-- Training Lab -->
                 <button class="btn-discord-audit" onclick={() => navigateTo('audit')}>
-                  🎯 Discord Training
-                  <span class="btn-sub">Review & train Wirebot's responses</span>
+                  🧠 Training Lab
+                  <span class="btn-sub">Review interactions • Give feedback • Make Wirebot smarter</span>
                 </button>
 
                 <!-- Memory Review -->

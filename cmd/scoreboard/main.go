@@ -494,6 +494,7 @@ func main() {
 	mux.HandleFunc("/v1/discord/interaction", s.auth(s.handleDiscordInteraction))
 	mux.HandleFunc("/v1/discord/interactions", s.auth(s.handleDiscordInteractions))
 	mux.HandleFunc("/v1/discord/feedback", s.auth(s.handleDiscordFeedback))
+	mux.HandleFunc("/v1/training/stats", s.auth(s.handleTrainingStats))
 
 	// Transaction reconciliation
 	mux.HandleFunc("/v1/reconcile", s.auth(s.handleReconcile))
@@ -10549,27 +10550,205 @@ func (s *Server) handleDiscordFeedback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// If memory action requested, call Mem0 to store correction
-	if req.FeedbackType == "memory" && req.MemoryAction == "add" {
-		var userMsg, botResp string
-		s.db.QueryRow("SELECT user_message, bot_response FROM discord_interactions WHERE interaction_id=?", req.InteractionID).Scan(&userMsg, &botResp)
+	// Fetch the original interaction for pipeline processing
+	var userMsg, botResp string
+	s.db.QueryRow("SELECT user_message, bot_response FROM discord_interactions WHERE interaction_id=?",
+		req.InteractionID).Scan(&userMsg, &botResp)
 
-		memoryText := fmt.Sprintf("Training feedback: When asked '%s', the response needed improvement. Correction: %s", userMsg, req.FeedbackText)
+	pipelineActions := []string{}
+
+	// ── Intelligence Pipeline: feedback → actionable intelligence ──
+	// Every feedback type flows into the system differently:
+
+	switch req.FeedbackType {
+	case "good":
+		// Good response → extract as positive pattern → TRAINING.md
+		// The LLM reads TRAINING.md every conversation via workspace bootstrap
+		pattern := req.FeedbackText
+		if pattern == "" {
+			// Auto-generate a brief pattern description
+			if len(userMsg) > 80 {
+				userMsg = userMsg[:80]
+			}
+			pattern = fmt.Sprintf("Good response to: \"%s\"", userMsg)
+		}
+		entry := fmt.Sprintf("✅ DO: %s", pattern)
+		s.appendTrainingEntry(entry)
+		pipelineActions = append(pipelineActions, "Pattern → TRAINING.md")
+
+	case "bad":
+		// Bad response → store correction in TRAINING.md + Mem0
+		correction := req.FeedbackText
+		if correction == "" {
+			correction = "(no correction provided)"
+		}
+		shortQ := userMsg
+		if len(shortQ) > 80 {
+			shortQ = shortQ[:80]
+		}
+		entry := fmt.Sprintf("❌ DON'T: When asked \"%s\" — %s", shortQ, correction)
+		s.appendTrainingEntry(entry)
+		pipelineActions = append(pipelineActions, "Correction → TRAINING.md")
+
+		// Also push to Mem0 so it surfaces in semantic recall
 		go func() {
+			memText := fmt.Sprintf("Operator correction: When asked '%s', the response was wrong. Instead: %s",
+				shortQ, correction)
 			payload, _ := json.Marshal(map[string]interface{}{
-				"messages": []map[string]string{{"role": "user", "content": memoryText}},
+				"messages": []map[string]string{{"role": "user", "content": memText}},
 				"user_id":  "wirebot_verious",
 			})
 			resp, err := http.Post("http://127.0.0.1:8200/v1/memories/", "application/json", bytes.NewReader(payload))
 			if err != nil {
-				log.Printf("[discord-feedback] Mem0 error: %v", err)
+				log.Printf("[training] Mem0 correction error: %v", err)
 			} else {
 				resp.Body.Close()
-				log.Printf("[discord-feedback] Added memory correction for %s", req.InteractionID)
+				log.Printf("[training] Mem0 correction stored for %s", req.InteractionID)
 			}
 		}()
+		pipelineActions = append(pipelineActions, "Correction → Mem0")
+
+		// Route through scoreboard queue for Letta state feeder
+		go func() {
+			payload, _ := json.Marshal(map[string]interface{}{
+				"content":  fmt.Sprintf("Operator correction: %s (context: user asked '%s')", correction, shortQ),
+				"source":   "training-feedback",
+				"priority": 1,
+			})
+			req2, _ := http.NewRequest("POST", "http://127.0.0.1:8100/v1/memory/queue", bytes.NewReader(payload))
+			req2.Header.Set("Content-Type", "application/json")
+			req2.Header.Set("Authorization", "Bearer "+authToken)
+			http.DefaultClient.Do(req2)
+		}()
+		pipelineActions = append(pipelineActions, "Queued → Letta")
+
+	case "memory":
+		// Memory → Mem0 (immediate) + scoreboard queue (for Letta via feeder)
+		memText := req.FeedbackText
+		if memText == "" {
+			break
+		}
+
+		// Mem0 — immediate storage
+		go func() {
+			payload, _ := json.Marshal(map[string]interface{}{
+				"messages": []map[string]string{{"role": "user", "content": memText}},
+				"user_id":  "wirebot_verious",
+			})
+			resp, err := http.Post("http://127.0.0.1:8200/v1/memories/", "application/json", bytes.NewReader(payload))
+			if err != nil {
+				log.Printf("[training] Mem0 memory error: %v", err)
+			} else {
+				resp.Body.Close()
+				log.Printf("[training] Memory stored in Mem0 for %s", req.InteractionID)
+			}
+		}()
+		pipelineActions = append(pipelineActions, "Memory → Mem0")
+
+		// Scoreboard queue → human review → Letta feeder
+		go func() {
+			payload, _ := json.Marshal(map[string]interface{}{
+				"content":  fmt.Sprintf("Operator taught: %s", memText),
+				"source":   "training-feedback",
+				"priority": 1,
+			})
+			req2, _ := http.NewRequest("POST", "http://127.0.0.1:8100/v1/memory/queue", bytes.NewReader(payload))
+			req2.Header.Set("Content-Type", "application/json")
+			req2.Header.Set("Authorization", "Bearer "+authToken)
+			http.DefaultClient.Do(req2)
+		}()
+		pipelineActions = append(pipelineActions, "Queued → Letta")
+
+		// Also add to TRAINING.md
+		entry := fmt.Sprintf("🧠 REMEMBER: %s", memText)
+		s.appendTrainingEntry(entry)
+		pipelineActions = append(pipelineActions, "Fact → TRAINING.md")
+
+	case "note":
+		// Notes are stored in feedback table only (already done above)
+		pipelineActions = append(pipelineActions, "Note saved")
 	}
 
-	log.Printf("[discord-feedback] %s feedback on %s: %s", req.FeedbackType, req.InteractionID, req.FeedbackText)
-	writeJSON(w, map[string]interface{}{"ok": true})
+	log.Printf("[training] %s on %s → %v", req.FeedbackType, req.InteractionID, pipelineActions)
+	writeJSON(w, map[string]interface{}{"ok": true, "pipeline_actions": pipelineActions})
+}
+
+// appendTrainingEntry adds a line to the operator's TRAINING.md workspace file.
+// This file is read by the LLM on every conversation via workspace bootstrap.
+// Keeps file under 5000 chars by trimming oldest entries when full.
+func (s *Server) appendTrainingEntry(entry string) {
+	trainingPath := "/home/wirebot/clawd/TRAINING.md"
+	header := `# TRAINING.md — Operator Feedback Loop
+> This file is auto-updated from the Training Lab in WINS.
+> Wirebot reads this every conversation. It shapes behavior over time.
+> Entries are added by operator feedback on real interactions.
+
+---
+`
+	// Read existing or create
+	content := header
+	if data, err := os.ReadFile(trainingPath); err == nil {
+		content = string(data)
+	}
+
+	// Append new entry with timestamp
+	ts := time.Now().Format("2006-01-02")
+	newLine := fmt.Sprintf("\n[%s] %s", ts, entry)
+	content += newLine
+
+	// Trim if over 5000 chars (remove oldest entries after header)
+	if len(content) > 5000 {
+		lines := strings.Split(content, "\n")
+		// Find the "---" separator after header
+		sepIdx := 0
+		for i, l := range lines {
+			if strings.TrimSpace(l) == "---" {
+				sepIdx = i
+				break
+			}
+		}
+		// Keep header + separator + trim from oldest
+		headerLines := lines[:sepIdx+1]
+		dataLines := lines[sepIdx+1:]
+		// Remove oldest entries until under limit
+		for len(strings.Join(append(headerLines, dataLines...), "\n")) > 4500 && len(dataLines) > 1 {
+			dataLines = dataLines[1:]
+		}
+		content = strings.Join(append(headerLines, dataLines...), "\n")
+	}
+
+	if err := os.WriteFile(trainingPath, []byte(content), 0644); err != nil {
+		log.Printf("[training] Failed to write TRAINING.md: %v", err)
+	} else {
+		log.Printf("[training] TRAINING.md updated (%d chars)", len(content))
+	}
+}
+
+// GET /v1/training/stats — feedback metrics for Training Lab header
+func (s *Server) handleTrainingStats(w http.ResponseWriter, r *http.Request) {
+	cors(w)
+	if r.Method == "OPTIONS" {
+		return
+	}
+
+	var total, good, bad, memory int
+	s.db.QueryRow("SELECT COUNT(*) FROM interaction_feedback").Scan(&total)
+	s.db.QueryRow("SELECT COUNT(*) FROM interaction_feedback WHERE feedback_type='good'").Scan(&good)
+	s.db.QueryRow("SELECT COUNT(*) FROM interaction_feedback WHERE feedback_type='bad'").Scan(&bad)
+	s.db.QueryRow("SELECT COUNT(*) FROM interaction_feedback WHERE feedback_type='memory'").Scan(&memory)
+
+	var accuracy *int
+	reviewed := good + bad
+	if reviewed > 0 {
+		pct := good * 100 / reviewed
+		accuracy = &pct
+	}
+
+	writeJSON(w, map[string]interface{}{
+		"total":    total,
+		"good":     good,
+		"bad":      bad,
+		"memory":   memory,
+		"accuracy": accuracy,
+	})
 }
