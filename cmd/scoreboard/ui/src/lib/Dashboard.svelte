@@ -844,7 +844,7 @@
   .streak { font-size: 12px; background: #ff440020; border: 1px solid #ff440040; padding: 2px 8px; border-radius: 10px; color: #ff8800; }
   .drift-chip { font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 10px; border: 1px solid transparent; }
   .avatar { width: 40px; height: 40px; border-radius: 50%; background: var(--bg-elevated); display: flex; align-items: center; justify-content: center; font-size: 18px; color: var(--text-secondary); font-weight: 700; }
-  .avatar-img { width: 40px; height: 40px; border-radius: 50%; object-fit: cover; border: 2px solid #2a2a3a; }
+  .avatar-img { width: 40px; height: 40px; border-radius: 50%; object-fit: cover; border: 2px solid var(--border-light); }
 
   /* ─── Business Filter (hierarchical) ─── */
   .biz-row { display: flex; gap: 5px; overflow-x: auto; margin-bottom: 6px; scrollbar-width: none; -webkit-overflow-scrolling: touch; flex-wrap: nowrap; }
@@ -913,7 +913,7 @@
   .partners-row { display: flex; gap: 12px; overflow-x: auto; padding: 4px 0 12px; scrollbar-width: none; animation: section-slide 350ms ease-out; }
   .partners-row::-webkit-scrollbar { display: none; }
   .partner-avatar { display: flex; flex-direction: column; align-items: center; gap: 4px; text-decoration: none; flex-shrink: 0; }
-  .pa-img { width: 44px; height: 44px; border-radius: 50%; object-fit: cover; border: 2px solid #2a2a3a; }
+  .pa-img { width: 44px; height: 44px; border-radius: 50%; object-fit: cover; border: 2px solid var(--border-light); }
   .pa-circle { width: 44px; height: 44px; border-radius: 50%; background: var(--bg-elevated); display: flex; align-items: center; justify-content: center; font-size: 18px; color: var(--text-secondary); font-weight: 700; }
   .pa-add { border: 2px dashed #333; background: transparent; color: var(--text-muted); }
   .pa-name { font-size: 10px; color: var(--text-secondary); max-width: 50px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: center; }
@@ -947,7 +947,7 @@
 
   /* ─── Tasks ─── */
   .task-list { display: flex; flex-direction: column; gap: 2px; margin-bottom: 8px; }
-  .task-item { display: flex; align-items: flex-start; gap: 8px; padding: 8px 4px; border-bottom: 1px solid #1a1a28; }
+  .task-item { display: flex; align-items: flex-start; gap: 8px; padding: 8px 4px; border-bottom: 1px solid var(--border); }
   .task-item.done { opacity: 0.45; }
   .task-check { background: none; border: none; cursor: pointer; padding: 0; margin-top: 1px; }
   .check-box { width: 20px; height: 20px; border: 2px solid #333; border-radius: 4px; display: flex; align-items: center; justify-content: center; font-size: 12px; color: var(--accent); transition: all .15s; }
@@ -977,7 +977,7 @@
   .cat-bar { width: 40px; height: 4px; background: var(--bg-elevated); border-radius: 2px; overflow: hidden; }
   .cat-fill { height: 100%; background: var(--accent); border-radius: 2px; transition: width .4s; }
   .cat-chevron { font-size: 10px; color: var(--text-muted); }
-  .cat-tasks { padding: 4px 12px 8px; border-top: 1px solid #1a1a28; animation: section-slide 300ms ease-out; }
+  .cat-tasks { padding: 4px 12px 8px; border-top: 1px solid var(--border); animation: section-slide 300ms ease-out; }
 
   /* ─── Suggestions ─── */
   .suggestions-scroll { display: flex; gap: 10px; overflow-x: auto; padding-bottom: 4px; margin-bottom: 14px; scrollbar-width: none; }
@@ -1016,12 +1016,12 @@
   .prop-biz { font-size: 10px; padding: 2px 6px; border-radius: 8px; background: var(--bg-hover); color: var(--text-secondary); white-space: nowrap; }
   .prop-biz-all { color: var(--text-secondary); }
   .prop-conf { font-size: 11px; color: var(--accent); background: rgba(124,124,255,0.1); padding: 2px 6px; border-radius: 8px; }
-  .proposal-card.action-ready { border-color: rgba(0,220,130,0.3); background: linear-gradient(135deg, #0d1117 0%, rgba(0,220,130,0.05) 100%); }
+  .proposal-card.action-ready { border-color: rgba(0,220,130,0.3); background: linear-gradient(135deg, var(--bg) 0%, rgba(0,220,130,0.05) 100%); }
   .prop-drafted { background: rgba(0,220,130,0.2) !important; color: #00dc82 !important; }
   .prop-draft-preview {
     margin: 8px 0; padding: 10px; border-radius: 6px; background: var(--bg-elevated);
     font-size: 11px; color: var(--text-secondary); line-height: 1.5; white-space: pre-wrap;
-    max-height: 120px; overflow-y: auto; border-left: 2px solid #00dc82;
+    max-height: 120px; overflow-y: auto; border-left: 2px solid var(--success);
   }
   .prop-evidence-list { display: flex; flex-direction: column; gap: 8px; margin-bottom: 10px; }
   .prop-ev-item {

@@ -451,7 +451,7 @@
   .conflicts-alert {
     display: flex; align-items: center; gap: 0.5rem;
     width: 100%; padding: 0.6rem 1rem;
-    background: #1a1010; border: 1px solid #7f1d1d; border-radius: 10px;
+    background: var(--error-bg); border: 1px solid var(--error); border-radius: 10px;
     color: #fca5a5; cursor: pointer; margin-bottom: 1rem;
   }
   .alert-text { flex: 1; text-align: left; font-size: 0.85rem; }

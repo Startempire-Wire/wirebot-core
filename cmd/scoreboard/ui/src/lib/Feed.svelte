@@ -496,7 +496,7 @@
   }
   .feed-hdr {
     display: flex; justify-content: space-between; align-items: baseline;
-    margin-bottom: 8px; border-bottom: 1px solid #1e1e30; padding-bottom: 8px;
+    margin-bottom: 8px; border-bottom: 1px solid var(--border); padding-bottom: 8px;
   }
   .feed-hdr h2 { font-size: 16px; font-weight: 700; color: var(--accent); }
   .feed-right { display: flex; align-items: center; gap: 8px; }
@@ -527,7 +527,7 @@
     font-size: 10px; text-transform: uppercase; letter-spacing: 1px;
     color: var(--text-muted); font-weight: 700; margin: 12px 0 6px; padding-left: 2px;
   }
-  .section-divider { border-bottom: 1px solid #1a1a28; margin: 8px 0; }
+  .section-divider { border-bottom: 1px solid var(--border); margin: 8px 0; }
 
   /* ── Project group ── */
   .proj-group {
@@ -591,14 +591,14 @@
 
   /* ── Nested commit list ── */
   .commit-list {
-    border-top: 1px solid #1a1a28;
+    border-top: 1px solid var(--border);
     max-height: 50vh; overflow-y: auto;
     -webkit-overflow-scrolling: touch;
   }
   .commit-row {
     display: flex; align-items: flex-start; gap: 8px;
     padding: 8px 12px 8px 40px;
-    border-bottom: 1px solid #141420;
+    border-bottom: 1px solid var(--border);
   }
   .commit-row:last-child { border-bottom: none; }
   .commit-body { flex: 1; min-width: 0; }
@@ -632,7 +632,7 @@
 
   /* ── Project detail panel ── */
   .proj-detail {
-    border-top: 1px solid #1a1a28; padding: 8px 14px 10px 40px;
+    border-top: 1px solid var(--border); padding: 8px 14px 10px 40px;
     background: rgba(0,0,0,0.1);
   }
   .pd-row { display: flex; justify-content: space-between; padding: 3px 0; font-size: 12px; }
@@ -665,7 +665,7 @@
   .feed-list { display: flex; flex-direction: column; gap: 2px; }
   .feed-item {
     display: flex; align-items: center; gap: 10px;
-    padding: 10px 0; border-bottom: 1px solid #1a1a25;
+    padding: 10px 0; border-bottom: 1px solid var(--border);
   }
   .feed-item.is-pending { opacity: 0.45; }
   .fi-icon { font-size: 20px; flex-shrink: 0; }

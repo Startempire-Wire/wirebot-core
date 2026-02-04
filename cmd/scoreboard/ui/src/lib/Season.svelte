@@ -100,7 +100,7 @@
       {/each}
     </div>
     <div class="cal-legend">
-      <span class="leg"><span class="leg-dot" style="background:#1a1a2e"></span> No data</span>
+      <span class="leg"><span class="leg-dot" style="background:var(--border)"></span> No data</span>
       <span class="leg"><span class="leg-dot" style="background:#ff3232"></span> Loss</span>
       <span class="leg"><span class="leg-dot" style="background:#ffc800"></span> Close</span>
       <span class="leg"><span class="leg-dot" style="background:#00ff64"></span> Win</span>

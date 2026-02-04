@@ -624,7 +624,7 @@
     font-size: 18px;
     font-weight: 800;
     margin-bottom: 8px;
-    color: #eee;
+    color: var(--text);
   }
   .rubric p {
     font-size: 13px;
@@ -632,7 +632,7 @@
     color: #aaa;
     margin-bottom: 10px;
   }
-  .rubric strong { color: #ddd; }
+  .rubric strong { color: var(--text); }
   .rubric code { font-family: monospace; font-size: 12px; color: var(--accent); background: rgba(124,124,255,0.1); padding: 1px 4px; border-radius: 3px; }
   .rubric ol, .rubric ul { padding-left: 20px; margin-bottom: 10px; }
   .rubric li { font-size: 13px; line-height: 1.6; color: #aaa; margin-bottom: 4px; }
@@ -655,7 +655,7 @@
   }
   .card-box.accent { border-left-color: var(--accent); background: rgba(124,124,255,0.04); }
   .card-box.warn { border-left-color: #ffc800; background: rgba(255,200,0,0.04); }
-  .cb-title { font-size: 13px; font-weight: 700; color: #ddd; margin-bottom: 6px; }
+  .cb-title { font-size: 13px; font-weight: 700; color: var(--text); margin-bottom: 6px; }
   .card-box p { margin-bottom: 6px; }
   .card-box .note { font-size: 11px; opacity: 0.5; margin-top: 6px; }
 
