@@ -2864,7 +2864,7 @@ func (s *Server) handlePlaidExchange(w http.ResponseWriter, r *http.Request) {
 	// Store integration
 	id := fmt.Sprintf("int-%d", time.Now().UnixNano())
 	now := time.Now().UTC().Format(time.RFC3339)
-	nextPoll := time.Now().Add(30 * time.Minute).UTC().Format(time.RFC3339)
+	nextPoll := now // Poll immediately on new connection
 
 	s.mu.Lock()
 	s.db.Exec(`INSERT INTO integrations (id, user_id, provider, auth_type, encrypted_data, nonce,
@@ -3831,7 +3831,7 @@ func (s *Server) handleOAuthCallback(w http.ResponseWriter, r *http.Request) {
 
 	id := fmt.Sprintf("int-%d", time.Now().UnixNano())
 	now := time.Now().UTC().Format(time.RFC3339)
-	nextPoll := time.Now().Add(30 * time.Minute).UTC().Format(time.RFC3339)
+	nextPoll := now // Poll immediately on new connection
 
 	// Map provider to scoreboard provider ID
 	scoreProvider := provider
@@ -7234,7 +7234,7 @@ func (s *Server) handleIntegrations(w http.ResponseWriter, r *http.Request) {
 			config = "{}"
 		}
 		now := time.Now().UTC().Format(time.RFC3339)
-		nextPoll := time.Now().Add(time.Duration(pollInterval) * time.Second).UTC().Format(time.RFC3339)
+		nextPoll := now // Poll immediately on new connection
 
 		s.mu.Lock()
 		_, err = s.db.Exec(`INSERT INTO integrations (id, user_id, provider, auth_type, encrypted_data, nonce,
