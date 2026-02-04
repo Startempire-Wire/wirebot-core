@@ -1407,7 +1407,18 @@ const wirebotMemoryBridge = {
               if (!msg || typeof msg !== "object") continue;
               const m = msg as Record<string, unknown>;
               const role = m.role as string;
-              const content = typeof m.content === "string" ? m.content : "";
+              let content = "";
+              if (typeof m.content === "string") {
+                content = m.content;
+              } else if (Array.isArray(m.content)) {
+                for (const block of m.content) {
+                  if (block && typeof block === "object" &&
+                    (block as Record<string, unknown>).type === "text" &&
+                    typeof (block as Record<string, unknown>).text === "string") {
+                    content += (block as Record<string, unknown>).text as string;
+                  }
+                }
+              }
               if (role === "user" && content.length > 0 && !content.includes("<relevant-memories>")) {
                 userMsgs.push(content);
               } else if (role === "assistant" && content.length > 0) {

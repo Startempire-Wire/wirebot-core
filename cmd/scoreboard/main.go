@@ -10625,13 +10625,15 @@ func (s *Server) handleDiscordFeedback(w http.ResponseWriter, r *http.Request) {
 }
 
 // mem0Store sends a fact to Mem0 via /v1/store (the correct endpoint).
+// Mem0 uses an LLM for fact extraction, so allow 30s timeout.
 func (s *Server) mem0Store(text, interactionID string) {
 	payload, _ := json.Marshal(map[string]interface{}{
 		"messages":  []map[string]string{{"role": "user", "content": text}},
 		"namespace": "wirebot_verious",
 		"category":  "training-feedback",
 	})
-	resp, err := http.Post("http://127.0.0.1:8200/v1/store", "application/json", bytes.NewReader(payload))
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Post("http://127.0.0.1:8200/v1/store", "application/json", bytes.NewReader(payload))
 	if err != nil {
 		log.Printf("[training] Mem0 store error: %v", err)
 		return
@@ -10655,7 +10657,8 @@ func (s *Server) queueForLetta(content string) {
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+authToken)
-	resp, err := http.DefaultClient.Do(req)
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Do(req)
 	if err != nil {
 		log.Printf("[training] queue POST error: %v", err)
 		return
