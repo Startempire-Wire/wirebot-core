@@ -1,7 +1,7 @@
 /**
  * Wirebot Memory Bridge
  *
- * Clawdbot extension that coordinates three memory systems:
+ * OpenClaw extension that coordinates three memory systems:
  *   - memory-core (embedded): workspace file recall (instant)
  *   - Mem0 (:8200): LLM-extracted conversation facts (~200ms)
  *   - Letta (:8283): structured self-editing business state (~100ms reads)
@@ -1344,11 +1344,36 @@ const wirebotMemoryBridge = {
     // ========================================================================
 
     if (cfg.autoExtract) {
+      let extracting = false; // re-entrancy guard
       api.on("agent_end", async (event) => {
         if (!event.success || !event.messages || event.messages.length === 0) {
           return;
         }
 
+        // Guard: skip if we're already inside an extraction (prevents infinite loop).
+        // The extraction sends an LLM call which creates a new session, which fires
+        // agent_end again. Without this guard, sessions multiply at ~500/day.
+        if (extracting) return;
+
+        // Guard: skip if the conversation IS an extraction (detect by content).
+        // Catches the case where the flag was reset between restarts.
+        const firstMsg = event.messages.find(
+          (m: Record<string, unknown>) => m && (m as Record<string, unknown>).role === "user",
+        );
+        if (firstMsg) {
+          const text = typeof (firstMsg as Record<string, unknown>).content === "string"
+            ? ((firstMsg as Record<string, unknown>).content as string)
+            : JSON.stringify((firstMsg as Record<string, unknown>).content);
+          if (
+            text.includes("Extract PERSONAL FACTS") ||
+            text.includes("You are extracting PERSONAL FACTS") ||
+            text.startsWith("Input:\nuser: Input:")
+          ) {
+            return;
+          }
+        }
+
+        extracting = true;
         try {
           // Extract user and assistant messages from the conversation
           const conversation: Array<{ role: string; content: string }> = [];
@@ -1519,6 +1544,8 @@ const wirebotMemoryBridge = {
           api.logger.warn(
             `wirebot-memory-bridge: agent_end hook error: ${String(err)}`,
           );
+        } finally {
+          extracting = false;
         }
       });
     }
