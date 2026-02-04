@@ -227,10 +227,85 @@
     return { shipping: '#4a9eff', distribution: '#9b59b6', revenue: '#2ecc71', systems: '#e67e22' }[lane] || '#888';
   }
   function sourceLabel(src) {
-    if (src === 'github-webhook') return '✓ verified';
-    if (src === 'rss-poller') return '⚡ auto';
-    if (src === 'git-discovery') return '🔍 discovered';
+    if (!src) return '';
+    if (src === 'github-webhook') return 'GitHub';
+    if (src === 'rss-poller' || src.startsWith('rss')) return 'RSS';
+    if (src === 'git-discovery') return 'Git';
+    if (src === 'automated') return 'Auto';
+    if (src === 'wirebot') return 'Wirebot';
+    if (src.startsWith('integration:')) return 'Integration';
+    if (src.includes('poller')) return src.replace('-poller', '');
     return src;
+  }
+
+  // Smarter title: strip [repo] prefix, clean up generic messages
+  function smartTitle(item) {
+    let t = item.title || item.type || '';
+
+    // Strip [repo-name] prefix — the project column already shows this
+    t = t.replace(/^\[[^\]]+\]\s*/, '');
+
+    // Capitalize conventional commit type
+    t = t.replace(/^(feat|fix|docs|refactor|perf|chore|test|style)[:(! ]+\s*/i, (_, type) => {
+      const labels = { feat: '✨ ', fix: '🔧 ', docs: '📝 ', refactor: '♻️ ', perf: '⚡ ', chore: '🔩 ', test: '🧪 ' };
+      return labels[type.toLowerCase()] || '';
+    });
+
+    // Generic system messages — make friendlier
+    if (item.type === 'GDRIVE_SCAN') return `📁 Drive indexed ${t.match(/(\d+)/)?.[1] || ''} files`;
+    if (item.type === 'SYSTEMS_SCORE') return t.replace('Systems score:', '⚙️ Systems');
+    if (item.type === 'REVENUE_EVENT') return t.replace('Revenue score:', '💰 Revenue');
+    if (item.type === 'SSL_CHECK') return t;
+    if (item.type === 'DISK_CHECK') return t;
+    if (item.type === 'INTEGRATION_CHECK') return t;
+
+    return t || item.type;
+  }
+
+  // Deduplicate: collapse repeat GDRIVE_SCAN, hide bare "commit" when PRODUCT_RELEASE exists
+  function dedupeItems(raw) {
+    // Track PRODUCT_RELEASE URLs to suppress matching commit events
+    const releaseUrls = new Set();
+    for (const item of raw) {
+      if (item.type === 'PRODUCT_RELEASE' && item.url) releaseUrls.add(item.url);
+    }
+
+    let lastGdrive = null;
+    let gdriveCount = 0;
+    const out = [];
+
+    for (const item of raw) {
+      // Skip commit events that duplicate a PRODUCT_RELEASE from same repo
+      if (item.type === 'commit') {
+        const repo = (item.url || item.title || '').match(/\/([^/]+?)(?:\.git)?$/)?.[1] || '';
+        const hasRelease = raw.some(r => r.type === 'PRODUCT_RELEASE' && r.title?.includes(`[${repo}]`));
+        if (hasRelease) continue;
+      }
+
+      // Collapse consecutive GDRIVE_SCAN into one
+      if (item.type === 'GDRIVE_SCAN') {
+        gdriveCount++;
+        if (!lastGdrive) lastGdrive = { ...item };
+        else lastGdrive.title = item.title; // keep latest title
+        continue;
+      }
+
+      // Flush pending gdrive
+      if (lastGdrive) {
+        if (gdriveCount > 1) lastGdrive._count = gdriveCount;
+        out.push(lastGdrive);
+        lastGdrive = null;
+        gdriveCount = 0;
+      }
+
+      out.push(item);
+    }
+    // Flush final gdrive
+    if (lastGdrive) {
+      if (gdriveCount > 1) lastGdrive._count = gdriveCount;
+      out.push(lastGdrive);
+    }
+    return out;
   }
   function statusIcon(s) {
     return { approved: '✅', rejected: '❌' }[s] || '⏳';
@@ -457,11 +532,11 @@
       </div>
     {:else}
       <div class="feed-list">
-        {#each items.filter(i => tab === 'all' || i.status === 'approved') as item}
+        {#each dedupeItems(items.filter(i => tab === 'all' || i.status === 'approved')) as item}
           <div class="feed-item" class:is-pending={item.status === 'pending'}>
             <div class="fi-icon">{item.icon || '📌'}</div>
             <div class="fi-body">
-              <div class="fi-title">{item.title || item.type}</div>
+              <div class="fi-title">{smartTitle(item)}{#if item._count} <span class="fi-repeat">×{item._count}</span>{/if}</div>
               <div class="fi-meta">
                 <span class="fi-lane" style="color:{laneColor(item.lane)}">{item.lane}</span>
                 <span class="fi-sep">·</span>
@@ -671,6 +746,7 @@
   .fi-icon { font-size: 20px; flex-shrink: 0; }
   .fi-body { flex: 1; min-width: 0; }
   .fi-title { font-size: 13px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .fi-repeat { font-size: 11px; opacity: 0.5; font-weight: 400; }
   .fi-meta { font-size: 11px; opacity: 0.4; display: flex; align-items: center; gap: 4px; margin-top: 2px; flex-wrap: wrap; }
   .fi-lane { font-weight: 600; opacity: 1; }
   .fi-sep { opacity: 0.3; }
