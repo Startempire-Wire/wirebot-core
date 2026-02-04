@@ -850,6 +850,42 @@ func (s *Server) initDB() {
 		}
 	}
 
+	// Discord audit & training tables
+	for _, stmt := range []string{
+		`CREATE TABLE IF NOT EXISTS discord_interactions (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			interaction_id TEXT UNIQUE NOT NULL,
+			guild_id TEXT,
+			guild_name TEXT DEFAULT '',
+			channel_id TEXT,
+			channel_name TEXT DEFAULT '',
+			user_id TEXT,
+			user_name TEXT DEFAULT '',
+			mode TEXT DEFAULT 'community',
+			user_message TEXT,
+			bot_response TEXT,
+			response_time_ms INTEGER DEFAULT 0,
+			tools_used TEXT DEFAULT '[]',
+			model TEXT DEFAULT '',
+			tokens_in INTEGER DEFAULT 0,
+			tokens_out INTEGER DEFAULT 0,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+		)`,
+		`CREATE TABLE IF NOT EXISTS interaction_feedback (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			interaction_id TEXT REFERENCES discord_interactions(interaction_id),
+			feedback_type TEXT NOT NULL,
+			feedback_text TEXT DEFAULT '',
+			memory_action TEXT DEFAULT '',
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_discord_int_mode ON discord_interactions(mode)`,
+		`CREATE INDEX IF NOT EXISTS idx_discord_int_created ON discord_interactions(created_at)`,
+		`CREATE INDEX IF NOT EXISTS idx_discord_fb_int ON interaction_feedback(interaction_id)`,
+	} {
+		s.db.Exec(stmt)
+	}
+
 	// Init reconciliation tables
 	s.initReconciliation()
 

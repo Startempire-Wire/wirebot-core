@@ -1385,9 +1385,79 @@ const wirebotMemoryBridge = {
 
     if (cfg.autoExtract) {
       let extracting = false; // re-entrancy guard
-      api.on("agent_end", async (event) => {
+      api.on("agent_end", async (event, ctx) => {
         if (!event.success || !event.messages || event.messages.length === 0) {
           return;
+        }
+
+        // ── Discord interaction logging ──
+        // If this conversation came from Discord, log it to the scoreboard
+        // for the audit/training UI. ctx.sessionKey format: "main:discord:guild:channel"
+        const sessionKey = (ctx as Record<string, unknown>)?.sessionKey as string || "";
+        const isDiscord = sessionKey.includes("discord") ||
+          ((ctx as Record<string, unknown>)?.messageProvider as string || "").includes("discord");
+
+        if (isDiscord) {
+          try {
+            // Extract last user message and last bot response
+            const userMsgs: string[] = [];
+            const botMsgs: string[] = [];
+            const toolsUsed: string[] = [];
+            for (const msg of event.messages) {
+              if (!msg || typeof msg !== "object") continue;
+              const m = msg as Record<string, unknown>;
+              const role = m.role as string;
+              const content = typeof m.content === "string" ? m.content : "";
+              if (role === "user" && content.length > 0 && !content.includes("<relevant-memories>")) {
+                userMsgs.push(content);
+              } else if (role === "assistant" && content.length > 0) {
+                botMsgs.push(content);
+              } else if (role === "tool" && typeof m.name === "string") {
+                if (!toolsUsed.includes(m.name as string)) toolsUsed.push(m.name as string);
+              }
+            }
+
+            const lastUser = userMsgs[userMsgs.length - 1] || "";
+            const lastBot = botMsgs[botMsgs.length - 1] || "";
+
+            if (lastUser && lastBot) {
+              // Parse channel info from session key: "main:discord:guildId:channelId"
+              const keyParts = sessionKey.split(":");
+              const guildId = keyParts.length > 2 ? keyParts[2] : "";
+              const channelId = keyParts.length > 3 ? keyParts[3] : "";
+
+              // Determine mode from guild config
+              const guildCfg = (cfg as Record<string, unknown>).discordGuilds as Record<string, unknown> || {};
+              const sovereignChannels = Object.entries(guildCfg).length > 0 ? [] : [];
+              // Simple heuristic: sovereign channel from gateway config
+              const isSovereign = channelId === "1468200674545238191"; // Known sovereign channel
+              const mode = isSovereign ? "sovereign" : "community";
+
+              await fetch(`${scoreboardUrl}/v1/discord/interaction`, {
+                method: "POST",
+                headers: {
+                  "Authorization": `Bearer ${scoreboardToken}`,
+                  "Content-Type": "application/json",
+                },
+                body: JSON.stringify({
+                  guild_id: guildId,
+                  guild_name: "Startempire Wire",
+                  channel_id: channelId,
+                  user_name: "discord-user", // Will be enhanced when Discord provides user info
+                  user_message: lastUser.slice(0, 2000),
+                  bot_response: lastBot.slice(0, 5000),
+                  response_time_ms: event.durationMs || 0,
+                  mode,
+                  tools_used: toolsUsed,
+                  model: "z-ai/glm-4.5-air:free",
+                }),
+                signal: AbortSignal.timeout(5000),
+              });
+              api.logger.info(`discord-audit: logged ${mode} interaction (${toolsUsed.length} tools, ${event.durationMs}ms)`);
+            }
+          } catch (err) {
+            api.logger.warn(`discord-audit: failed to log interaction: ${String(err)}`);
+          }
         }
 
         // Guard: skip if we're already inside an extraction (prevents infinite loop).

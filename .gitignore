@@ -36,3 +36,4 @@ cmd/scoreboard/ui/node_modules/
 cmd/scoreboard/static/
 cmd/scoreboard/go.sum
 scoreboard.db
+cmd/scoreboard/wirebot_scoreboard.db
