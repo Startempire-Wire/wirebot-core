@@ -1127,13 +1127,9 @@ func (s *Server) handleSystemHealth(w http.ResponseWriter, r *http.Request) {
 		defer resp.Body.Close()
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
 		if resp.StatusCode >= 200 && resp.StatusCode < 400 {
-			// Try to extract detail from JSON
 			var d map[string]interface{}
 			detail := ""
 			if json.Unmarshal(body, &d) == nil {
-				if mem, ok := d["memories"]; ok {
-					detail = fmt.Sprintf("memories: %v", mem)
-				}
 				if st, ok := d["status"]; ok {
 					detail = fmt.Sprintf("%v", st)
 				}
@@ -1248,6 +1244,7 @@ func (s *Server) handleSystemRestart(w http.ResponseWriter, r *http.Request) {
 
 	unit, ok := serviceMap[req.Service]
 	if !ok {
+		w.WriteHeader(400)
 		json.NewEncoder(w).Encode(map[string]interface{}{
 			"error": "unknown service: " + req.Service,
 		})

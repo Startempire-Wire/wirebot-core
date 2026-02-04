@@ -14,7 +14,6 @@
   let restarting = $state({});
   let restartMsg = $state({});
   let lastChecked = $state('');
-  let pollCount = $state(0);
   let visible = $state(false);
   let panelEl = $state(null);
   let pollTimer = null;
@@ -22,7 +21,6 @@
   async function fetchHealth() {
     if (polling) return; // skip if previous still running
     polling = true;
-    pollCount++;
     try {
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 8000);
