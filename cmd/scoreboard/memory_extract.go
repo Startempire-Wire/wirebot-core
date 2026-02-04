@@ -25,7 +25,7 @@ type MemoryExtraction struct {
 }
 
 // ExtractMemoriesFromDocument uses LLM to extract personal facts with real quoted context
-func (s *Server) ExtractMemoriesFromDocument(filepath, content string) ([]MemoryExtraction, error) {
+func (s *Server) ExtractMemoriesFromDocument(docPath, content string) ([]MemoryExtraction, error) {
 	// Don't process tiny files
 	if len(content) < 100 {
 		return nil, nil
@@ -75,7 +75,7 @@ CATEGORIES: identity, preference, fact, relationship, business, temporal, habit
 ENTITIES: List any person names, locations, organizations, or products mentioned.
 REASONING: One sentence explaining why you assigned that confidence level.
 
-If no personal facts can be extracted with real quotes, return: []`, filepath, extractContent)
+If no personal facts can be extracted with real quotes, return: []`, docPath, extractContent)
 
 	// Call gateway for extraction
 	result, err := s.callLLMForExtraction(prompt)
@@ -128,7 +128,7 @@ If no personal facts can be extracted with real quotes, return: []`, filepath, e
 		memories = append(memories, MemoryExtraction{
 			MemoryText:    e.Memory,
 			SourceType:    "obsidian",
-			SourceFile:    filepath,
+			SourceFile:    docPath,
 			SourceSection: e.Section,
 			SourceContext: context,
 			Confidence:    e.Confidence,
@@ -234,11 +234,12 @@ If no personal facts found, return: []`, convoText)
 
 	start := strings.Index(result, "[")
 	end := strings.LastIndex(result, "]")
-	if start == -1 || end == -1 {
+	if start == -1 || end == -1 || end <= start {
 		return nil, nil
 	}
 
 	if err := json.Unmarshal([]byte(result[start:end+1]), &extractions); err != nil {
+		log.Printf("[memory-extract] Conversation JSON parse error: %v", err)
 		return nil, nil
 	}
 
@@ -296,12 +297,15 @@ func (s *Server) QueueMemoryForApproval(m MemoryExtraction) error {
 	status := "pending"
 	hasAmbiguousEntities := containsAmbiguousEntities(m.MemoryText)
 
+	// Bulk document scans always queue for review regardless of confidence
+	isBulkScan := m.SourceType == "obsidian" || m.SourceType == "gdrive" || m.SourceType == "dropbox"
+
 	if m.Confidence >= 0.95 && m.SourceType == "pairing" {
 		status = "approved"
-	} else if m.Confidence >= 0.95 && !hasAmbiguousEntities && m.SourceType != "obsidian" {
+	} else if m.Confidence >= 0.95 && !hasAmbiguousEntities && !isBulkScan {
 		status = "approved"
 	}
-	// Everything else stays "pending" (including all obsidian/bulk, <0.95 conf, or entity-bearing)
+	// Everything else stays "pending" (including all bulk scans, <0.95 conf, or entity-bearing)
 
 	_, err := s.db.Exec(`
 		INSERT INTO memory_queue (id, memory_text, source_type, source_file, source_context, confidence, status, reviewed_at)
@@ -433,8 +437,11 @@ func (s *Server) handleMemoryExtractVault(w http.ResponseWriter, r *http.Request
 		}
 
 		filepath.Walk(vaultPath, func(path string, info os.FileInfo, err error) error {
-			if err != nil || info.IsDir() || processed >= limit {
+			if err != nil || info.IsDir() {
 				return nil
+			}
+			if processed >= limit {
+				return filepath.SkipAll
 			}
 			if !strings.HasSuffix(strings.ToLower(info.Name()), ".md") {
 				return nil

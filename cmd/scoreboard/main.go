@@ -7026,10 +7026,10 @@ func (s *Server) handleMemoryQueueAction(w http.ResponseWriter, r *http.Request)
 	}
 }
 
-// mem0Store helper (duplicated for this context, uses existing pattern)
+// mem0Store stores a fact in Mem0 via HTTP API.
 func mem0Store(baseURL, namespace, text string, messages []map[string]string) error {
 	body := map[string]interface{}{"namespace": namespace, "category": "approved"}
-	if messages != nil && len(messages) > 0 {
+	if len(messages) > 0 {
 		body["messages"] = messages
 	} else {
 		body["text"] = text
@@ -7040,6 +7040,10 @@ func mem0Store(baseURL, namespace, text string, messages []map[string]string) er
 		return err
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		respBody, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("mem0 store returned %d: %s", resp.StatusCode, string(respBody[:min(200, len(respBody))]))
+	}
 	return nil
 }
 
@@ -7054,13 +7058,18 @@ func (s *Server) writebackApprovedMemory(text string) {
 	}
 
 	// 2. Append to MEMORY.md (immediate, not waiting for syncd 60s poll)
+	// Sanitize: collapse newlines to spaces so the bullet stays on one line
+	safeLine := strings.Join(strings.Fields(text), " ")
 	memoryPath := "/home/wirebot/clawd/MEMORY.md"
 	f, err := os.OpenFile(memoryPath, os.O_APPEND|os.O_WRONLY, 0644)
 	if err == nil {
-		f.WriteString("- " + text + "\n")
+		_, writeErr := f.WriteString("- " + safeLine + "\n")
 		f.Close()
+		if writeErr != nil {
+			log.Printf("[memory-writeback] MEMORY.md write error: %v", writeErr)
+		}
 	} else {
-		log.Printf("[memory-writeback] MEMORY.md append error: %v", err)
+		log.Printf("[memory-writeback] MEMORY.md open error: %v", err)
 	}
 
 	// 3. Letta — only if business-relevant (goals, kpis, stage, revenue, customers)
