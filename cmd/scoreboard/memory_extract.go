@@ -476,14 +476,21 @@ func (s *Server) handleMemoryExtractVault(w http.ResponseWriter, r *http.Request
 				return nil
 			}
 
+			queueOK := true
 			for _, m := range memories {
-				if err := s.QueueMemoryForApproval(m); err == nil {
+				if err := s.QueueMemoryForApproval(m); err != nil {
+					log.Printf("[memory-extract] Queue error for %s: %v", relPath, err)
+					queueOK = false
+				} else {
 					queued++
 				}
 				extracted++
 			}
 
-			// Mark file as processed in watermark
+			// Only watermark if all queue operations succeeded (or no memories found)
+			if !queueOK {
+				return nil // don't watermark — retry next run
+			}
 			processedFiles[relPath] = true
 			processed++
 			if processed%10 == 0 {
