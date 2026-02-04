@@ -400,7 +400,7 @@
     display: flex;
     flex-direction: column;
     padding: 1rem;
-    background: linear-gradient(180deg, #08080f 0%, #0f0f18 100%);
+    background: var(--page-gradient);
   }
   
   .mr-header {
@@ -430,7 +430,7 @@
   /* Power Bar */
   .power-section {
     background: var(--bg-card);
-    border: 1px solid #1a1a2a;
+    border: 1px solid var(--border);
     border-radius: 12px;
     padding: 0.75rem 1rem;
     margin-bottom: 1rem;
@@ -474,18 +474,18 @@
     position: absolute;
     width: 100%; max-width: 360px;
     height: 480px;
-    background: #16161e;
+    background: var(--card-bg-behind);
     border-radius: 24px;
-    border: 1px solid #1a1a2a;
+    border: 1px solid var(--border);
   }
   
   .memory-card {
     position: relative;
     width: 100%; max-width: 360px;
     min-height: 480px;
-    background: linear-gradient(165deg, #1a1a26 0%, #141420 100%);
+    background: var(--card-gradient);
     border-radius: 24px;
-    border: 2px solid #252532;
+    border: 2px solid var(--card-border);
     overflow: hidden;
     touch-action: pan-y;
     cursor: grab;
@@ -525,11 +525,11 @@
   .card-memory {
     font-size: 1.2rem;
     line-height: 1.6;
-    color: #fff;
+    color: var(--text);
     font-style: italic;
     padding: 1rem 0;
-    border-top: 1px solid #252532;
-    border-bottom: 1px solid #252532;
+    border-top: 1px solid var(--card-border);
+    border-bottom: 1px solid var(--card-border);
   }
   
   /* Context Section */
@@ -540,12 +540,12 @@
   .context-quote {
     margin: 0;
     padding: 1rem;
-    background: #0c0c14;
+    background: var(--card-context-bg);
     border-left: 3px solid #7c3aed;
     border-radius: 0 8px 8px 0;
     font-size: 0.9rem;
     line-height: 1.6;
-    color: #aaa;
+    color: var(--text-secondary);
     font-style: italic;
   }
   
@@ -553,9 +553,9 @@
     display: flex;
     gap: 0.75rem;
     padding: 1rem;
-    background: #0c0c14;
+    background: var(--card-context-bg);
     border-radius: 10px;
-    border: 1px dashed #333;
+    border: 1px dashed var(--border-light);
   }
   .no-context-icon { font-size: 1.5rem; }
   .no-context-text strong { color: var(--text-secondary); font-size: 0.85rem; display: block; margin-bottom: 0.25rem; }
@@ -577,7 +577,7 @@
   .conf-fill.low { background: #ef4444; }
   
   /* Actions */
-  .card-actions { display: flex; gap: 0.75rem; padding: 1rem 1.5rem 1.5rem; background: linear-gradient(0deg, #12121a 50%, transparent); }
+  .card-actions { display: flex; gap: 0.75rem; padding: 1rem 1.5rem 1.5rem; background: var(--card-actions-gradient); }
   
   .btn-action {
     flex: 1;
@@ -600,16 +600,16 @@
   /* Edit Mode */
   .edit-mode { padding: 1.5rem; display: flex; flex-direction: column; gap: 1rem; height: 100%; }
   .edit-header { font-size: 1.1rem; font-weight: 600; color: #f59e0b; }
-  .edit-original { background: #0c0c14; padding: 1rem; border-radius: 10px; font-size: 0.9rem; color: var(--text-secondary); }
+  .edit-original { background: var(--card-context-bg); padding: 1rem; border-radius: 10px; font-size: 0.9rem; color: var(--text-secondary); }
   .edit-label { display: block; font-size: 0.7rem; color: var(--text-muted); text-transform: uppercase; margin-bottom: 0.3rem; }
   
   .edit-mode textarea {
     flex: 1;
     padding: 1rem;
     border-radius: 12px;
-    border: 2px solid #252532;
-    background: #0c0c14;
-    color: #fff;
+    border: 2px solid var(--card-border);
+    background: var(--card-context-bg);
+    color: var(--text);
     font-family: inherit;
     font-size: 1rem;
     line-height: 1.5;
@@ -619,7 +619,7 @@
   
   .edit-actions { display: flex; gap: 0.75rem; }
   .edit-actions button { flex: 1; padding: 0.9rem; border-radius: 12px; border: none; font-size: 0.9rem; font-weight: 600; cursor: pointer; }
-  .btn-cancel { background: #252532; color: var(--text-secondary); }
+  .btn-cancel { background: var(--bg-elevated); color: var(--text-secondary); }
   .btn-save { background: linear-gradient(135deg, #a855f7, #7c3aed); color: white; }
   
   .progress-row { text-align: center; padding: 0.75rem 0; font-size: 0.8rem; color: var(--text-muted); }

@@ -280,7 +280,7 @@
               <span><span class="dot" style="background:#00ff64"></span> Win (≥50)</span>
               <span><span class="dot" style="background:#ffc800"></span> Close (30–49)</span>
               <span><span class="dot" style="background:#ff3232"></span> Loss (&lt;30)</span>
-              <span><span class="dot" style="background:#1a1a2e"></span> No data</span>
+              <span><span class="dot" style="background:var(--border)"></span> No data</span>
             </div>
             <p>At a glance, you can see patterns: weekend gaps, streak runs, stall clusters.</p>
           </div>
@@ -557,7 +557,7 @@
   }
 
   .hints-panel {
-    background: #0d0d18;
+    background: var(--bg);
     width: 100%;
     max-width: 600px;
     max-height: 90dvh;
@@ -572,7 +572,7 @@
     justify-content: space-between;
     align-items: center;
     padding: 14px 16px;
-    border-bottom: 1px solid #1e1e30;
+    border-bottom: 1px solid var(--border);
     flex-shrink: 0;
   }
   .hints-hdr h2 { font-size: 16px; font-weight: 700; }
@@ -595,7 +595,7 @@
     gap: 4px;
     padding: 8px 12px;
     overflow-x: auto;
-    border-bottom: 1px solid #1a1a25;
+    border-bottom: 1px solid var(--border);
     flex-shrink: 0;
     -webkit-overflow-scrolling: touch;
   }
@@ -603,7 +603,7 @@
   .sec-btn {
     padding: 6px 10px;
     border-radius: 16px;
-    border: 1px solid #2a2a40;
+    border: 1px solid var(--border-light);
     background: transparent;
     color: #888;
     font-size: 11px;
@@ -611,7 +611,7 @@
     cursor: pointer;
     flex-shrink: 0;
   }
-  .sec-btn.active { background: rgba(124,124,255,0.15); border-color: #7c7cff; color: #7c7cff; }
+  .sec-btn.active { background: rgba(124,124,255,0.15); border-color: var(--accent); color: var(--accent); }
 
   .hints-body {
     flex: 1;
@@ -633,27 +633,27 @@
     margin-bottom: 10px;
   }
   .rubric strong { color: #ddd; }
-  .rubric code { font-family: monospace; font-size: 12px; color: #7c7cff; background: rgba(124,124,255,0.1); padding: 1px 4px; border-radius: 3px; }
+  .rubric code { font-family: monospace; font-size: 12px; color: var(--accent); background: rgba(124,124,255,0.1); padding: 1px 4px; border-radius: 3px; }
   .rubric ol, .rubric ul { padding-left: 20px; margin-bottom: 10px; }
   .rubric li { font-size: 13px; line-height: 1.6; color: #aaa; margin-bottom: 4px; }
 
   .big-question {
     font-size: 22px;
     font-weight: 900;
-    color: #7c7cff;
+    color: var(--accent);
     text-align: center;
     padding: 16px 0;
   }
 
   /* Card boxes */
   .card-box {
-    background: #111118;
+    background: var(--bg-card);
     border-radius: 10px;
     padding: 12px;
     margin: 12px 0;
     border-left: 3px solid #333;
   }
-  .card-box.accent { border-left-color: #7c7cff; background: rgba(124,124,255,0.04); }
+  .card-box.accent { border-left-color: var(--accent); background: rgba(124,124,255,0.04); }
   .card-box.warn { border-left-color: #ffc800; background: rgba(255,200,0,0.04); }
   .cb-title { font-size: 13px; font-weight: 700; color: #ddd; margin-bottom: 6px; }
   .card-box p { margin-bottom: 6px; }
@@ -667,7 +667,7 @@
 
   /* Lane cards */
   .lane-card {
-    background: #111118;
+    background: var(--bg-card);
     border-radius: 10px;
     padding: 12px;
     margin: 12px 0;
@@ -718,7 +718,7 @@
   }
   .plane-card.reality { border-left-color: #00ff64; background: rgba(0,255,100,0.04); }
   .plane-card.behavior { border-left-color: #ffc800; background: rgba(255,200,0,0.04); }
-  .plane-card.reflection { border-left-color: #7c7cff; background: rgba(124,124,255,0.04); }
+  .plane-card.reflection { border-left-color: var(--accent); background: rgba(124,124,255,0.04); }
   .pc-hdr { font-size: 14px; font-weight: 700; margin-bottom: 6px; }
   .pc-rule { font-size: 11px; font-weight: 600; margin-top: 8px; padding: 6px 8px; background: rgba(255,255,255,0.03); border-radius: 6px; }
 
@@ -737,7 +737,7 @@
   .rubric-table th, .rubric-table td {
     padding: 6px 8px;
     font-size: 12px;
-    border-bottom: 1px solid #1a1a25;
+    border-bottom: 1px solid var(--border);
     text-align: left;
   }
   .rubric-table th { color: #888; font-weight: 600; font-size: 10px; letter-spacing: 0.05em; }
@@ -748,7 +748,7 @@
   .glossary dt {
     font-size: 14px;
     font-weight: 700;
-    color: #7c7cff;
+    color: var(--accent);
     margin-top: 12px;
     padding-top: 12px;
     border-top: 1px solid #1a1a25;

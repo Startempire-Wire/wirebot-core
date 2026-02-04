@@ -132,7 +132,7 @@
             <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
           </filter>
         </defs>
-        <circle cx="100" cy="100" r="88" fill="none" stroke="#1a1a2e" stroke-width="6"/>
+        <circle cx="100" cy="100" r="88" fill="none" stroke="var(--border)" stroke-width="6"/>
         <circle cx="100" cy="100" r="88" fill="none" stroke="url(#scoreGrad)" stroke-width="6"
           stroke-linecap="round" filter="url(#glow)"
           stroke-dasharray="{553}" stroke-dashoffset="{553 - (553 * (data.score || 0) / 100)}"
@@ -245,7 +245,7 @@
   /* Top bar with user + share */
   .top-bar {
     display: flex; justify-content: space-between; align-items: center;
-    padding-bottom: 6px; border-bottom: 1px solid #151522; margin-bottom: -4px;
+    padding-bottom: 6px; border-bottom: 1px solid var(--border); margin-bottom: -4px;
   }
   .share-btn {
     background: rgba(124,124,255,0.1); border: 1px solid rgba(124,124,255,0.3);
@@ -279,7 +279,7 @@
     padding-top: max(12px, env(safe-area-inset-top));
     gap: 10px;
     min-height: calc(100dvh - 56px);
-    background: linear-gradient(180deg, #0a0a12 0%, #0d0d22 40%, #0a0a18 100%);
+    background: var(--page-gradient);
     animation: fadeInUp 0.4s ease-out;
   }
   @keyframes fadeInUp {
@@ -344,7 +344,7 @@
     display: flex;
     justify-content: space-between;
     align-items: baseline;
-    border-bottom: 1px solid #1e1e30;
+    border-bottom: 1px solid var(--border);
     padding-bottom: 6px;
   }
   .sn { font-size: 12px; font-weight: 700; letter-spacing: .15em; color: var(--accent); }
@@ -528,7 +528,7 @@
   .pairing-cta:active .pc-arrow { transform: translateX(4px); }
 
   /* Clocks */
-  .clk { display: flex; flex-direction: column; gap: 5px; margin-top: auto; padding-top: 8px; border-top: 1px solid #1e1e30; }
+  .clk { display: flex; flex-direction: column; gap: 5px; margin-top: auto; padding-top: 8px; border-top: 1px solid var(--border); }
   .ck { display: flex; align-items: center; gap: 6px; }
   .ck-l { font-size: 9px; width: 44px; opacity: .35; letter-spacing: .1em; flex-shrink: 0; }
   .ck-track { flex: 1; height: 5px; background: var(--bg-elevated); border-radius: 3px; overflow: hidden; }

@@ -219,7 +219,7 @@
   .filters select {
     padding: 0.5rem;
     border-radius: 8px;
-    border: 1px solid #333;
+    border: 1px solid var(--border-light);
     background: var(--bg-card);
     color: var(--text);
   }
@@ -227,7 +227,7 @@
   .refresh-btn {
     padding: 0.5rem 0.75rem;
     border-radius: 8px;
-    border: 1px solid #333;
+    border: 1px solid var(--border-light);
     background: var(--bg-card);
     cursor: pointer;
   }
@@ -248,7 +248,7 @@
     background: var(--bg-card);
     border-radius: 12px;
     padding: 1rem;
-    border: 1px solid #333;
+    border: 1px solid var(--border-light);
   }
   
   .interaction-meta {
@@ -325,7 +325,7 @@
   .fb-btn {
     padding: 0.5rem 1rem;
     border-radius: 8px;
-    border: 1px solid #333;
+    border: 1px solid var(--border-light);
     background: var(--bg-elevated);
     cursor: pointer;
     font-size: 1.1rem;
@@ -341,7 +341,7 @@
   .modal-overlay {
     position: fixed;
     inset: 0;
-    background: rgba(0,0,0,0.8);
+    background: var(--bg-overlay);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -355,7 +355,7 @@
     padding: 1.5rem;
     max-width: 400px;
     width: 100%;
-    border: 1px solid #333;
+    border: 1px solid var(--border-light);
   }
   
   .modal h3 {
@@ -374,7 +374,7 @@
     width: 100%;
     padding: 0.75rem;
     border-radius: 8px;
-    border: 1px solid #333;
+    border: 1px solid var(--border-light);
     background: var(--bg-elevated);
     color: var(--text);
     resize: vertical;

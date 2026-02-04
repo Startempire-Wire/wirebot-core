@@ -1571,6 +1571,13 @@ Tracked with Wirebot — your AI business operating partner`;
     /* Lane colors */
     --lane-revenue-bg: #1a2a1a;
     --lane-shipping-bg: #2e2a1a;
+    /* Page gradients */
+    --page-gradient: linear-gradient(180deg, #0a0a12 0%, #0d0d22 40%, #0a0a18 100%);
+    --card-gradient: linear-gradient(165deg, #1a1a26 0%, #141420 100%);
+    --card-bg-behind: #16161e;
+    --card-context-bg: #0c0c14;
+    --card-border: #252532;
+    --card-actions-gradient: linear-gradient(0deg, #12121a 50%, transparent);
   }
   :global([data-theme="light"]) {
     --bg: #f5f5f7;
@@ -1608,6 +1615,13 @@ Tracked with Wirebot — your AI business operating partner`;
     /* Lane colors */
     --lane-revenue-bg: #e8f5e9;
     --lane-shipping-bg: #fff8e1;
+    /* Page gradients - light mode */
+    --page-gradient: linear-gradient(180deg, #f8f8fc 0%, #f0f0f8 40%, #f5f5fa 100%);
+    --card-gradient: linear-gradient(165deg, #ffffff 0%, #f8f8fc 100%);
+    --card-bg-behind: #e8e8f0;
+    --card-context-bg: #f5f5fa;
+    --card-border: #e0e0e8;
+    --card-actions-gradient: linear-gradient(0deg, #f8f8fc 50%, transparent);
   }
 
   :global(*) { margin: 0; padding: 0; box-sizing: border-box; }
@@ -1721,8 +1735,8 @@ Tracked with Wirebot — your AI business operating partner`;
     padding: 20px;
   }
   .fv-card {
-    background: var(--bg);
-    border: 1px solid #2a2a4a;
+    background: var(--bg-card);
+    border: 1px solid var(--border-light);
     border-radius: 16px;
     padding: 24px 20px;
     max-width: 360px;

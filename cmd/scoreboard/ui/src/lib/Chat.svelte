@@ -300,7 +300,7 @@
   .chat-sheet {
     position: relative;
     background: var(--bg);
-    border-top: 1px solid #2a2a4a;
+    border-top: 1px solid var(--border-light);
     border-radius: 16px 16px 0 0;
     display: flex; flex-direction: column;
     max-height: 80dvh; min-height: 40dvh;
@@ -313,7 +313,7 @@
   /* Header */
   .chat-header {
     display: flex; align-items: center; gap: 8px;
-    padding: 10px 12px; border-bottom: 1px solid #1e1e30; flex-shrink: 0;
+    padding: 10px 12px; border-bottom: 1px solid var(--border); flex-shrink: 0;
   }
   .ch-btn {
     width: 32px; height: 32px; border-radius: 8px;
@@ -344,8 +344,8 @@
   }
   .pairing-nudge:active { background: rgba(255,180,50,0.12); }
   .pn-icon { font-size: 14px; }
-  .pn-text { flex: 1; font-size: 12px; color: #c9a020; }
-  .pn-arrow { font-size: 12px; color: #c9a020; opacity: 0.6; }
+  .pn-text { flex: 1; font-size: 12px; color: var(--warning); }
+  .pn-arrow { font-size: 12px; color: var(--warning); opacity: 0.6; }
 
   /* History panel */
   .history-panel {
@@ -430,7 +430,7 @@
   .chat-input-row {
     display: flex; gap: 8px; padding: 8px 12px;
     padding-bottom: max(8px, env(safe-area-inset-bottom));
-    border-top: 1px solid #1e1e30; flex-shrink: 0;
+    border-top: 1px solid var(--border); flex-shrink: 0;
   }
   .chat-input {
     flex: 1; background: var(--bg-elevated); border: 1px solid var(--border-light);
@@ -448,5 +448,5 @@
     flex-shrink: 0; -webkit-tap-highlight-color: transparent;
   }
   .chat-send:disabled { opacity: 0.3; cursor: default; }
-  .chat-send:not(:disabled):active { background: #5c5cee; }
+  .chat-send:not(:disabled):active { background: var(--accent-dim); }
 </style>
