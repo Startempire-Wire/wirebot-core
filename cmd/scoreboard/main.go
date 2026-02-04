@@ -10568,10 +10568,7 @@ func (s *Server) handleDiscordFeedback(w http.ResponseWriter, r *http.Request) {
 		// Good response → extract as positive pattern → TRAINING.md
 		pattern := req.FeedbackText
 		if pattern == "" {
-			shortQ := userMsg
-			if len(shortQ) > 80 {
-				shortQ = shortQ[:80]
-			}
+			shortQ := truncateRunes(userMsg, 80)
 			pattern = fmt.Sprintf("Good response to: \"%s\"", shortQ)
 		}
 		s.appendTrainingEntry(fmt.Sprintf("✅ DO: %s", pattern))
@@ -10583,10 +10580,7 @@ func (s *Server) handleDiscordFeedback(w http.ResponseWriter, r *http.Request) {
 		if correction == "" {
 			correction = "(no correction provided)"
 		}
-		shortQ := userMsg
-		if len(shortQ) > 80 {
-			shortQ = shortQ[:80]
-		}
+		shortQ := truncateRunes(userMsg, 80)
 		s.appendTrainingEntry(fmt.Sprintf("❌ DON'T: When asked \"%s\" — %s", shortQ, correction))
 		pipelineActions = append(pipelineActions, "Correction → TRAINING.md")
 
@@ -10622,6 +10616,16 @@ func (s *Server) handleDiscordFeedback(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("[training] %s on %s → %v", req.FeedbackType, req.InteractionID, pipelineActions)
 	writeJSON(w, map[string]interface{}{"ok": true, "pipeline_actions": pipelineActions})
+}
+
+// truncateRunes truncates s to at most n runes, preserving valid UTF-8.
+// Go's s[:n] slices bytes and can split multi-byte characters (emoji, CJK).
+func truncateRunes(s string, n int) string {
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	return string(r[:n])
 }
 
 // mem0Store sends a fact to Mem0 via /v1/store (the correct endpoint).
