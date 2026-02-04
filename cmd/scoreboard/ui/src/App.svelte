@@ -1585,7 +1585,7 @@ Tracked with Wirebot — your AI business operating partner`;
   .pull-indicator {
     position: absolute; top: 0; left: 0; right: 0; height: 50px;
     display: flex; align-items: center; justify-content: center;
-    font-size: 13px; color: #7c7cff; z-index: 100;
+    font-size: 13px; color: var(--accent); z-index: 100;
     pointer-events: none;
   }
   .pull-spinner {
@@ -1632,7 +1632,7 @@ Tracked with Wirebot — your AI business operating partner`;
     width: 52px;
     height: 52px;
     border-radius: 50%;
-    background: #7c7cff;
+    background: var(--accent);
     color: white;
     font-size: 22px;
     border: none;
@@ -1679,7 +1679,7 @@ Tracked with Wirebot — your AI business operating partner`;
     padding: 20px;
   }
   .fv-card {
-    background: #0d0d18;
+    background: var(--bg);
     border: 1px solid #2a2a4a;
     border-radius: 16px;
     padding: 24px 20px;
@@ -1689,12 +1689,12 @@ Tracked with Wirebot — your AI business operating partner`;
   }
   .fv-icon { font-size: 48px; margin-bottom: 8px; }
   .fv-card h2 { font-size: 20px; font-weight: 800; margin-bottom: 10px; }
-  .fv-card p { font-size: 13px; color: #aaa; line-height: 1.6; margin-bottom: 8px; }
-  .fv-card strong { color: #ddd; }
+  .fv-card p { font-size: 13px; color: var(--text-secondary); line-height: 1.6; margin-bottom: 8px; }
+  .fv-card strong { color: var(--text); }
   .fv-question {
     font-size: 18px;
     font-weight: 800;
-    color: #7c7cff;
+    color: var(--accent);
     padding: 12px 0;
   }
   .fv-quick {
@@ -1709,13 +1709,13 @@ Tracked with Wirebot — your AI business operating partner`;
     align-items: center;
     gap: 10px;
     font-size: 13px;
-    color: #aaa;
+    color: var(--text-secondary);
     padding: 6px 10px;
     background: rgba(255,255,255,0.02);
     border-radius: 8px;
   }
   .fv-q-icon { font-size: 18px; flex-shrink: 0; }
-  .fv-q-item strong { color: #ddd; }
+  .fv-q-item strong { color: var(--text); }
   .fv-buttons { display: flex; gap: 8px; margin-top: 16px; }
   .fv-btn {
     flex: 1;
@@ -1726,8 +1726,8 @@ Tracked with Wirebot — your AI business operating partner`;
     cursor: pointer;
     border: none;
   }
-  .fv-btn.primary { background: #7c7cff; color: white; }
-  .fv-btn.secondary { background: transparent; border: 1px solid #333; color: #888; }
+  .fv-btn.primary { background: var(--accent); color: white; }
+  .fv-btn.secondary { background: transparent; border: 1px solid var(--border-light); color: var(--text-secondary); }
 
   /* Settings */
   .settings-view {
@@ -1779,11 +1779,11 @@ Tracked with Wirebot — your AI business operating partner`;
   .btn-sso:active { background: var(--accent-dim); }
 
   .btn-login {
-    background: #7c7cff; color: #fff; border: none; border-radius: 8px;
+    background: var(--accent); color: #fff; border: none; border-radius: 8px;
     padding: 12px; font-size: 14px; font-weight: 700; cursor: pointer;
     margin-top: 4px; transition: background 0.15s;
   }
-  .btn-login:active { background: #5c5cdd; }
+  .btn-login:active { background: var(--accent-dim); }
   .btn-login:disabled { opacity: 0.5; cursor: default; }
 
   .session-card {
@@ -1806,23 +1806,23 @@ Tracked with Wirebot — your AI business operating partner`;
   }
   .role-badge {
     font-size: 10px; font-weight: 600; padding: 2px 8px; border-radius: 4px;
-    background: #1a1a1a; color: #666; text-transform: uppercase; letter-spacing: 0.05em;
+    background: var(--bg-elevated); color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.05em;
   }
 
   .sc-row { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
-  .sc-label { font-size: 11px; color: #444; flex-shrink: 0; }
-  .sc-val { font-size: 12px; color: #888; text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .sc-link { font-size: 12px; color: #7c7cff; text-decoration: none; text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .sc-label { font-size: 11px; color: var(--text-muted); flex-shrink: 0; }
+  .sc-val { font-size: 12px; color: var(--text-secondary); text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .sc-link { font-size: 12px; color: var(--accent); text-decoration: none; text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .sc-link:hover { text-decoration: underline; }
-  .sc-bio { font-size: 11px; color: #555; line-height: 1.5; border-top: 1px solid #1e1e2e; padding-top: 8px; }
+  .sc-bio { font-size: 11px; color: var(--text-muted); line-height: 1.5; border-top: 1px solid #1e1e2e; padding-top: 8px; }
 
   .tier-badge {
     font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 4px;
     text-transform: uppercase; letter-spacing: 0.05em;
   }
-  .tier-free { background: #222; color: #666; }
+  .tier-free { background: var(--bg-card); color: var(--text-secondary); }
   .tier-freewire { background: #1a2a1a; color: #4caf50; }
-  .tier-wire { background: #1a1a2e; color: #7c7cff; }
+  .tier-wire { background: var(--bg-elevated); color: var(--accent); }
   .tier-extrawire { background: #2e1a2e; color: #ff7cff; }
 
   /* Equalizer strip inside profile card */
@@ -1839,7 +1839,7 @@ Tracked with Wirebot — your AI business operating partner`;
   .eq-strip:active { background: rgba(124,124,255,0.1); }
   .eq-label {
     display: flex; justify-content: space-between; align-items: center;
-    font-size: 12px; font-weight: 600; color: #7c7cff; margin-bottom: 8px;
+    font-size: 12px; font-weight: 600; color: var(--accent); margin-bottom: 8px;
   }
   .eq-arrow { opacity: 0.5; }
   .eq-viz {
@@ -1859,25 +1859,25 @@ Tracked with Wirebot — your AI business operating partner`;
     transition: height 0.6s cubic-bezier(0.34, 1.56, 0.64, 1);
   }
   .eq-bar-code {
-    font-size: 6px; color: #555; letter-spacing: -0.02em;
+    font-size: 6px; color: var(--text-muted); letter-spacing: -0.02em;
     overflow: hidden; text-overflow: clip; white-space: nowrap;
     max-width: 100%;
   }
   .eq-foot {
     display: flex; justify-content: space-between;
-    font-size: 10px; color: #666; margin-top: 6px;
+    font-size: 10px; color: var(--text-secondary); margin-top: 6px;
   }
-  .eq-score-line { color: #7c7cff; font-weight: 500; }
+  .eq-score-line { color: var(--accent); font-weight: 500; }
 
   .eq-cta {
     width: 100%; padding: 10px; margin-top: 8px; border-radius: 8px;
     background: rgba(124,124,255,0.15); border: 1px solid rgba(124,124,255,0.4);
-    color: #e8e8ff; font-size: 13px; font-weight: 600; cursor: pointer;
+    color: var(--text); font-size: 13px; font-weight: 600; cursor: pointer;
     display: flex; align-items: center; gap: 6px; justify-content: center;
     -webkit-tap-highlight-color: transparent;
   }
-  .eq-cta-retake { background: rgba(255,255,255,0.05); border-color: #333; color: #999; }
-  .eq-cta-sub { font-size: 10px; font-weight: 400; color: #888; }
+  .eq-cta-retake { background: rgba(255,255,255,0.05); border-color: var(--border-light); color: var(--text-secondary); }
+  .eq-cta-sub { font-size: 10px; font-weight: 400; color: var(--text-secondary); }
 
   .btn-discord-audit {
     background: linear-gradient(135deg, #5865F2, #7289DA); color: #fff; border: none; border-radius: 8px;
@@ -1896,16 +1896,16 @@ Tracked with Wirebot — your AI business operating partner`;
   .btn-memory-review .btn-sub { font-size: 10px; opacity: 0.8; }
 
   .btn-logout {
-    background: transparent; border: 1px solid #333; color: #666; border-radius: 6px;
+    background: transparent; border: 1px solid var(--border-light); color: var(--text-secondary); border-radius: 6px;
     padding: 6px 14px; font-size: 12px; cursor: pointer; align-self: flex-start; margin-top: 4px;
   }
   .btn-logout:hover { color: #ff4444; border-color: #ff4444; }
 
   .s-detail-label {
-    font-size: 12px; color: #444; cursor: pointer; padding: 4px 0;
+    font-size: 12px; color: var(--text-muted); cursor: pointer; padding: 4px 0;
   }
-  .s-detail-label:hover { color: #666; }
-  details[open] .s-detail-label { color: #7c7cff; }
+  .s-detail-label:hover { color: var(--text-secondary); }
+  details[open] .s-detail-label { color: var(--accent); }
 
   .token-status {
     font-size: 12px; padding: 6px 10px; border-radius: 6px; margin-top: 2px;
@@ -1916,7 +1916,7 @@ Tracked with Wirebot — your AI business operating partner`;
   .token-status.saving { color: #ffaa00; background: rgba(255,170,0,0.08); }
   @keyframes fadeIn { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: translateY(0); } }
 
-  .s-hint-text { font-size: 11px; color: #555; margin-bottom: 4px; }
+  .s-hint-text { font-size: 11px; color: var(--text-muted); margin-bottom: 4px; }
 
   /* ── Connected Accounts (redesigned) ── */
 
@@ -1924,7 +1924,7 @@ Tracked with Wirebot — your AI business operating partner`;
   .int-active-section { display: flex; flex-direction: column; gap: 6px; }
   .int-active-card {
     display: flex; align-items: center; gap: 10px;
-    padding: 10px 12px; background: #111118; border: 1px solid #1a3a1a;
+    padding: 10px 12px; background: var(--bg-card); border: 1px solid #1a3a1a;
     border-radius: 10px;
   }
   .int-active-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
@@ -1932,14 +1932,14 @@ Tracked with Wirebot — your AI business operating partner`;
   .int-active-dot.error { background: #ff4444; }
   .int-active-icon { font-size: 20px; flex-shrink: 0; }
   .int-active-info { flex: 1; min-width: 0; }
-  .int-active-name { font-size: 13px; font-weight: 600; color: #ddd; display: flex; align-items: center; gap: 6px; }
+  .int-active-name { font-size: 13px; font-weight: 600; color: var(--text); display: flex; align-items: center; gap: 6px; }
   .int-biz-badge {
     font-size: 9px; font-weight: 700; background: rgba(124,124,255,0.1);
-    color: #7c7cff; padding: 1px 6px; border-radius: 3px; letter-spacing: 0.05em;
+    color: var(--accent); padding: 1px 6px; border-radius: 3px; letter-spacing: 0.05em;
   }
-  .int-active-meta { font-size: 11px; color: #555; margin-top: 1px; }
+  .int-active-meta { font-size: 11px; color: var(--text-muted); margin-top: 1px; }
   .int-active-remove {
-    background: none; border: none; color: #333; font-size: 14px;
+    background: none; border: none; color: var(--text-muted); font-size: 14px;
     cursor: pointer; padding: 4px; flex-shrink: 0;
   }
   .int-active-remove:hover { color: #ff4444; }
@@ -1947,153 +1947,153 @@ Tracked with Wirebot — your AI business operating partner`;
   /* Add another account */
   .int-add-another {
     display: block; width: 100%; padding: 10px;
-    background: none; border: 1px dashed #1e1e30; border-radius: 10px;
-    color: #555; font-size: 12px; cursor: pointer;
+    background: none; border: 1px dashed var(--border); border-radius: 10px;
+    color: var(--text-muted); font-size: 12px; cursor: pointer;
     text-align: center; transition: all 0.2s; margin-top: 8px;
   }
-  .int-add-another:hover { border-color: #7c7cff40; color: #7c7cff; }
+  .int-add-another:hover { border-color: #7c7cff40; color: var(--accent); }
 
   /* Grouped integrations */
   .int-grouped-section { display: flex; flex-direction: column; gap: 8px; }
   .int-group {
-    background: #0d0d14; border: 1px solid #1a1a2a; border-radius: 12px;
+    background: var(--bg); border: 1px solid #1a1a2a; border-radius: 12px;
     overflow: hidden;
   }
   .int-group[open] { border-color: #252535; }
   .int-group-header {
     display: flex; align-items: center; gap: 10px;
     padding: 12px 14px; cursor: pointer; list-style: none;
-    background: #111118; user-select: none;
+    background: var(--bg-card); user-select: none;
   }
   .int-group-header::-webkit-details-marker { display: none; }
   .int-group-header::before {
-    content: '▶'; font-size: 10px; color: #444; transition: transform 0.2s;
+    content: '▶'; font-size: 10px; color: var(--text-muted); transition: transform 0.2s;
   }
   .int-group[open] .int-group-header::before { transform: rotate(90deg); }
   .int-group-icon { font-size: 18px; }
-  .int-group-name { flex: 1; font-size: 13px; font-weight: 600; color: #ccc; }
+  .int-group-name { flex: 1; font-size: 13px; font-weight: 600; color: var(--text); }
   .int-group-count {
-    font-size: 11px; font-weight: 600; color: #666;
-    background: #1a1a2a; padding: 2px 8px; border-radius: 10px;
+    font-size: 11px; font-weight: 600; color: var(--text-secondary);
+    background: var(--bg-elevated); padding: 2px 8px; border-radius: 10px;
   }
   .int-group-add {
-    background: #1a1a2a; border: none; color: #666;
+    background: var(--bg-elevated); border: none; color: var(--text-secondary);
     width: 22px; height: 22px; border-radius: 6px;
     font-size: 14px; cursor: pointer; display: flex;
     align-items: center; justify-content: center;
   }
-  .int-group-add:hover { background: #252540; color: #7c7cff; }
+  .int-group-add:hover { background: var(--bg-elevated); color: var(--accent); }
   .int-group-children { padding: 6px 10px 10px; display: flex; flex-direction: column; gap: 4px; }
   .int-child-card {
     display: flex; align-items: center; gap: 10px;
-    padding: 8px 10px; background: #0a0a10; border-radius: 8px;
+    padding: 8px 10px; background: var(--bg); border-radius: 8px;
   }
   .int-child-dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
   .int-child-dot.active { background: #2ecc71; }
   .int-child-dot.error { background: #ff4444; }
   .int-child-info { flex: 1; min-width: 0; }
   .int-child-name { font-size: 12px; font-weight: 500; color: #bbb; display: flex; align-items: center; gap: 6px; }
-  .int-child-meta { font-size: 10px; color: #444; margin-top: 1px; }
+  .int-child-meta { font-size: 10px; color: var(--text-muted); margin-top: 1px; }
   .int-child-remove {
-    background: none; border: none; color: #333; font-size: 12px;
+    background: none; border: none; color: var(--text-muted); font-size: 12px;
     cursor: pointer; padding: 2px; opacity: 0; transition: opacity 0.2s;
   }
   .int-child-card:hover .int-child-remove { opacity: 1; }
   .int-child-remove:hover { color: #ff4444; }
 
   /* Empty state */
-  .int-empty { text-align: center; padding: 24px 16px; color: #555; }
+  .int-empty { text-align: center; padding: 24px 16px; color: var(--text-muted); }
   .int-empty-icon { font-size: 32px; display: block; margin-bottom: 8px; }
   .int-empty p { margin: 0; font-size: 14px; }
   .int-empty-hint { font-size: 12px !important; color: #444 !important; margin-top: 4px !important; }
 
   /* Recommended grid */
   .int-rec-header {
-    font-size: 11px; font-weight: 700; color: #666;
+    font-size: 11px; font-weight: 700; color: var(--text-secondary);
     letter-spacing: 0.08em; text-transform: uppercase;
     margin-top: 12px; margin-bottom: 6px;
   }
   .int-rec-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; }
   .int-rec-card {
     display: flex; align-items: center; gap: 8px;
-    padding: 12px; background: #111118; border: 1px solid #1e1e30;
+    padding: 12px; background: var(--bg-card); border: 1px solid var(--border);
     border-radius: 10px; cursor: pointer; transition: border-color 0.2s;
     color: inherit;
   }
   .int-rec-card:hover { border-color: #7c7cff40; }
   .int-rec-icon { font-size: 20px; }
-  .int-rec-name { font-size: 12px; font-weight: 600; color: #aaa; }
+  .int-rec-name { font-size: 12px; font-weight: 600; color: var(--text-secondary); }
 
   /* Setup card (expanded connect form) */
   .int-setup-card {
-    background: #111118; border: 1px solid #7c7cff30;
+    background: var(--bg-card); border: 1px solid #7c7cff30;
     border-radius: 12px; padding: 16px; margin-top: 8px;
   }
   .int-setup-header {
     display: flex; justify-content: space-between; align-items: center;
-    font-size: 14px; font-weight: 700; color: #ddd; margin-bottom: 8px;
+    font-size: 14px; font-weight: 700; color: var(--text); margin-bottom: 8px;
   }
   .int-setup-close {
-    background: none; border: none; color: #555; font-size: 16px;
+    background: none; border: none; color: var(--text-muted); font-size: 16px;
     cursor: pointer; padding: 4px;
   }
-  .int-setup-desc { font-size: 12px; color: #666; margin: 0 0 12px; }
+  .int-setup-desc { font-size: 12px; color: var(--text-secondary); margin: 0 0 12px; }
   .int-setup-steps { display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px; }
-  .int-setup-step { display: flex; align-items: flex-start; gap: 8px; font-size: 12px; color: #999; line-height: 1.5; }
+  .int-setup-step { display: flex; align-items: flex-start; gap: 8px; font-size: 12px; color: var(--text-secondary); line-height: 1.5; }
   .int-step-num {
     width: 20px; height: 20px; border-radius: 50%;
-    background: #7c7cff15; color: #7c7cff; font-size: 10px; font-weight: 700;
+    background: #7c7cff15; color: var(--accent); font-size: 10px; font-weight: 700;
     display: flex; align-items: center; justify-content: center; flex-shrink: 0;
   }
   .int-setup-input {
-    width: 100%; padding: 10px 12px; background: #0a0a15;
-    border: 1px solid #2a2a40; border-radius: 8px;
-    color: #ddd; font-size: 13px; outline: none;
+    width: 100%; padding: 10px 12px; background: var(--bg);
+    border: 1px solid var(--border-light); border-radius: 8px;
+    color: var(--text); font-size: 13px; outline: none;
     box-sizing: border-box; margin-bottom: 4px;
   }
-  .int-setup-input:focus { border-color: #7c7cff; }
+  .int-setup-input:focus { border-color: var(--accent); }
   .int-setup-biz {
     width: 100%; padding: 8px 10px; border-radius: 8px;
-    background: #0d0d16; border: 1px solid #222;
-    color: #aaa; font-size: 12px; margin-bottom: 8px;
+    background: var(--bg); border: 1px solid #222;
+    color: var(--text-secondary); font-size: 12px; margin-bottom: 8px;
     appearance: none; -webkit-appearance: none;
   }
   .int-setup-save {
-    width: 100%; padding: 10px; background: #7c7cff; color: white;
+    width: 100%; padding: 10px; background: var(--accent); color: white;
     border: none; border-radius: 8px; font-size: 13px; font-weight: 600;
     cursor: pointer;
   }
   .int-setup-save:disabled { opacity: 0.4; cursor: default; }
-  .int-setup-save:active:not(:disabled) { background: #5c5cdd; }
+  .int-setup-save:active:not(:disabled) { background: var(--accent-dim); }
   .int-setup-oauth {
-    width: 100%; padding: 12px; background: #7c7cff; color: white;
+    width: 100%; padding: 12px; background: var(--accent); color: white;
     border: none; border-radius: 8px; font-size: 13px; font-weight: 600;
     cursor: pointer; text-align: center;
   }
-  .int-setup-coming { font-size: 12px; color: #555; text-align: center; font-style: italic; }
-  .int-setup-hint { font-size: 11px; color: #555; margin: 6px 0 0; line-height: 1.4; }
+  .int-setup-coming { font-size: 12px; color: var(--text-muted); text-align: center; font-style: italic; }
+  .int-setup-hint { font-size: 11px; color: var(--text-muted); margin: 6px 0 0; line-height: 1.4; }
 
   /* OAuth setup (cleaned up — no copy-paste) */
 
   /* Webhook URL display */
   .int-webhook-url {
-    background: #0a0a15; border: 1px solid #2a2a40; border-radius: 6px;
+    background: var(--bg); border: 1px solid var(--border-light); border-radius: 6px;
     padding: 8px 10px; display: flex; flex-direction: column; gap: 4px; margin-bottom: 4px;
   }
-  .int-wh-label { font-size: 10px; color: #555; }
+  .int-wh-label { font-size: 10px; color: var(--text-muted); }
   .int-wh-code {
-    font-size: 11px; color: #7c7cff; font-family: monospace;
+    font-size: 11px; color: var(--accent); font-family: monospace;
     word-break: break-all; user-select: all; cursor: text;
   }
 
   /* Browse all toggle */
   .int-browse-toggle {
     display: block; width: 100%; padding: 10px;
-    background: none; border: 1px solid #1e1e30; border-radius: 8px;
-    color: #555; font-size: 12px; cursor: pointer; margin-top: 10px;
+    background: none; border: 1px solid var(--border); border-radius: 8px;
+    color: var(--text-muted); font-size: 12px; cursor: pointer; margin-top: 10px;
     text-align: center; transition: border-color 0.2s;
   }
-  .int-browse-toggle:hover { border-color: #7c7cff40; color: #888; }
+  .int-browse-toggle:hover { border-color: #7c7cff40; color: var(--text-secondary); }
 
   /* Browse all list */
   .int-lane-group { display: flex; flex-direction: column; gap: 4px; margin-top: 8px; }
@@ -2103,13 +2103,13 @@ Tracked with Wirebot — your AI business operating partner`;
     text-transform: uppercase; letter-spacing: 0.05em;
   }
   .lane-revenue { background: #1a2a1a; color: #2ecc71; }
-  .lane-distribution { background: #1a1a2e; color: #7c7cff; }
+  .lane-distribution { background: var(--bg-elevated); color: var(--accent); }
   .lane-shipping { background: #2e2a1a; color: #ffaa00; }
-  .lane-systems { background: #1a1a1a; color: #888; }
+  .lane-systems { background: var(--bg-elevated); color: var(--text-secondary); }
 
   .int-browse-item {
     display: flex; align-items: center; gap: 10px;
-    padding: 8px 10px; background: #111118; border: 1px solid #1e1e30;
+    padding: 8px 10px; background: var(--bg-card); border: 1px solid var(--border);
     border-radius: 8px; cursor: pointer; transition: border-color 0.15s;
     color: inherit; width: 100%;
   }
@@ -2117,18 +2117,18 @@ Tracked with Wirebot — your AI business operating partner`;
   .int-browse-item.int-connected { border-color: #1a3a1a; }
   .int-browse-item.int-coming { opacity: 0.35; cursor: default; }
   .int-icon { font-size: 18px; flex-shrink: 0; width: 24px; text-align: center; }
-  .int-browse-name { font-size: 12px; color: #aaa; flex: 1; }
+  .int-browse-name { font-size: 12px; color: var(--text-secondary); flex: 1; }
   .int-check { color: #2ecc71; font-size: 12px; }
-  .int-soon-sm { font-size: 9px; color: #444; font-style: italic; }
+  .int-soon-sm { font-size: 9px; color: var(--text-muted); font-style: italic; }
 
   .s-info { font-size: 13px; opacity: 0.6; line-height: 1.6; }
   .s-links { display: flex; gap: 8px; flex-wrap: wrap; }
   .s-links a {
-    color: #7c7cff;
+    color: var(--accent);
     text-decoration: none;
     font-size: 13px;
     padding: 6px 12px;
-    border: 1px solid #2a2a40;
+    border: 1px solid var(--border-light);
     border-radius: 6px;
   }
 
@@ -2162,7 +2162,7 @@ Tracked with Wirebot — your AI business operating partner`;
   }
   .login-manual input:focus { outline: none; border-color: var(--accent); }
   .login-privacy {
-    font-size: 12px; color: #444; margin-top: 8px;
+    font-size: 12px; color: var(--text-muted); margin-top: 8px;
   }
 
   /* ── Pairing Modal (full-screen takeover on mobile) ── */
@@ -2180,7 +2180,7 @@ Tracked with Wirebot — your AI business operating partner`;
   }
   .pairing-sheet {
     position: absolute; inset: 0;
-    background: #0d0d1a;
+    background: var(--bg);
     display: flex; flex-direction: column;
     overflow-y: auto;
     -webkit-overflow-scrolling: touch;
@@ -2193,7 +2193,7 @@ Tracked with Wirebot — your AI business operating partner`;
   }
   .pairing-content {
     position: absolute; inset: 0;
-    background: #0d0d1a;
+    background: var(--bg);
     display: flex; flex-direction: column;
     overflow-y: auto;
     -webkit-overflow-scrolling: touch;
@@ -2206,7 +2206,7 @@ Tracked with Wirebot — your AI business operating partner`;
   .pi-header {
     display: flex; align-items: center; justify-content: space-between;
     padding: 20px 20px 8px; flex-shrink: 0;
-    position: sticky; top: 0; background: #0d0d1a; z-index: 2;
+    position: sticky; top: 0; background: var(--bg); z-index: 2;
   }
   .pi-title { font-size: 20px; font-weight: 700; color: #fff; }
   .pi-close {
@@ -2216,7 +2216,7 @@ Tracked with Wirebot — your AI business operating partner`;
     display: flex; align-items: center; justify-content: center;
   }
   .pi-desc {
-    padding: 0 20px 16px; font-size: 13px; color: #888; line-height: 1.4;
+    padding: 0 20px 16px; font-size: 13px; color: var(--text-secondary); line-height: 1.4;
   }
   .pi-cards {
     display: flex; flex-direction: column; gap: 8px;
@@ -2239,10 +2239,10 @@ Tracked with Wirebot — your AI business operating partner`;
   .pi-icon { font-size: 24px; flex-shrink: 0; }
   .pi-info { flex: 1; }
   .pi-name { font-size: 15px; font-weight: 600; color: #fff; }
-  .pi-sub { font-size: 11px; color: #666; margin-top: 2px; }
-  .pi-go { font-size: 16px; color: #7c7cff; opacity: 0.6; }
+  .pi-sub { font-size: 11px; color: var(--text-secondary); margin-top: 2px; }
+  .pi-go { font-size: 16px; color: var(--accent); opacity: 0.6; }
   .pi-footer {
-    text-align: center; padding: 16px; font-size: 12px; color: #555;
+    text-align: center; padding: 16px; font-size: 12px; color: var(--text-muted);
   }
 </style>
 

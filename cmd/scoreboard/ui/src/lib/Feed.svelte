@@ -498,13 +498,13 @@
     display: flex; justify-content: space-between; align-items: baseline;
     margin-bottom: 8px; border-bottom: 1px solid #1e1e30; padding-bottom: 8px;
   }
-  .feed-hdr h2 { font-size: 16px; font-weight: 700; color: #7c7cff; }
+  .feed-hdr h2 { font-size: 16px; font-weight: 700; color: var(--accent); }
   .feed-right { display: flex; align-items: center; gap: 8px; }
-  .feed-count { font-size: 12px; color: #555; }
+  .feed-count { font-size: 12px; color: var(--text-muted); }
   .hdr-help {
     width: 22px; height: 22px; border-radius: 50%;
     background: rgba(124,124,255,0.1); border: 1px solid rgba(124,124,255,0.25);
-    color: #7c7cff; font-size: 12px; font-weight: 700; cursor: pointer;
+    color: var(--accent); font-size: 12px; font-weight: 700; cursor: pointer;
     display: flex; align-items: center; justify-content: center;
   }
 
@@ -512,10 +512,10 @@
   .tab-bar { display: flex; margin-bottom: 12px; border-radius: 8px; overflow: hidden; background: #12121e; }
   .tab {
     flex: 1; padding: 8px 4px; background: transparent; border: none;
-    color: #555; font-size: 13px; font-weight: 600; cursor: pointer;
+    color: var(--text-muted); font-size: 13px; font-weight: 600; cursor: pointer;
     text-align: center; -webkit-tap-highlight-color: transparent;
   }
-  .tab.active { color: #7c7cff; background: rgba(124,124,255,0.08); border-bottom: 2px solid #7c7cff; }
+  .tab.active { color: var(--accent); background: rgba(124,124,255,0.08); border-bottom: 2px solid #7c7cff; }
   .badge {
     min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px;
     background: #ff4444; color: white; font-size: 10px; font-weight: 700;
@@ -525,7 +525,7 @@
   /* ── Section labels ── */
   .section-label {
     font-size: 10px; text-transform: uppercase; letter-spacing: 1px;
-    color: #444; font-weight: 700; margin: 12px 0 6px; padding-left: 2px;
+    color: var(--text-muted); font-weight: 700; margin: 12px 0 6px; padding-left: 2px;
   }
   .section-divider { border-bottom: 1px solid #1a1a28; margin: 8px 0; }
 
@@ -542,19 +542,19 @@
   .proj-row.approved-row {
     padding: 8px 12px; cursor: default; opacity: 0.5;
   }
-  .proj-chevron { font-size: 10px; color: #555; width: 12px; flex-shrink: 0; }
+  .proj-chevron { font-size: 10px; color: var(--text-muted); width: 12px; flex-shrink: 0; }
   .proj-icon { font-size: 14px; flex-shrink: 0; }
   .proj-info { flex: 1; min-width: 0; display: flex; align-items: baseline; gap: 6px; }
-  .proj-label { font-size: 14px; font-weight: 600; color: #ccc; }
-  .proj-biz { font-size: 10px; color: #555; text-transform: uppercase; letter-spacing: 0.5px; }
+  .proj-label { font-size: 14px; font-weight: 600; color: var(--text); }
+  .proj-biz { font-size: 10px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; }
   .rename-input {
     background: #0a0a14; border: 1px solid #7c7cff; border-radius: 5px;
-    color: #ddd; font-size: 13px; font-weight: 600; padding: 3px 8px;
+    color: var(--text); font-size: 13px; font-weight: 600; padding: 3px 8px;
     width: 140px; outline: none;
   }
   .rename-input:focus { border-color: #9b9bff; box-shadow: 0 0 0 2px rgba(124,124,255,0.15); }
   .btn-rename {
-    background: none; border: none; color: #444; font-size: 12px;
+    background: none; border: none; color: var(--text-muted); font-size: 12px;
     cursor: pointer; padding: 2px 4px; opacity: 0;
     transition: opacity 0.15s; -webkit-tap-highlight-color: transparent;
   }
@@ -587,7 +587,7 @@
     border: 1px solid rgba(255,68,68,0.15);
   }
   .btn-reject-proj:active { background: rgba(255,68,68,0.2); }
-  .acting { color: #555; font-size: 12px; }
+  .acting { color: var(--text-muted); font-size: 12px; }
 
   /* ── Nested commit list ── */
   .commit-list {
@@ -603,7 +603,7 @@
   .commit-row:last-child { border-bottom: none; }
   .commit-body { flex: 1; min-width: 0; }
   .commit-msg {
-    font-size: 12px; color: #aaa; line-height: 1.35;
+    font-size: 12px; color: var(--text-secondary); line-height: 1.35;
     display: flex; gap: 5px; align-items: baseline;
   }
   .commit-type {
@@ -636,8 +636,8 @@
     background: rgba(0,0,0,0.1);
   }
   .pd-row { display: flex; justify-content: space-between; padding: 3px 0; font-size: 12px; }
-  .pd-label { color: #444; }
-  .pd-val { color: #888; }
+  .pd-label { color: var(--text-muted); }
+  .pd-val { color: var(--text-secondary); }
   .pd-ok { color: #2ecc71; }
   .pd-no { color: #ff4444; }
 
@@ -652,15 +652,15 @@
   .btn-sm.ok:active { background: rgba(46,204,113,0.25); }
   .btn-sm.no { background: rgba(255,68,68,0.06); color: #ff4444; }
   .btn-sm.no:active { background: rgba(255,68,68,0.2); }
-  .acting-sm { color: #444; font-size: 11px; }
+  .acting-sm { color: var(--text-muted); font-size: 11px; }
 
   /* ── All/Scored feed ── */
   .empty { text-align: center; padding: 40px 0; }
   .empty-icon { font-size: 40px; margin-bottom: 8px; }
   .empty p { font-size: 14px; opacity: 0.5; }
   .hint { margin-top: 4px; }
-  .hint code { font-family: monospace; color: #7c7cff; }
-  .loading { text-align: center; padding: 30px; color: #555; font-size: 13px; }
+  .hint code { font-family: monospace; color: var(--accent); }
+  .loading { text-align: center; padding: 30px; color: var(--text-muted); font-size: 13px; }
 
   .feed-list { display: flex; flex-direction: column; gap: 2px; }
   .feed-item {
@@ -680,9 +680,9 @@
   }
   .fi-biz-tag {
     font-size: 9px; font-weight: 600; background: rgba(124,124,255,0.1);
-    color: #7c7cff; padding: 1px 5px; border-radius: 3px;
+    color: var(--accent); padding: 1px 5px; border-radius: 3px;
   }
-  .fi-delta { font-size: 14px; font-weight: 700; font-variant-numeric: tabular-nums; color: #555; flex-shrink: 0; }
+  .fi-delta { font-size: 14px; font-weight: 700; font-variant-numeric: tabular-nums; color: var(--text-muted); flex-shrink: 0; }
   .fi-delta.positive { color: #2ecc71; }
 
   /* Business filter pills */
@@ -693,9 +693,9 @@
   .biz-pills::-webkit-scrollbar { display: none; }
   .biz-pill {
     padding: 5px 12px; border-radius: 20px; font-size: 11px; font-weight: 600;
-    background: #111118; border: 1px solid #1e1e30; color: #666;
+    background: var(--bg-card); border: 1px solid var(--border); color: var(--text-secondary);
     cursor: pointer; white-space: nowrap; transition: all 0.15s;
   }
-  .biz-pill:hover { border-color: #7c7cff40; color: #aaa; }
-  .biz-pill.active { background: #7c7cff15; border-color: #7c7cff; color: #7c7cff; }
+  .biz-pill:hover { border-color: #7c7cff40; color: var(--text-secondary); }
+  .biz-pill.active { background: #7c7cff15; border-color: var(--accent); color: var(--accent); }
 </style>

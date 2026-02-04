@@ -177,7 +177,7 @@
     height: 60px;
     display: flex;
     align-items: flex-end;
-    background: #111118;
+    background: var(--bg-card);
     border-top: 1px solid #1e1e30;
     padding-bottom: env(safe-area-inset-bottom, 0);
     z-index: 100;
@@ -193,7 +193,7 @@
     gap: 2px;
     background: none;
     border: none;
-    color: #555;
+    color: var(--text-muted);
     cursor: pointer;
     -webkit-tap-highlight-color: transparent;
     transition: all 0.2s ease;
@@ -220,7 +220,7 @@
     box-shadow: 0 -4px 24px rgba(124, 124, 255, 0.25);
   }
 
-  .tab.active { color: #7c7cff; }
+  .tab.active { color: var(--accent); }
   .tab.active::before {
     content: '';
     position: absolute;
@@ -281,7 +281,7 @@
     position: absolute;
     top: 4px;
     font-size: 10px;
-    color: #444;
+    color: var(--text-muted);
     letter-spacing: -2px;
   }
 
@@ -292,9 +292,9 @@
     width: 28px;
     height: 28px;
     border-radius: 50%;
-    background: #1a1a2e;
+    background: var(--bg-elevated);
     border: 1px solid #2a2a50;
-    color: #7c7cff;
+    color: var(--accent);
     font-size: 12px;
     cursor: pointer;
     display: flex;
@@ -323,7 +323,7 @@
     align-items: center;
     gap: 12px;
     font-size: 11px;
-    color: #888;
+    color: var(--text-secondary);
     z-index: 99;
     backdrop-filter: blur(8px);
   }

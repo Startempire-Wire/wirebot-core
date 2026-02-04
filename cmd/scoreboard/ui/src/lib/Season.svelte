@@ -153,16 +153,16 @@
     border-bottom: 1px solid #1e1e30;
     padding-bottom: 6px;
   }
-  .s-hdr h2 { font-size: 16px; font-weight: 700; color: #7c7cff; }
+  .s-hdr h2 { font-size: 16px; font-weight: 700; color: var(--accent); }
   .s-hdr-right { display: flex; align-items: center; gap: 8px; }
-  .s-num { font-size: 12px; color: #555; }
+  .s-num { font-size: 12px; color: var(--text-muted); }
   .hdr-help {
     width: 22px;
     height: 22px;
     border-radius: 50%;
     background: rgba(124,124,255,0.1);
     border: 1px solid rgba(124,124,255,0.25);
-    color: #7c7cff;
+    color: var(--accent);
     font-size: 12px;
     font-weight: 700;
     cursor: pointer;
@@ -175,7 +175,7 @@
 
   /* Progress */
   .s-progress { margin: 4px 0; }
-  .sp-bar { height: 8px; background: #1a1a2e; border-radius: 4px; overflow: hidden; }
+  .sp-bar { height: 8px; background: var(--bg-elevated); border-radius: 4px; overflow: hidden; }
   .sp-fill { height: 100%; background: linear-gradient(90deg, #ff6b4a, #ff4a9e); border-radius: 4px; transition: width 1s; }
   .sp-labels { display: flex; justify-content: space-between; font-size: 10px; opacity: 0.35; margin-top: 4px; }
 
@@ -193,7 +193,7 @@
   .bs-lbl { font-size: 9px; opacity: 0.35; letter-spacing: 0.1em; margin-top: 2px; }
 
   /* Calendar */
-  .cal { background: #111118; border-radius: 12px; padding: 12px; }
+  .cal { background: var(--bg-card); border-radius: 12px; padding: 12px; }
   .cal-title { font-size: 13px; font-weight: 600; margin-bottom: 8px; text-align: center; }
   .cal-dow {
     display: grid;
@@ -247,7 +247,7 @@
     padding: 4px 0;
   }
   .hr-date { font-size: 11px; opacity: 0.4; width: 38px; flex-shrink: 0; font-variant-numeric: tabular-nums; }
-  .hr-bar-track { flex: 1; height: 8px; background: #1a1a2e; border-radius: 4px; overflow: hidden; }
+  .hr-bar-track { flex: 1; height: 8px; background: var(--bg-elevated); border-radius: 4px; overflow: hidden; }
   .hr-bar-fill { height: 100%; border-radius: 4px; transition: width 0.5s; }
   .hr-bar-fill.won { background: #00ff64; }
   .hr-bar-fill.mid { background: #ffc800; }
