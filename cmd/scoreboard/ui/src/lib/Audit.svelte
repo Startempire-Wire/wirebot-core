@@ -12,7 +12,8 @@
   let toast = $state('');
   
   const API = '';
-  const token = typeof localStorage !== 'undefined' ? localStorage.getItem('token') : '';
+  const n = typeof localStorage !== 'undefined' ? localStorage : null;
+  const token = n?.getItem('wb_token') || n?.getItem('rl_jwt') || n?.getItem('operator_token') || '';
   
   onMount(() => {
     loadInteractions();
