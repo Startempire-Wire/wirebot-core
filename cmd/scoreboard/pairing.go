@@ -51,6 +51,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"math"
 	"net/http"
@@ -1051,43 +1052,37 @@ func (pe *PairingEngine) syncToMemory() {
 	summary := pe.GetChatContextSummary()
 	client := &http.Client{Timeout: 30 * time.Second}
 
-	// Escape for JSON: replace newlines and quotes
-	safeSummary := strings.ReplaceAll(summary, "\\", "\\\\")
-	safeSummary = strings.ReplaceAll(safeSummary, "\"", "'")
-	safeSummary = strings.ReplaceAll(safeSummary, "\n", " | ")
-	safeSummary = strings.ReplaceAll(safeSummary, "\r", "")
-
 	// ── 1. Mem0 (if namespace configured) ───────────────────────────────────
 	if pe.config.Mem0Namespace != "" {
-		mem0Payload := fmt.Sprintf(
-			`{"messages":[{"role":"user","content":"Founder profile update: %s"}],"namespace":"%s","category":"founder_profile"}`,
-			safeSummary, pe.config.Mem0Namespace)
-		req, err := http.NewRequest("POST", pe.config.Mem0URL+"/v1/store", strings.NewReader(mem0Payload))
+		payload, _ := json.Marshal(map[string]interface{}{
+			"messages":  []map[string]string{{"role": "user", "content": "Founder profile update: " + summary}},
+			"namespace": pe.config.Mem0Namespace,
+			"category":  "founder_profile",
+		})
+		req, err := http.NewRequest("POST", pe.config.Mem0URL+"/v1/store", bytes.NewReader(payload))
 		if err != nil {
 			log.Printf("[pairing] Mem0 request build error: %v", err)
 		} else {
 			req.Header.Set("Content-Type", "application/json")
-			req.Header.Set("Content-Length", fmt.Sprintf("%d", len(mem0Payload)))
 			resp, err := client.Do(req)
 			if err != nil {
 				log.Printf("[pairing] Mem0 sync error: %v", err)
 			} else {
-				body := make([]byte, 200)
-				n, _ := resp.Body.Read(body)
+				respBody, _ := io.ReadAll(resp.Body)
 				resp.Body.Close()
-				log.Printf("[pairing] Mem0 sync: status=%d body=%s", resp.StatusCode, string(body[:n]))
+				log.Printf("[pairing] Mem0 sync: status=%d body=%s", resp.StatusCode, string(respBody[:min(200, len(respBody))]))
 			}
 		}
 	}
 
-	// ── 2. Letta (if agent ID configured) — route through agent message, not direct PATCH
+	// ── 2. Letta (if agent ID configured) — route through agent message
 	if pe.config.LettaAgentID != "" {
 		stageUpdate := fmt.Sprintf(
 			"Pairing profile update from assessment:\nCurrent Score: %.0f/100\nPairing Level: %s (%.0f%% accuracy)\nProfile: %s\n\nPlease update your business_stage, human, and goals blocks with any relevant new information.",
 			pe.profile.PairingScore.Composite,
 			pe.profile.PairingScore.Level,
 			pe.computeAccuracy()*100,
-			safeSummary)
+			summary)
 
 		payload, _ := json.Marshal(map[string]interface{}{
 			"messages": []map[string]string{{"role": "user", "content": stageUpdate}},
@@ -1095,7 +1090,9 @@ func (pe *PairingEngine) syncToMemory() {
 		req, err := http.NewRequest("POST",
 			fmt.Sprintf("%s/v1/agents/%s/messages/", pe.config.LettaURL, pe.config.LettaAgentID),
 			bytes.NewReader(payload))
-		if err == nil {
+		if err != nil {
+			log.Printf("[pairing] Letta request build error: %v", err)
+		} else {
 			req.Header.Set("Content-Type", "application/json")
 			req.Header.Set("Authorization", "Bearer letta")
 			resp, err := client.Do(req)
@@ -1110,10 +1107,12 @@ func (pe *PairingEngine) syncToMemory() {
 
 	// ── 3. Gateway memory-core (if token configured) ────────────────────────
 	if pe.config.GatewayToken != "" {
-		rememberPayload := fmt.Sprintf(
-			`{"tool":"wirebot_remember","args":{"fact":"PROFILE UPDATE: %s"}}`, safeSummary)
+		payload, _ := json.Marshal(map[string]interface{}{
+			"tool": "wirebot_remember",
+			"args": map[string]string{"fact": "PROFILE UPDATE: " + summary},
+		})
 		req, err := http.NewRequest("POST", pe.config.GatewayURL+"/tools/invoke",
-			strings.NewReader(rememberPayload))
+			bytes.NewReader(payload))
 		if err != nil {
 			log.Printf("[pairing] Gateway request build error: %v", err)
 		} else {
@@ -1123,10 +1122,9 @@ func (pe *PairingEngine) syncToMemory() {
 			if err != nil {
 				log.Printf("[pairing] Gateway sync error: %v", err)
 			} else {
-				body := make([]byte, 200)
-				n, _ := resp.Body.Read(body)
+				respBody, _ := io.ReadAll(resp.Body)
 				resp.Body.Close()
-				log.Printf("[pairing] Gateway sync: status=%d body=%s", resp.StatusCode, string(body[:n]))
+				log.Printf("[pairing] Gateway sync: status=%d body=%s", resp.StatusCode, string(respBody[:min(200, len(respBody))]))
 			}
 		}
 	}
