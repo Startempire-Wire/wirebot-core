@@ -84,26 +84,26 @@
 | **Dimensions** | 768 |
 | **Cost** | Free (runs locally, no API calls) |
 
-### 8. Letta Agent — LLM ⚠️ BROKEN (OpenRouter $0)
+### 8. Letta Agent — LLM ✅ Fixed
 
 | Field | Value |
 |-------|-------|
 | **Location** | PostgreSQL `letta` database → `agents` table → `llm_config` column |
 | **Agent** | `wirebot_verious` |
-| **Model** | `anthropic/claude-haiku-4.5` |
-| **Endpoint** | `https://openrouter.ai/api/v1` |
+| **Model** | `kimi-coding/k2p5` |
+| **Endpoint** | `http://127.0.0.1:18789/v1` |
 | **Cost** | **BROKEN** — OpenRouter balance is $0 |
-| **⚠️ Status** | Letta service is **inactive**. When restarted, all LLM calls will fail. |
+| **Status** | ✅ Active — routing through local gateway at $0/month |
 | **Fix needed** | Update agent config in PostgreSQL to use local gateway, or switch model |
 
-### 9. Letta Agent — Embeddings ⚠️ BROKEN (OpenRouter $0)
+### 9. Letta Agent — Embeddings ✅ Fixed
 
 | Field | Value |
 |-------|-------|
 | **Location** | PostgreSQL `letta` database → `agents` table → `embedding_config` column |
 | **Agent** | `wirebot_verious` |
-| **Model** | `text-embedding-3-small` |
-| **Endpoint** | `https://openrouter.ai/api/v1` |
+| **Model** | `letta/letta-free` |
+| **Endpoint** | `http://127.0.0.1:18789/v1` |
 | **Dimensions** | 1536 |
 | **Cost** | **BROKEN** — OpenRouter balance is $0 |
 | **Fix needed** | Switch to local fastembed or route through gateway |
@@ -187,8 +187,8 @@
 | `OPENROUTER_API_KEY` | `/run/wirebot/gateway.env` | gateway (last fallback), ⚠️ Mem0 (popped) | `sk-or-v1-a2b...` ($0 balance) |
 | `KIMI_API_KEY` | `/run/wirebot/gateway.env` | gateway (Kimi provider) | Set (from rbw vault) |
 | `ZAI_API_KEY` | `/run/wirebot/gateway.env` | gateway (GLM provider) | Set (from rbw vault) |
-| `OPENAI_API_KEY` | letta scripts | Letta agent | Set to `${OPENROUTER_API_KEY}` ⚠️ broken |
-| `OPENAI_BASE_URL` | letta scripts | Letta agent | `https://openrouter.ai/api/v1` ⚠️ broken |
+| `OPENAI_API_KEY` | letta scripts | Letta agent | Gateway token (local) ✅ |
+| `OPENAI_BASE_URL` | letta scripts | Letta agent | `http://127.0.0.1:18789/v1` ✅ |
 
 ---
 
@@ -203,17 +203,17 @@
 | Mem0 embeddings | BAAI/bge-base-en-v1.5 | Local fastembed | **Free** |
 | Scoreboard extraction | kimi-coding/k2p5 | Kimi (via gateway) | **Free** |
 | Scoreboard drafts | kimi-coding/k2p5 | Kimi (via gateway) | **Free** |
-| Letta LLM | anthropic/claude-haiku-4.5 | OpenRouter | **⚠️ $0 balance** |
-| Letta embeddings | text-embedding-3-small | OpenRouter | **⚠️ $0 balance** |
-| **Total monthly** | | | **$0** (Letta offline) |
+| Letta LLM | kimi-coding/k2p5 | Gateway | ✅ $0 (free) |
+| Letta embeddings | letta/letta-free | Local (built-in) | ✅ $0 (free) |
+| **Total monthly** | | | **$0** (all services active) |
 
 ---
 
 ## Action Items
 
-1. **Fix Letta** — Update PostgreSQL agent config + launch scripts to use local gateway instead of OpenRouter
-2. **Hardcoded model in `generateDraftForTask()`** — Make env-configurable like extraction model
-3. **Update MEMORY.md** — Runtime is OpenClaw v2026.2.2-3, not Clawdbot
+1. ~~**Fix Letta**~~ ✅ Done — kimi-coding/k2p5 via gateway, letta/letta-free for embeddings
+2. ~~**Hardcoded model in `generateDraftForTask()`**~~ ✅ Done — `envOr("DRAFT_MODEL", "kimi-coding/k2p5")`
+3. ~~**Update MEMORY.md**~~ ✅ Done — Clawdbot → OpenClaw throughout
 4. **Archive clawdbot.json** — No longer loaded by anything
 5. **Monitor OpenRouter** — Key still injected by `inject-gateway-secrets.sh` but nothing actively uses it
 
