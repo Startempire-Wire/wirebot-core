@@ -1870,7 +1870,7 @@ Tracked with Wirebot — your AI business operating partner`;
   .sc-val { font-size: 12px; color: var(--text-secondary); text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .sc-link { font-size: 12px; color: var(--accent); text-decoration: none; text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .sc-link:hover { text-decoration: underline; }
-  .sc-bio { font-size: 11px; color: var(--text-muted); line-height: 1.5; border-top: 1px solid #1e1e2e; padding-top: 8px; }
+  .sc-bio { font-size: 11px; color: var(--text-muted); line-height: 1.5; border-top: 1px solid var(--border); padding-top: 8px; }
 
   .tier-badge {
     font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 4px;
@@ -1980,7 +1980,7 @@ Tracked with Wirebot — your AI business operating partner`;
   .int-active-section { display: flex; flex-direction: column; gap: 6px; }
   .int-active-card {
     display: flex; align-items: center; gap: 10px;
-    padding: 10px 12px; background: var(--bg-card); border: 1px solid #1a3a1a;
+    padding: 10px 12px; background: var(--bg-card); border: 1px solid var(--success-border);
     border-radius: 10px;
   }
   .int-active-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
@@ -2012,7 +2012,7 @@ Tracked with Wirebot — your AI business operating partner`;
   /* Grouped integrations */
   .int-grouped-section { display: flex; flex-direction: column; gap: 8px; }
   .int-group {
-    background: var(--bg); border: 1px solid #1a1a2a; border-radius: 12px;
+    background: var(--bg); border: 1px solid var(--border); border-radius: 12px;
     overflow: hidden;
   }
   .int-group[open] { border-color: var(--border-active); }
@@ -2110,7 +2110,7 @@ Tracked with Wirebot — your AI business operating partner`;
   .int-setup-input:focus { border-color: var(--accent); }
   .int-setup-biz {
     width: 100%; padding: 8px 10px; border-radius: 8px;
-    background: var(--bg); border: 1px solid #222;
+    background: var(--bg); border: 1px solid var(--border);
     color: var(--text-secondary); font-size: 12px; margin-bottom: 8px;
     appearance: none; -webkit-appearance: none;
   }

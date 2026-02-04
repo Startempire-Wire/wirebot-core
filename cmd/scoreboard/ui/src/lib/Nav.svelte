@@ -178,7 +178,7 @@
     display: flex;
     align-items: flex-end;
     background: var(--bg-card);
-    border-top: 1px solid #1e1e30;
+    border-top: 1px solid var(--border);
     padding-bottom: env(safe-area-inset-bottom, 0);
     z-index: 100;
     view-transition-name: nav;
@@ -207,16 +207,16 @@
     flex: 1.8;
     height: 72px;
     margin-top: -16px;
-    background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+    background: var(--card-gradient);
     border-radius: 16px 16px 0 0;
-    border: 1px solid #2a2a50;
+    border: 1px solid var(--border-light);
     border-bottom: none;
     box-shadow: 0 -4px 20px rgba(124, 124, 255, 0.15);
   }
   .tab.middle .tab-icon { font-size: 26px; }
   .tab.middle .tab-label { font-size: 10px; font-weight: 600; }
   .tab.middle.active {
-    background: linear-gradient(135deg, #1e1e3a 0%, #1a2a4e 100%);
+    background: var(--card-gradient);
     box-shadow: 0 -4px 24px rgba(124, 124, 255, 0.25);
   }
 
@@ -293,7 +293,7 @@
     height: 28px;
     border-radius: 50%;
     background: var(--bg-elevated);
-    border: 1px solid #2a2a50;
+    border: 1px solid var(--border-light);
     color: var(--accent);
     font-size: 12px;
     cursor: pointer;
@@ -315,8 +315,8 @@
     bottom: calc(60px + env(safe-area-inset-bottom, 0) + 8px);
     left: 50%;
     transform: translateX(-50%);
-    background: rgba(10, 10, 18, 0.95);
-    border: 1px solid #2a2a50;
+    background: var(--bg-card);
+    border: 1px solid var(--border-light);
     border-radius: 8px;
     padding: 8px 12px;
     display: flex;

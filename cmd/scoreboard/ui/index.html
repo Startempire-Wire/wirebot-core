@@ -10,14 +10,27 @@
     <link rel="manifest" href="/manifest.json" />
     <title>Wirebot Scoreboard</title>
     <script>
-      // Apply theme BEFORE CSS loads to prevent flash-of-wrong-theme
+      // 1. Kill stale service workers that cache-lock old CSS
+      (function() {
+        if ('serviceWorker' in navigator) {
+          navigator.serviceWorker.getRegistrations().then(function(regs) {
+            regs.forEach(function(r) { r.unregister(); });
+          });
+          // Also clear all caches to purge old assets
+          if ('caches' in window) {
+            caches.keys().then(function(keys) {
+              keys.forEach(function(k) { caches.delete(k); });
+            });
+          }
+        }
+      })();
+      // 2. Apply theme BEFORE CSS loads to prevent flash-of-wrong-theme
       (function() {
         var t = localStorage.getItem('theme') || 'system';
         if (t === 'system') {
           t = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
         }
         document.documentElement.setAttribute('data-theme', t);
-        // Update theme-color meta for mobile browser chrome
         var meta = document.getElementById('theme-color-meta');
         if (meta) meta.content = t === 'light' ? '#f5f5f7' : '#0a0a0f';
       })();
