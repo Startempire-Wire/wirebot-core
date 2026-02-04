@@ -21,14 +21,13 @@
   async function fetchHealth() {
     if (polling) return; // skip if previous still running
     polling = true;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 8000);
     try {
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 8000);
       const resp = await fetch('/v1/system/health', {
         headers: { 'Authorization': `Bearer ${token}` },
         signal: controller.signal
       });
-      clearTimeout(timeout);
       if (resp.ok) {
         health = await resp.json();
         lastChecked = new Date().toLocaleTimeString();
@@ -38,6 +37,8 @@
       }
     } catch (e) {
       if (e.name !== 'AbortError') error = true;
+    } finally {
+      clearTimeout(timeout);
     }
     loading = false;
     polling = false;

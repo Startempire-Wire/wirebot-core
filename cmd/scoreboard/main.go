@@ -1185,7 +1185,7 @@ func (s *Server) handleSystemHealth(w http.ResponseWriter, r *http.Request) {
 	s.db.QueryRow("SELECT COUNT(*) FROM memory_queue WHERE status='pending'").Scan(&pending)
 	s.db.QueryRow("SELECT COUNT(*) FROM memory_queue WHERE status='approved'").Scan(&approved)
 
-	// Disk quota (read from /proc if available, otherwise skip)
+	// Disk quota via quota command (returns 0 if unavailable)
 	diskPct := 0
 	if out, err := exec.Command("sh", "-c", `quota -u wirebot 2>/dev/null | awk '/\/dev\//{getline; printf "%.0f", $1/$2*100}'`).Output(); err == nil {
 		fmt.Sscanf(string(out), "%d", &diskPct)
