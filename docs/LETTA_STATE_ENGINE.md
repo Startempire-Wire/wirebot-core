@@ -224,12 +224,17 @@ Alerts come from the scoreboard reading structured state — not from Letta deci
 
 ## Implementation Plan
 
-### Phase 1: State Feeder (est. 2 hours)
-1. Add `lettaStateFeeder()` goroutine to scoreboard
-2. Feed approved memories → Letta async messages
-3. Feed scoreboard events → Letta async messages
-4. Rate limiter: max 10 messages per 5-minute window
-5. Track watermarks (last processed IDs) in SQLite
+### Phase 1: State Feeder ✅ COMPLETE (2026-02-04)
+1. ✅ `lettaStateFeeder()` goroutine in `letta_feeder.go` (commit `7ea7d99`)
+2. ✅ Feed approved memories → Letta async messages (all, not keyword-filtered)
+3. ✅ Feed scoreboard events → Letta async messages
+4. ✅ Rate limiter: max 10 messages per 5-minute window
+5. ✅ Watermarks in `letta_feeder_state` table (survive restarts)
+6. ✅ Break-on-failure: stops on first send error, retries next tick
+7. ✅ Tuned for OpenRouter free tier: 1 msg/tick, 60s interval, 3min timeout
+
+**Runtime:** LLM via OpenRouter `z-ai/glm-4.5-air:free` (kimi key expired)
+**Backlog:** 193 approved memories + 712 events, catching up at ~2 msgs/min
 
 ### Phase 2: Agent Prompt Update (est. 30 min)
 1. Update Letta system prompt — subsystem role, not agent role
@@ -252,8 +257,8 @@ Alerts come from the scoreboard reading structured state — not from Letta deci
 
 | Component | Cost |
 |-----------|------|
-| Letta block updates via kimi gateway | $0/month |
-| ~50-100 async messages/day | Within kimi free tier |
+| Letta block updates via OpenRouter free tier | $0/month |
+| ~50-100 async messages/day | Within glm-4.5-air:free limits |
 | **Total** | **$0/month** |
 
 ---
