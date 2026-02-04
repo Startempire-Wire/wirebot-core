@@ -206,8 +206,8 @@
   <!-- Pipeline explainer -->
   <div class="pipeline-info">
     <div class="pipe-step">👍 Good → Pattern saved to TRAINING.md</div>
-    <div class="pipe-step">👎 Bad → Correction → Mem0 + TRAINING.md</div>
-    <div class="pipe-step">🧠 Memory → Mem0 + Letta (via approval queue)</div>
+    <div class="pipe-step">👎 Bad → Correction → TRAINING.md + Mem0 + Letta queue</div>
+    <div class="pipe-step">🧠 Memory → Mem0 + Letta queue + TRAINING.md</div>
     <div class="pipe-step">📝 Note → Stored for context</div>
   </div>
   
@@ -318,7 +318,7 @@
         {:else if feedbackType === 'bad'}
           <span>→ Correction sent to Mem0 + TRAINING.md + review queue</span>
         {:else if feedbackType === 'memory'}
-          <span>→ Memory sent to Mem0 + queued for Letta state update</span>
+          <span>→ Memory sent to Mem0 + Letta queue + TRAINING.md</span>
         {:else}
           <span>→ Note stored for future reference</span>
         {/if}
