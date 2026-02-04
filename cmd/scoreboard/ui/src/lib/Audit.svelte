@@ -4,7 +4,7 @@
   let interactions = $state([]);
   let stats = $state({ total: 0, good: 0, bad: 0, memory: 0, accuracy: null });
   let loading = $state(true);
-  let filter = $state({ mode: '', channel: '', limit: 50 });
+  let filter = $state({ mode: '', limit: 50 });
   let feedbackModal = $state(null);
   let feedbackText = $state('');
   let feedbackType = $state('good');
@@ -24,7 +24,6 @@
     try {
       const params = new URLSearchParams();
       if (filter.mode) params.set('mode', filter.mode);
-      if (filter.channel) params.set('channel', filter.channel);
       params.set('limit', filter.limit);
       
       const res = await fetch(`${API}/v1/discord/interactions?${params}`, {
@@ -111,13 +110,14 @@
   }
   
   function quickFeedback(interaction, type) {
-    if (type === 'good' || type === 'bad') {
-      // Quick submit without modal for simple thumbs
+    if (type === 'good') {
+      // Quick submit without modal — 👍 is useful even without text
       feedbackModal = interaction;
       feedbackType = type;
       feedbackText = '';
       submitFeedback();
     } else {
+      // 👎, 🧠, 📝 all need text input — open modal
       feedbackModal = interaction;
       feedbackType = type;
       feedbackText = '';

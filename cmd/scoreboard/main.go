@@ -10501,14 +10501,16 @@ func (s *Server) handleDiscordInteractions(w http.ResponseWriter, r *http.Reques
 		json.Unmarshal([]byte(toolsJSON), &i.ToolsUsed)
 
 		// Get feedback for this interaction
-		fbRows, _ := s.db.Query(`SELECT id, feedback_type, feedback_text, COALESCE(memory_action,''), created_at 
+		fbRows, fbErr := s.db.Query(`SELECT id, feedback_type, feedback_text, COALESCE(memory_action,''), created_at 
 			FROM interaction_feedback WHERE interaction_id = ?`, i.InteractionID)
-		for fbRows.Next() {
-			var fb InteractionFeedback
-			fbRows.Scan(&fb.ID, &fb.FeedbackType, &fb.FeedbackText, &fb.MemoryAction, &fb.CreatedAt)
-			i.Feedback = append(i.Feedback, fb)
+		if fbErr == nil {
+			for fbRows.Next() {
+				var fb InteractionFeedback
+				fbRows.Scan(&fb.ID, &fb.FeedbackType, &fb.FeedbackText, &fb.MemoryAction, &fb.CreatedAt)
+				i.Feedback = append(i.Feedback, fb)
+			}
+			fbRows.Close()
 		}
-		fbRows.Close()
 
 		interactions = append(interactions, i)
 	}
@@ -10563,21 +10565,19 @@ func (s *Server) handleDiscordFeedback(w http.ResponseWriter, r *http.Request) {
 	switch req.FeedbackType {
 	case "good":
 		// Good response → extract as positive pattern → TRAINING.md
-		// The LLM reads TRAINING.md every conversation via workspace bootstrap
 		pattern := req.FeedbackText
 		if pattern == "" {
-			// Auto-generate a brief pattern description
-			if len(userMsg) > 80 {
-				userMsg = userMsg[:80]
+			shortQ := userMsg
+			if len(shortQ) > 80 {
+				shortQ = shortQ[:80]
 			}
-			pattern = fmt.Sprintf("Good response to: \"%s\"", userMsg)
+			pattern = fmt.Sprintf("Good response to: \"%s\"", shortQ)
 		}
-		entry := fmt.Sprintf("✅ DO: %s", pattern)
-		s.appendTrainingEntry(entry)
+		s.appendTrainingEntry(fmt.Sprintf("✅ DO: %s", pattern))
 		pipelineActions = append(pipelineActions, "Pattern → TRAINING.md")
 
 	case "bad":
-		// Bad response → store correction in TRAINING.md + Mem0
+		// Bad response → correction → TRAINING.md + Mem0 + queue → Letta
 		correction := req.FeedbackText
 		if correction == "" {
 			correction = "(no correction provided)"
@@ -10586,40 +10586,16 @@ func (s *Server) handleDiscordFeedback(w http.ResponseWriter, r *http.Request) {
 		if len(shortQ) > 80 {
 			shortQ = shortQ[:80]
 		}
-		entry := fmt.Sprintf("❌ DON'T: When asked \"%s\" — %s", shortQ, correction)
-		s.appendTrainingEntry(entry)
+		s.appendTrainingEntry(fmt.Sprintf("❌ DON'T: When asked \"%s\" — %s", shortQ, correction))
 		pipelineActions = append(pipelineActions, "Correction → TRAINING.md")
 
-		// Also push to Mem0 so it surfaces in semantic recall
-		go func() {
-			memText := fmt.Sprintf("Operator correction: When asked '%s', the response was wrong. Instead: %s",
-				shortQ, correction)
-			payload, _ := json.Marshal(map[string]interface{}{
-				"messages": []map[string]string{{"role": "user", "content": memText}},
-				"user_id":  "wirebot_verious",
-			})
-			resp, err := http.Post("http://127.0.0.1:8200/v1/memories/", "application/json", bytes.NewReader(payload))
-			if err != nil {
-				log.Printf("[training] Mem0 correction error: %v", err)
-			} else {
-				resp.Body.Close()
-				log.Printf("[training] Mem0 correction stored for %s", req.InteractionID)
-			}
-		}()
+		// Push to Mem0 (correct endpoint: /v1/store, key: namespace not user_id)
+		interID := req.InteractionID
+		go s.mem0Store(fmt.Sprintf("Operator correction: When asked '%s', the response was wrong. Instead: %s", shortQ, correction), interID)
 		pipelineActions = append(pipelineActions, "Correction → Mem0")
 
 		// Route through scoreboard queue for Letta state feeder
-		go func() {
-			payload, _ := json.Marshal(map[string]interface{}{
-				"content":  fmt.Sprintf("Operator correction: %s (context: user asked '%s')", correction, shortQ),
-				"source":   "training-feedback",
-				"priority": 1,
-			})
-			req2, _ := http.NewRequest("POST", "http://127.0.0.1:8100/v1/memory/queue", bytes.NewReader(payload))
-			req2.Header.Set("Content-Type", "application/json")
-			req2.Header.Set("Authorization", "Bearer "+authToken)
-			http.DefaultClient.Do(req2)
-		}()
+		go s.queueForLetta(fmt.Sprintf("Operator correction: %s (context: user asked '%s')", correction, shortQ))
 		pipelineActions = append(pipelineActions, "Queued → Letta")
 
 	case "memory":
@@ -10629,43 +10605,17 @@ func (s *Server) handleDiscordFeedback(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 
-		// Mem0 — immediate storage
-		go func() {
-			payload, _ := json.Marshal(map[string]interface{}{
-				"messages": []map[string]string{{"role": "user", "content": memText}},
-				"user_id":  "wirebot_verious",
-			})
-			resp, err := http.Post("http://127.0.0.1:8200/v1/memories/", "application/json", bytes.NewReader(payload))
-			if err != nil {
-				log.Printf("[training] Mem0 memory error: %v", err)
-			} else {
-				resp.Body.Close()
-				log.Printf("[training] Memory stored in Mem0 for %s", req.InteractionID)
-			}
-		}()
+		interID := req.InteractionID
+		go s.mem0Store(memText, interID)
 		pipelineActions = append(pipelineActions, "Memory → Mem0")
 
-		// Scoreboard queue → human review → Letta feeder
-		go func() {
-			payload, _ := json.Marshal(map[string]interface{}{
-				"content":  fmt.Sprintf("Operator taught: %s", memText),
-				"source":   "training-feedback",
-				"priority": 1,
-			})
-			req2, _ := http.NewRequest("POST", "http://127.0.0.1:8100/v1/memory/queue", bytes.NewReader(payload))
-			req2.Header.Set("Content-Type", "application/json")
-			req2.Header.Set("Authorization", "Bearer "+authToken)
-			http.DefaultClient.Do(req2)
-		}()
+		go s.queueForLetta(fmt.Sprintf("Operator taught: %s", memText))
 		pipelineActions = append(pipelineActions, "Queued → Letta")
 
-		// Also add to TRAINING.md
-		entry := fmt.Sprintf("🧠 REMEMBER: %s", memText)
-		s.appendTrainingEntry(entry)
+		s.appendTrainingEntry(fmt.Sprintf("🧠 REMEMBER: %s", memText))
 		pipelineActions = append(pipelineActions, "Fact → TRAINING.md")
 
 	case "note":
-		// Notes are stored in feedback table only (already done above)
 		pipelineActions = append(pipelineActions, "Note saved")
 	}
 
@@ -10673,18 +10623,60 @@ func (s *Server) handleDiscordFeedback(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]interface{}{"ok": true, "pipeline_actions": pipelineActions})
 }
 
+// mem0Store sends a fact to Mem0 via /v1/store (the correct endpoint).
+func (s *Server) mem0Store(text, interactionID string) {
+	payload, _ := json.Marshal(map[string]interface{}{
+		"messages":  []map[string]string{{"role": "user", "content": text}},
+		"namespace": "wirebot_verious",
+		"category":  "training-feedback",
+	})
+	resp, err := http.Post("http://127.0.0.1:8200/v1/store", "application/json", bytes.NewReader(payload))
+	if err != nil {
+		log.Printf("[training] Mem0 store error: %v", err)
+		return
+	}
+	resp.Body.Close()
+	log.Printf("[training] Mem0 stored for %s", interactionID)
+}
+
+// queueForLetta inserts content into the scoreboard memory queue.
+// The queue → human review → state feeder → Letta.
+func (s *Server) queueForLetta(content string) {
+	payload, _ := json.Marshal(map[string]interface{}{
+		"content":  content,
+		"source":   "training-feedback",
+		"priority": 1,
+	})
+	req, err := http.NewRequest("POST", "http://127.0.0.1:8100/v1/memory/queue", bytes.NewReader(payload))
+	if err != nil {
+		log.Printf("[training] queue request error: %v", err)
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+authToken)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		log.Printf("[training] queue POST error: %v", err)
+		return
+	}
+	resp.Body.Close()
+}
+
 // appendTrainingEntry adds a line to the operator's TRAINING.md workspace file.
 // This file is read by the LLM on every conversation via workspace bootstrap.
 // Keeps file under 5000 chars by trimming oldest entries when full.
+// Uses s.mu to prevent concurrent write races.
 func (s *Server) appendTrainingEntry(entry string) {
-	trainingPath := "/home/wirebot/clawd/TRAINING.md"
-	header := `# TRAINING.md — Operator Feedback Loop
-> This file is auto-updated from the Training Lab in WINS.
-> Wirebot reads this every conversation. It shapes behavior over time.
-> Entries are added by operator feedback on real interactions.
+	s.mu.Lock()
+	defer s.mu.Unlock()
 
----
-`
+	const trainingPath = "/home/wirebot/clawd/TRAINING.md"
+	const header = "# TRAINING.md — Operator Feedback Loop\n" +
+		"> This file is auto-updated from the Training Lab in WINS.\n" +
+		"> Wirebot reads this every conversation. It shapes behavior over time.\n" +
+		"> Entries are added by operator feedback on real interactions.\n" +
+		"\n---\n"
+
 	// Read existing or create
 	content := header
 	if data, err := os.ReadFile(trainingPath); err == nil {
@@ -10693,13 +10685,11 @@ func (s *Server) appendTrainingEntry(entry string) {
 
 	// Append new entry with timestamp
 	ts := time.Now().Format("2006-01-02")
-	newLine := fmt.Sprintf("\n[%s] %s", ts, entry)
-	content += newLine
+	content += fmt.Sprintf("\n[%s] %s", ts, entry)
 
 	// Trim if over 5000 chars (remove oldest entries after header)
 	if len(content) > 5000 {
 		lines := strings.Split(content, "\n")
-		// Find the "---" separator after header
 		sepIdx := 0
 		for i, l := range lines {
 			if strings.TrimSpace(l) == "---" {
@@ -10707,21 +10697,22 @@ func (s *Server) appendTrainingEntry(entry string) {
 				break
 			}
 		}
-		// Keep header + separator + trim from oldest
-		headerLines := lines[:sepIdx+1]
+		headerPart := strings.Join(lines[:sepIdx+1], "\n")
 		dataLines := lines[sepIdx+1:]
 		// Remove oldest entries until under limit
-		for len(strings.Join(append(headerLines, dataLines...), "\n")) > 4500 && len(dataLines) > 1 {
+		for len(headerPart)+len(strings.Join(dataLines, "\n")) > 4500 && len(dataLines) > 1 {
 			dataLines = dataLines[1:]
 		}
-		content = strings.Join(append(headerLines, dataLines...), "\n")
+		content = headerPart + "\n" + strings.Join(dataLines, "\n")
 	}
 
 	if err := os.WriteFile(trainingPath, []byte(content), 0644); err != nil {
 		log.Printf("[training] Failed to write TRAINING.md: %v", err)
-	} else {
-		log.Printf("[training] TRAINING.md updated (%d chars)", len(content))
+		return
 	}
+	// Fix ownership — scoreboard runs as root but workspace is owned by wirebot
+	exec.Command("chown", "wirebot:wirebot", trainingPath).Run()
+	log.Printf("[training] TRAINING.md updated (%d chars)", len(content))
 }
 
 // GET /v1/training/stats — feedback metrics for Training Lab header

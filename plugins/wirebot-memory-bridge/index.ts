@@ -1426,11 +1426,8 @@ const wirebotMemoryBridge = {
               const guildId = keyParts.length > 2 ? keyParts[2] : "";
               const channelId = keyParts.length > 3 ? keyParts[3] : "";
 
-              // Determine mode from guild config
-              const guildCfg = (cfg as Record<string, unknown>).discordGuilds as Record<string, unknown> || {};
-              const sovereignChannels = Object.entries(guildCfg).length > 0 ? [] : [];
-              // Simple heuristic: sovereign channel from gateway config
-              const isSovereign = channelId === "1468200674545238191"; // Known sovereign channel
+              // Sovereign = private operator channel; community = public guild channels
+              const isSovereign = channelId === "1468200674545238191";
               const mode = isSovereign ? "sovereign" : "community";
 
               await fetch(`${scoreboardUrl}/v1/discord/interaction`, {
@@ -1443,13 +1440,12 @@ const wirebotMemoryBridge = {
                   guild_id: guildId,
                   guild_name: "Startempire Wire",
                   channel_id: channelId,
-                  user_name: "discord-user", // Will be enhanced when Discord provides user info
+                  user_name: "discord-user",
                   user_message: lastUser.slice(0, 2000),
                   bot_response: lastBot.slice(0, 5000),
                   response_time_ms: event.durationMs || 0,
                   mode,
                   tools_used: toolsUsed,
-                  model: "z-ai/glm-4.5-air:free",
                 }),
                 signal: AbortSignal.timeout(5000),
               });
