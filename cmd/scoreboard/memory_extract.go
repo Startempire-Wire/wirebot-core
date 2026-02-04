@@ -668,6 +668,11 @@ func (s *Server) callLLMForExtraction(prompt string) (string, error) {
 	return chatResp.Choices[0].Message.Content, nil
 }
 
+// vaultExtractMu guards vaultExtractRunning to prevent concurrent vault extractions.
+// Two simultaneous runs would race on the watermark file and double-extract every file.
+var vaultExtractMu sync.Mutex
+var vaultExtractRunning bool
+
 // POST /v1/memory/extract-vault — Extract memories from vault with real context
 func (s *Server) handleMemoryExtractVault(w http.ResponseWriter, r *http.Request) {
 	cors(w)
@@ -691,6 +696,19 @@ func (s *Server) handleMemoryExtractVault(w http.ResponseWriter, r *http.Request
 		limit = 50
 	}
 
+	vaultExtractMu.Lock()
+	if vaultExtractRunning {
+		vaultExtractMu.Unlock()
+		writeJSON(w, map[string]interface{}{
+			"message": "Extraction already in progress — ignoring duplicate request",
+			"path":    vaultPath,
+			"limit":   limit,
+		})
+		return
+	}
+	vaultExtractRunning = true
+	vaultExtractMu.Unlock()
+
 	writeJSON(w, map[string]interface{}{
 		"message": "Memory extraction started in background",
 		"path":    vaultPath,
@@ -698,6 +716,11 @@ func (s *Server) handleMemoryExtractVault(w http.ResponseWriter, r *http.Request
 	})
 
 	go func() {
+		defer func() {
+			vaultExtractMu.Lock()
+			vaultExtractRunning = false
+			vaultExtractMu.Unlock()
+		}()
 		processed := 0
 		extracted := 0
 		queued := 0
@@ -779,14 +802,16 @@ func (s *Server) handleMemoryExtractVault(w http.ResponseWriter, r *http.Request
 	}()
 }
 
-// convoExtractMu guards lastConvoExtractTime for the API endpoint rate limiter.
+// convoExtractMu is separate from chatExtractMu (main.go) because they guard
+// different chat surfaces: this guards the API endpoint (Discord/agent via agent_end hook),
+// while chatExtractMu guards the wins portal chat proxy (extractConversationToQueue).
 var convoExtractMu sync.Mutex
 var lastConvoExtractTime time.Time
 
 // POST /v1/memory/extract-conversation — Extract memories from a conversation exchange.
-// Called by the wirebot-memory-bridge plugin's agent_end hook to route Discord/gateway
-// conversations through the same approval pipeline as wins portal chat.
-// Rate-limited to once per 2 minutes (same as extractConversationToQueue).
+// Called by the wirebot-memory-bridge plugin's agent_end hook to route Discord/agent
+// conversations through the approval pipeline. Separate rate limiter from wins portal.
+// Rate-limited to once per 2 minutes to avoid hammering the LLM.
 func (s *Server) handleMemoryExtractConversation(w http.ResponseWriter, r *http.Request) {
 	cors(w)
 	if r.Method != "POST" {

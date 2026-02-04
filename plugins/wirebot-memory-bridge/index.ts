@@ -1492,9 +1492,12 @@ const wirebotMemoryBridge = {
               );
 
               if (isBusinessRelevant || isPairingRelevant) {
+                // Truncate to avoid blowing Letta's context window with large messages
+                const userSnippet = lastUser.content.length > 2000 ? lastUser.content.slice(0, 2000) + "..." : lastUser.content;
+                const assistantSnippet = lastAssistant.content.length > 2000 ? lastAssistant.content.slice(0, 2000) + "..." : lastAssistant.content;
                 const context = isPairingRelevant
-                  ? `Pairing update from operator conversation:\nUser: ${lastUser.content}\nAssistant: ${lastAssistant.content}\n\nUpdate your human, goals, or business_stage blocks with any new information.`
-                  : `Business context from operator conversation:\nUser: ${lastUser.content}\nAssistant: ${lastAssistant.content}\n\nUpdate kpis, goals, or business_stage blocks if relevant.`;
+                  ? `Pairing update from operator conversation:\nUser: ${userSnippet}\nAssistant: ${assistantSnippet}\n\nUpdate your human, goals, or business_stage blocks with any new information.`
+                  : `Business context from operator conversation:\nUser: ${userSnippet}\nAssistant: ${assistantSnippet}\n\nUpdate kpis, goals, or business_stage blocks if relevant.`;
 
                 lettaSendMessage(
                   cfg.lettaUrl,

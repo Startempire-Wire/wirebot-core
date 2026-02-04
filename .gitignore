@@ -35,3 +35,4 @@ logs/
 cmd/scoreboard/ui/node_modules/
 cmd/scoreboard/static/
 cmd/scoreboard/go.sum
+scoreboard.db

@@ -6925,7 +6925,7 @@ func (s *Server) handleMemoryQueue(w http.ResponseWriter, r *http.Request) {
 		// Also get counts
 		var pending, approved, rejected int
 		s.db.QueryRow("SELECT COUNT(*) FROM memory_queue WHERE status='pending'").Scan(&pending)
-		s.db.QueryRow("SELECT COUNT(*) FROM memory_queue WHERE status='approved'").Scan(&approved)
+		s.db.QueryRow("SELECT COUNT(*) FROM memory_queue WHERE status IN ('approved','corrected')").Scan(&approved)
 		s.db.QueryRow("SELECT COUNT(*) FROM memory_queue WHERE status='rejected'").Scan(&rejected)
 
 		json.NewEncoder(w).Encode(map[string]interface{}{
