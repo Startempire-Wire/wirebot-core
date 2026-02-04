@@ -1,388 +1,324 @@
-# Letta Autonomous Business State Agent — Architecture
+# Letta as Wirebot Subsystem — Structured State Engine
 
-> **Status:** Design doc — not yet implemented
-> **Goal:** Transform Letta from a passive block store into an autonomous business state agent ("Jarvis")
-
----
-
-## Current State (Passive)
-
-```
-                    ┌──────────────┐
-  Discord msg       │              │
-  ────────────────→ │   OpenClaw   │ ──→ response
-                    │   Gateway    │
-                    └──────┬───────┘
-                           │ agent_end hook
-                           ▼
-               ┌───────────────────────┐
-               │  Memory Bridge Plugin │
-               │  (wirebot-memory-     │
-               │   bridge/index.ts)    │
-               └──┬────────┬────────┬──┘
-                  │        │        │
-           keyword│   store│   route│ if biz keywords
-           match  │   fact │   msg  │
-                  ▼        ▼        ▼
-              ┌──────┐ ┌──────┐ ┌──────┐
-              │Queue │ │ Mem0 │ │Letta │
-              │(SQL) │ │:8200 │ │:8283 │
-              └──┬───┘ └──────┘ └──┬───┘
-                 │                  │
-           human │            sync  │ every 30s
-           review│            daemon│
-                 ▼                  ▼
-            MEMORY.md        BUSINESS_STATE.md
-            (workspace)       (workspace)
-```
-
-**Problems with passive mode:**
-1. Letta only updates when OpenClaw explicitly sends it a message
-2. Keyword detection is brittle — misses subtle business changes
-3. 1166+ pending memories sit unprocessed — Letta never sees approved ones
-4. No feedback loop — Letta can't alert, can't ask questions, can't act
-5. Blocks go stale between conversations (goals, KPIs outdated)
+> **Status:** Design doc — not yet implemented  
+> **Principle:** Wirebot is the agent. Letta is the state engine. Autonomy belongs to Wirebot.
 
 ---
 
-## Target State (Autonomous)
+## Mental Model
 
 ```
-                    ┌──────────────┐
-  Discord msg       │              │
-  ────────────────→ │   OpenClaw   │ ──→ response
-                    │   Gateway    │
-                    └──────┬───────┘
-                           │ agent_end hook
-                           ▼
-               ┌───────────────────────┐
-               │  Memory Bridge Plugin │ (unchanged — still does recall/remember/state)
-               └──┬────────┬────────┬──┘
-                  │        │        │
-                  ▼        ▼        ▼
-              ┌──────┐ ┌──────┐ ┌──────────────────────────┐
-              │Queue │ │ Mem0 │ │     Letta Agent          │
-              │(SQL) │ │:8200 │ │     :8283                │
-              └──┬───┘ └──────┘ │                          │
-                 │              │  ┌─────────────────────┐ │
-           human │              │  │ Event Intake Loop    │ │
-           review│              │  │ (30s poll or webhook)│ │
-                 │              │  └──────────┬──────────┘ │
-                 │              │             │             │
-                 │   ┌──────── │ ──┐    think│about it     │
-                 │   │ Letta   │   │         │             │
-                 │   │ Tools:  │   │         ▼             │
-                 │   │         │   │  ┌────────────────┐   │
-                 │   │ • read_ │   │  │ Self-edit      │   │
-                 │   │   score │   │  │ blocks via     │   │
-                 │   │ board   │   │  │ memory_replace │   │
-                 │   │         │   │  └────────────────┘   │
-                 │   │ • read_ │   │         │             │
-                 │   │   queue │   │         ▼             │
-                 │   │         │   │  ┌────────────────┐   │
-                 │   │ • push_ │   │  │ Generate       │   │
-                 │   │   alert │   │  │ alerts /       │   │
-                 │   │         │   │  │ insights       │   │
-                 │   │ • store │   │  └────────────────┘   │
-                 │   │   archv │   │         │             │
-                 │   │         │   │         ▼             │
-                 │   │ • write │   │  BUSINESS_STATE.md    │
-                 │   │   back  │   │  (auto-updated)       │
-                 │   └─────────┘   │                       │
-                 │                 └───────────────────────┘
-                 ▼                          │
-              Approved                      │ alerts
-              memories ────────────────────→│ (pushed to
-              auto-ingested                 │  dashboard)
-                                            ▼
-                                    ┌──────────────┐
-                                    │ WINS Portal  │
-                                    │ Alert Strip  │
-                                    └──────────────┘
+┌─────────────────────────────────────────────────────────┐
+│                    WIREBOT (the agent)                   │
+│                                                         │
+│  Surfaces: Discord, WINS Portal, Cron, Webhooks         │
+│  Brain:    OpenClaw Gateway (kimi-coding/k2p5)          │
+│  Memory:   Mem0 (facts) + Letta (structured state)      │
+│  Actions:  Respond, Score, Alert, Ship, Remember         │
+│                                                         │
+│  ┌─────────────────────────────────────────────────┐    │
+│  │              SUBSYSTEMS                          │    │
+│  │                                                  │    │
+│  │  ┌──────────┐  ┌──────────┐  ┌──────────────┐  │    │
+│  │  │  Mem0    │  │  Letta   │  │  Scoreboard  │  │    │
+│  │  │  (facts) │  │  (state) │  │  (scoring)   │  │    │
+│  │  └──────────┘  └──────────┘  └──────────────┘  │    │
+│  │                                                  │    │
+│  │  ┌──────────┐  ┌──────────┐  ┌──────────────┐  │    │
+│  │  │ Checklist│  │ Memory   │  │ Integrations │  │    │
+│  │  │ (tasks)  │  │ Queue    │  │ (Stripe,GH)  │  │    │
+│  │  └──────────┘  └──────────┘  └──────────────┘  │    │
+│  └─────────────────────────────────────────────────┘    │
+└─────────────────────────────────────────────────────────┘
+```
+
+**Wirebot** is the one entity the operator talks to. It decides, acts, remembers.  
+**Letta** is one of Wirebot's subsystems — the structured state backend that gives Wirebot a persistent, self-organizing understanding of the operator's business.
+
+Letta doesn't alert. Letta doesn't decide. Letta **structures and maintains state** so that when Wirebot needs to think, it has rich, current context.
+
+---
+
+## Current State (Passive Store)
+
+Letta holds 4 blocks — `human`, `goals`, `kpis`, `business_stage` — totaling ~7.5KB of structured business context. Today:
+
+- **Writes:** Memory bridge sends business-relevant snippets to Letta via `lettaSendMessage()`. Letta's internal LLM decides how to update its own blocks. This only fires when Discord conversations contain business keywords.
+- **Reads:** `wirebot_recall` and `wirebot_business_state` tools read blocks on demand. Memory sync daemon writes `BUSINESS_STATE.md` to workspace every 30s.
+- **Gap:** Blocks go stale between conversations. Approved memories never reach Letta. Scoreboard events don't update KPIs. Letta has no awareness of what happened since the last Discord chat.
+
+---
+
+## Target State (Active Subsystem)
+
+Letta becomes Wirebot's **continuously-updated business model** — a structured representation of the operator's world that stays fresh without human prompting.
+
+### What changes
+
+| Aspect | Before | After |
+|--------|--------|-------|
+| Block freshness | Stale between conversations | Updated by event feed every 30s |
+| Approved memories | Go to Mem0 only | Also ingested by Letta → block updates |
+| Scoreboard events | Not seen by Letta | Fed to Letta → KPI/goal block updates |
+| Integration data | Not seen by Letta | Stripe MRR, GitHub ships → KPI updates |
+| Wirebot context | Reads blocks on-demand | Blocks are always current when read |
+
+### What doesn't change
+
+- **Wirebot is the agent.** Letta doesn't talk to users, generate alerts, or make decisions.
+- **Memory bridge tools stay.** `wirebot_recall`, `wirebot_remember`, `wirebot_business_state` work as-is.
+- **Scoreboard owns scoring, alerts, and the dashboard.** Letta doesn't push to UI.
+- **Mem0 owns facts.** Letta owns structured state. No overlap.
+
+---
+
+## Architecture
+
+```
+Events flow IN to Letta (write path):
+
+  Approved memory ──┐
+  Scoreboard event ─┤
+  Integration data ─┤──→ State Feeder ──→ Letta agent ──→ self-edits blocks
+  Daily cron ───────┘    (goroutine)      (kimi LLM)      (memory_replace)
+                              │
+                              │ "Process this event and update
+                              │  your blocks if relevant."
+                              │
+                         async message
+                         (fire & forget)
+
+
+Wirebot reads OUT from Letta (read path):
+
+  Discord user asks ──→ OpenClaw ──→ wirebot_recall ──→ Letta blocks
+  about business                     (memory bridge)     (always fresh)
+                                          │
+                                          ├──→ Mem0 facts
+                                          └──→ Letta archival
+
+  Scoreboard needs  ──→ memory-syncd ──→ Letta blocks ──→ BUSINESS_STATE.md
+  workspace state        (30s poll)                        (workspace file)
+
+
+Wirebot acts BASED ON Letta state:
+
+  Wirebot cron (6am) ──→ reads blocks ──→ generates standup
+  Wirebot scores     ──→ reads kpis   ──→ contextual scoring  
+  Wirebot responds   ──→ reads goals  ──→ goal-aware conversation
+  Scorebd alerts     ──→ reads blocks ──→ "goal deadline in 3 days"
 ```
 
 ---
 
-## Architecture Components
+## Component 1: State Feeder
 
-### 1. Event Feeder Service (`letta-feeder`)
+A goroutine in the scoreboard that feeds events to Letta for block maintenance.
 
-A lightweight Go service (or goroutine in scoreboard) that polls for new events and feeds them to Letta as async messages.
+**Not an agent loop.** This is a data pipeline — it takes structured events and asks Letta's LLM to update its blocks accordingly. Letta doesn't decide what to do with events; it just structures them into its state model.
 
-**Event sources:**
-
-| Source | Trigger | What Letta sees |
-|--------|---------|-----------------|
-| Approved memories | `memory_queue.status` changes to `approved` | "New approved fact: {text}. Update relevant blocks." |
-| Scoreboard events | `/v1/events` new entries | "Event: shipped X at 2pm. Score: 72." |
-| Discord conversations | `agent_end` hook (already exists) | Business-relevant snippets (already working) |
-| Daily cron | 6am Pacific | "Morning brief: generate daily state summary." |
-| KPI changes | Stripe webhook, integration events | "MRR changed: $X → $Y. Reason: {event}." |
-
-**Implementation:**
 ```go
-// In scoreboard main.go or standalone letta-feeder.go
-func (s *Server) lettaFeederLoop() {
+// In scoreboard main.go
+func (s *Server) lettaStateFeeder() {
     ticker := time.NewTicker(30 * time.Second)
+    var lastApprovedID int64
+    var lastEventID int64
+    
     for range ticker.C {
-        // 1. Check for newly approved memories since last check
-        rows := s.db.Query(`
+        // 1. Ingest newly approved memories
+        rows, _ := s.db.Query(`
             SELECT id, memory_text FROM memory_queue 
-            WHERE status='approved' AND letta_synced=false
-            ORDER BY created_at LIMIT 5
-        `)
+            WHERE status='approved' AND id > ? 
+            ORDER BY id LIMIT 5`, lastApprovedID)
         for rows.Next() {
-            // Send to Letta as async message
-            lettaSendMessageAsync(agentID, formatApprovedMemory(text))
-            // Mark synced
-            s.db.Exec(`UPDATE memory_queue SET letta_synced=true WHERE id=?`, id)
+            var id int64; var text string
+            rows.Scan(&id, &text)
+            s.lettaIngest(fmt.Sprintf(
+                "Approved fact from memory queue: %s\n"+
+                "Update your blocks if this is relevant to goals, KPIs, "+
+                "business stage, or operator context.", text))
+            lastApprovedID = id
         }
         
-        // 2. Check for recent scoreboard events
-        // 3. Generate daily brief at 6am
+        // 2. Ingest recent scoreboard events
+        rows, _ = s.db.Query(`
+            SELECT id, source, kind, summary FROM events 
+            WHERE id > ? ORDER BY id LIMIT 5`, lastEventID)
+        for rows.Next() {
+            var id int64; var source, kind, summary string
+            rows.Scan(&id, &source, &kind, &summary)
+            s.lettaIngest(fmt.Sprintf(
+                "Scoreboard event [%s/%s]: %s\n"+
+                "Update KPIs or goals if relevant.", source, kind, summary))
+            lastEventID = id
+        }
+    }
+}
+
+func (s *Server) lettaIngest(message string) {
+    // Fire-and-forget async message to Letta
+    // Letta's LLM processes it and self-edits blocks
+    go func() {
+        body, _ := json.Marshal(map[string]interface{}{
+            "messages": []map[string]string{
+                {"role": "user", "content": message},
+            },
+        })
+        req, _ := http.NewRequest("POST", 
+            s.lettaURL+"/v1/agents/"+s.lettaAgentID+"/messages/", 
+            bytes.NewReader(body))
+        req.Header.Set("Content-Type", "application/json")
+        client := &http.Client{Timeout: 60 * time.Second}
+        resp, err := client.Do(req)
+        if err == nil { resp.Body.Close() }
+    }()
+}
+```
+
+**Rate limiting:** Max 10 messages per 5-minute window. Events queue in SQLite — nothing lost if Letta is slow.
+
+### Component 2: Letta Agent Prompt (Updated)
+
+Letta's system prompt shifts from "you are the Business State Engine" to a clearer subsystem role:
+
+```markdown
+You are a structured state engine — a subsystem of Wirebot.
+
+Your job: maintain 4 memory blocks that represent the operator's 
+current business reality. You receive events and facts and update 
+your blocks to keep them accurate.
+
+Blocks:
+- human: Operator identity, preferences, working style, context
+- goals: Active goals with dates, progress, blockers
+- kpis: Key metrics with current values and directional trends  
+- business_stage: Score, stage, pairing profile, active contexts
+
+When you receive an event or fact:
+1. Decide which block(s) it affects
+2. Use memory_replace to update the relevant section
+3. Keep blocks concise (<3000 chars). Summarize, don't append.
+4. If a fact contradicts existing state, update to the newer truth.
+5. If a fact is not relevant to any block, do nothing.
+
+You do NOT:
+- Generate alerts (Wirebot's scoreboard handles that)
+- Talk to users (Wirebot handles conversation)
+- Make business decisions (the operator decides)
+- Fabricate data (only use what you're given)
+
+You ARE:
+- The operator's structured business memory
+- Always current, always concise, always accurate
+- A subsystem that makes Wirebot smarter
+```
+
+### Component 3: Wirebot Uses Fresh State
+
+The payoff: Wirebot reads from Letta and gets **current** context instead of stale blocks.
+
+**Already working (no changes needed):**
+- `wirebot_recall` reads Letta blocks → now they're fresh
+- `wirebot_business_state` reads/writes blocks → now auto-maintained
+- `memory-syncd` writes `BUSINESS_STATE.md` → now reflects latest events
+- `agent_start` hook injects `SCOREBOARD_STATE.md` → Letta blocks add depth
+
+**Wirebot gains autonomy through fresh state, not through Letta acting independently:**
+
+| Wirebot capability | Enabled by fresh Letta state |
+|-------------------|------------------------------|
+| Goal-aware responses | "You mentioned goal X is due Friday — are you on track?" |
+| KPI-contextual scoring | Score weight adjusts based on current business stage |
+| Morning standup | Reads goals + kpis + recent events → generates brief |
+| Proactive nudges | Scoreboard checks goals block → flags approaching deadlines |
+| Conversation continuity | Blocks carry forward between sessions automatically |
+
+### Component 4: Scoreboard Alert Logic (Optional Enhancement)
+
+The **scoreboard** (not Letta) can generate alerts by reading Letta's blocks:
+
+```go
+// Scoreboard cron check (daily or hourly)
+func (s *Server) checkGoalDeadlines() {
+    blocks := lettaGetBlocks(s.lettaURL, s.lettaAgentID)
+    goalsBlock := findBlock(blocks, "goals")
+    
+    // Parse goal deadlines from structured text
+    for _, goal := range parseGoals(goalsBlock.Value) {
+        daysLeft := goal.Deadline.Sub(time.Now()).Hours() / 24
+        if daysLeft <= 3 && daysLeft > 0 && !goal.Complete {
+            s.createAlert("warning", 
+                fmt.Sprintf("Goal deadline in %d days: %s", int(daysLeft), goal.Title))
+        }
     }
 }
 ```
 
-**Key design choice:** Use `messages.createAsync()` (SDK) so the feeder doesn't block waiting for Letta to think. Letta processes in background, self-edits blocks, and results appear on next sync cycle.
-
-### 2. Letta Agent Tools (registered via SDK)
-
-The agent currently has 3 tools: `conversation_search`, `memory_insert`, `memory_replace`. These are self-referential (Letta editing its own memory). To become Jarvis, it needs tools to **read external state** and **push outputs**.
-
-**New tools to register:**
-
-| Tool | Direction | Purpose |
-|------|-----------|---------|
-| `read_scoreboard` | Letta → Scoreboard | Read current score, streak, lanes, recent events |
-| `read_memory_queue` | Letta → Queue | See pending/approved counts, recent approved facts |
-| `read_integrations` | Letta → Scoreboard | Check connected accounts, last activity times |
-| `push_alert` | Letta → Alerts table | Create an alert for the WINS dashboard |
-| `push_archival` | Letta → Letta archival | Store processed insights in long-term archival |
-| `read_checklist` | Letta → Checklist JSON | See business tasks, completion rates, blocked items |
-
-**Registration via SDK:**
-```typescript
-import Letta from '@letta-ai/letta-client';
-
-const client = new Letta({ baseUrl: 'http://127.0.0.1:8283' });
-
-// Register tool that Letta can call
-await client.tools.create({
-    name: 'read_scoreboard',
-    description: 'Read current business score, streak, and recent events from the WINS scoreboard.',
-    source_code: `
-def read_scoreboard() -> str:
-    """Read current scoreboard state."""
-    import requests
-    resp = requests.get('http://127.0.0.1:8100/v1/scoreboard', 
-                       headers={'Authorization': 'Bearer ${SCOREBOARD_TOKEN}'})
-    data = resp.json()
-    return f"Score: {data['score']}/100, Streak: {data['streak']}, Last ship: {data['last_ship']}"
-    `,
-    source_type: 'python',
-});
-
-// Attach tool to agent
-await client.agents.tools.attach(agentId, toolId);
-```
-
-**Note:** Letta tools execute Python inside the container's sandbox. The tool functions make HTTP calls back to the scoreboard from inside the Letta container. Since we use `--network host`, `127.0.0.1:8100` is reachable.
-
-### 3. Alerts System
-
-New `alerts` table in scoreboard SQLite:
-
-```sql
-CREATE TABLE alerts (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    source TEXT NOT NULL DEFAULT 'letta',      -- letta, system, cron
-    severity TEXT NOT NULL DEFAULT 'info',       -- info, warning, critical
-    title TEXT NOT NULL,
-    body TEXT,
-    acknowledged BOOLEAN DEFAULT false,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    acknowledged_at DATETIME
-);
-```
-
-**Letta generates alerts via `push_alert` tool:**
-- "⚠️ MRR dropped 12% this week — 2 cancellations detected"
-- "🎯 Goal 'Onboard 25 members' is 3 days from deadline with 0 signups"
-- "✅ All 3 memory systems operational, 47 new facts processed today"
-- "💡 Shipping streak at 5 days — longest this season"
-
-**WINS dashboard** shows alerts in a new strip above the score card (or in the existing system health panel for admin).
-
-### 4. Memory Bridge Changes
-
-The existing plugin stays mostly unchanged. Additions:
-
-**a) Approved memory auto-ingest (new hook in feeder, not plugin)**
-Currently approved memories go to Mem0 only. The feeder routes them to Letta too:
-```
-Approved memory → Mem0 store (existing)
-                → Letta async message (new) → Letta self-edits blocks
-```
-
-**b) Letta archival as recall layer (upgrade wirebot_recall)**
-Currently `wirebot_recall` searches Letta blocks + archival. With the autonomous agent generating insights, archival becomes richer:
-```
-wirebot_recall("revenue trend")
-  → Mem0 facts: "MRR is $X" 
-  → Letta blocks: kpis, goals
-  → Letta archival: "Weekly analysis: MRR declining 3% WoW due to..."  ← NEW depth
-```
-
-**c) No changes to wirebot_remember, wirebot_business_state, wirebot_checklist**
-These tools work as-is. The autonomous agent enhances them by keeping blocks fresher.
-
-### 5. Agent System Prompt (Updated)
-
-```markdown
-You are the Business State Engine for Wirebot — the AI operating partner 
-for Verious Smith III.
-
-You are AUTONOMOUS. You receive events, approved memories, and daily briefs 
-without being asked. Your job:
-
-1. **Maintain state** — Keep your 4 memory blocks accurate and current:
-   - human: Owner context, preferences, working style
-   - goals: Active goals with dates, progress, blockers
-   - kpis: Metrics with current values and trends
-   - business_stage: Score, stage, pairing profile, active contexts
-
-2. **Detect patterns** — When you notice:
-   - KPI trends (up or down)
-   - Goal deadlines approaching
-   - Inconsistencies between stated goals and actual activity
-   - Opportunities from new facts
-   → Use push_alert to surface insights
-
-3. **Process approved facts** — When new facts arrive:
-   - Update relevant blocks (memory_replace)
-   - Archive processed insights (push_archival)  
-   - Cross-reference with goals and KPIs
-
-4. **Generate daily brief** — On morning trigger:
-   - Summarize overnight changes
-   - Flag items needing attention
-   - Update KPIs from integrations
-
-Rules:
-- NEVER fabricate data. Use read_scoreboard and read_integrations for real numbers.
-- Keep blocks concise (<3000 chars each). Archive verbose analysis.
-- Alerts should be actionable, not noise. Max 3 per day unless critical.
-- You serve ONE operator (Verious). All context is their business context.
-```
+This keeps alerting in the scoreboard (Go, deterministic logic) rather than in Letta (LLM, non-deterministic). Letta provides the structured data; the scoreboard acts on it.
 
 ---
 
 ## Data Flow: End-to-End Example
 
-**Scenario:** User ships a feature via GitHub, discusses it on Discord.
+**Scenario:** Operator ships a feature, discusses it on Discord, memory gets approved.
 
 ```
-1. GitHub webhook → Scoreboard event (source: github, type: commit)
-2. Discord conversation → OpenClaw gateway → response
-3. agent_end hook fires:
-   a. Memory bridge → Mem0 store("User shipped auth module for STA")
-   b. Memory bridge → Scoreboard extraction queue
-   c. Memory bridge → Letta message (keyword: "shipped") 
-      → Letta thinks → updates goals block, increments KPI
-4. Feeder loop (30s later):
-   a. Picks up approved memory from queue
-   b. Sends to Letta: "Approved fact: Auth module shipped for STA"
-   c. Letta cross-references → "Goal #2 partially complete"
-   d. Letta calls push_alert: "🎯 Goal 'Finalize MVP' — auth module done, 3 features remaining"
-5. Memory sync daemon (30s):
+1. GitHub webhook → Scoreboard event (source: github, kind: push)
+   
+2. Discord: "I just shipped the auth module for Startempire"
+   → OpenClaw responds with encouragement
+   → agent_end hook:
+     a. Memory bridge → Mem0 store("Shipped auth module for STA")
+     b. Memory bridge → Scoreboard extraction queue  
+     c. Memory bridge → Letta message (keyword: "shipped")
+        → Letta updates goals block: "Auth module — DONE ✅"
+
+3. Operator approves memory in WINS Memory Review UI
+
+4. State Feeder (next 30s tick):
+   a. Picks up approved memory
+   b. Sends to Letta: "Approved fact: Shipped auth module for STA"
+   c. Letta updates kpis block: "Features shipped this week: 3"
+
+5. Memory sync daemon (next 30s):
    a. Detects block changes → writes BUSINESS_STATE.md
-6. User opens WINS:
-   a. Dashboard shows alert: "🎯 Goal progress update"
-   b. Score reflects the ship event
-   c. System health shows all 5 services green
+   
+6. Next Discord conversation:
+   → wirebot_recall("what did I ship recently?")
+   → Letta blocks return: goals shows auth complete, kpis shows 3 shipped
+   → Wirebot responds with full context — no "I don't remember"
+
+7. Scoreboard daily check (6am):
+   → Reads goals block → "Goal 'Finalize MVP' — 4/7 features done"
+   → Generates morning standup with progress update
 ```
 
 ---
 
 ## Implementation Plan
 
-### Phase 1: Foundation (est. 2-3 hours)
-1. Add `letta_synced` column to `memory_queue` table
-2. Add `alerts` table to scoreboard SQLite
-3. Build feeder loop in scoreboard (goroutine, 30s poll)
-4. Add `GET /v1/alerts` + `POST /v1/alerts` endpoints
-5. Wire alerts into WINS dashboard (new component or extend SystemStatus)
+### Phase 1: State Feeder (est. 2 hours)
+1. Add `lettaStateFeeder()` goroutine to scoreboard
+2. Feed approved memories → Letta (track last processed ID)
+3. Feed scoreboard events → Letta (track last event ID)
+4. Rate limiter: max 10 messages per 5-minute window
+5. Update Letta agent system prompt for subsystem role
 
-### Phase 2: Agent Tools (est. 2-3 hours)
-1. Write Python tool functions: `read_scoreboard`, `read_memory_queue`, `push_alert`
-2. Register tools on Letta agent via SDK or direct API
-3. Update agent system prompt for autonomous behavior
-4. Test: send a fact → verify Letta processes it → check alert appears
+### Phase 2: Richer Reads (est. 1 hour)
+1. Enhance `wirebot_recall` to weight fresh Letta blocks higher
+2. Add Letta block timestamps to recall output
+3. Verify memory-syncd picks up feeder-driven block changes
 
-### Phase 3: Event Sources (est. 1-2 hours)
-1. Feeder ingests approved memories → Letta
-2. Feeder ingests scoreboard events → Letta
-3. Daily cron trigger (6am) → Letta morning brief
-4. Integration events (Stripe, GitHub) → Letta
+### Phase 3: Scoreboard Alerts from State (est. 2 hours)
+1. Add `alerts` table to scoreboard SQLite
+2. Add `GET/POST /v1/alerts` endpoints
+3. Scoreboard cron reads Letta blocks → generates alerts (goal deadlines, KPI drops)
+4. WINS dashboard alert strip (admin section or dashboard top)
 
-### Phase 4: Polish (est. 1-2 hours)
-1. Rate limiting (max N Letta messages per hour to avoid runaway)
-2. Alert dedup (don't repeat same insight)
-3. Dashboard alert strip with acknowledge/dismiss
-4. Archival search improvements in `wirebot_recall`
-
----
-
-## SDK Usage
-
-**Required package:** `@letta-ai/letta-client` (already installed as dep of `@letta-ai/letta-code`)
-
-**Key SDK calls:**
-
-```typescript
-import Letta from '@letta-ai/letta-client';
-
-const letta = new Letta({ baseUrl: 'http://127.0.0.1:8283' });
-const AGENT = 'agent-82610d14-ec65-4d10-9ec2-8c479848cea9';
-
-// Async message (non-blocking — Letta processes in background)
-const run = await letta.agents.messages.createAsync(AGENT, {
-  messages: [{ role: 'user', content: 'New approved fact: ...' }]
-});
-// run.id can be polled via letta.runs.retrieve(run.id)
-
-// Read blocks (typed)
-const blocks = await letta.agents.blocks.list(AGENT);
-
-// Register tool
-const tool = await letta.tools.create({
-  name: 'push_alert',
-  source_code: '...',
-  source_type: 'python'
-});
-await letta.agents.tools.attach(tool.id, { agent_id: AGENT });
-
-// Search archival
-const passages = await letta.agents.passages.search(AGENT, {
-  query: 'revenue trend'
-});
-
-// Compact conversation (prevent context overflow)
-await letta.agents.messages.compact(AGENT, {});
-```
-
-**Where SDK lives vs raw HTTP:**
-
-| Component | Current | With SDK |
-|-----------|---------|----------|
-| Memory bridge plugin (TypeScript) | Raw fetch ✅ | Replace with SDK ✅ |
-| Memory sync daemon (Go) | Raw HTTP | Keep Go — no SDK needed |
-| Scoreboard feeder (Go) | New | Raw HTTP from Go (simpler) |
-| Tool registration | N/A | One-time SDK script |
-| WINS dashboard | Via scoreboard API | No change |
-
-The SDK is most valuable in the TypeScript plugin (type safety, streaming, async) and for one-time tool registration. The Go services stay with raw HTTP — simpler, no Node dependency.
+### Phase 4: Integration Events (est. 1 hour)
+1. Stripe webhook events → feeder → Letta → kpis block
+2. GitHub push events → feeder → Letta → goals/kpis block
+3. Daily cron morning trigger → feeder → Letta → "generate summary of current state"
 
 ---
 
@@ -390,41 +326,21 @@ The SDK is most valuable in the TypeScript plugin (type safety, streaming, async
 
 | Component | Model | Cost |
 |-----------|-------|------|
-| Letta LLM (autonomous thinking) | kimi-coding/k2p5 via gateway | $0 |
-| Letta embeddings | letta/letta-free (local) | $0 |
-| Feeder → Letta messages | ~50-100/day | $0 (kimi free tier) |
-| Tool execution (Python in container) | N/A | $0 |
+| Letta block updates (feeder) | kimi-coding/k2p5 via gateway | $0 |
+| Letta embeddings (archival) | letta/letta-free (local) | $0 |
+| Expected volume | ~50-100 messages/day | $0 (kimi free tier) |
 | **Total** | | **$0/month** |
 
-**Rate budget:** kimi free tier allows ~1000 requests/day. Autonomous agent at 100 messages/day = 10% of budget. Plenty of headroom.
-
 ---
 
-## Risk Mitigations
+## What This Enables for Wirebot
 
-| Risk | Mitigation |
-|------|------------|
-| Letta generates noise alerts | Max 3 alerts/day unless severity=critical. Acknowledge dismisses. |
-| Runaway message loop | Rate limiter: max 10 Letta messages per 5-minute window |
-| kimi model hallucinates KPIs | Tools read real data from scoreboard. Prompt: "NEVER fabricate." |
-| Context window overflow | Monthly `messages.compact()` cron. Archival for long-term storage. |
-| Letta container crash | Feeder retries with backoff. Events queue in SQLite, nothing lost. |
-| Block corruption | memory-syncd snapshots BUSINESS_STATE.md every 30s. Git history is backup. |
+With always-fresh Letta blocks, Wirebot gains:
 
----
+1. **Persistent business awareness** — knows the operator's current state without being told each session
+2. **Goal tracking** — "You're 3 days from your onboarding deadline with 0 signups" comes naturally in conversation
+3. **KPI context** — scoring and responses adapt to actual business metrics
+4. **Cross-session continuity** — approved memories flow into structured state automatically
+5. **Morning briefs** — daily cron reads fresh blocks and generates actionable standup
 
-## What Changes, What Doesn't
-
-**Changes:**
-- Scoreboard gets: feeder goroutine, alerts table, alerts API
-- Letta agent gets: 3-5 new tools, updated system prompt
-- WINS gets: alert display component
-- Memory bridge: minor — use SDK for cleaner Letta calls (optional)
-
-**Doesn't change:**
-- Memory pipeline (extraction → queue → approval → Mem0)
-- OpenClaw gateway (still routes Discord, still free models)
-- Scoreboard scoring engine
-- Checklist system
-- Integration connectors (Stripe, GitHub, etc.)
-- memory-syncd (still syncs blocks → workspace files)
+Letta isn't the agent. Letta is the structured memory that makes Wirebot **act like one.**
