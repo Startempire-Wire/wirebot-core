@@ -456,6 +456,7 @@ func main() {
 	mux.HandleFunc("/v1/memory/queue/", s.auth(s.handleMemoryQueueAction))
 	mux.HandleFunc("/v1/memory/conflicts", s.auth(s.handleMemoryConflicts))
 	mux.HandleFunc("/v1/memory/extract-vault", s.auth(s.handleMemoryExtractVault))
+	mux.HandleFunc("/v1/memory/extract-conversation", s.auth(s.handleMemoryExtractConversation))
 
 	// Wirebot chat proxy — full conversations with memory retention
 	mux.HandleFunc("/v1/chat", s.auth(s.handleChat))

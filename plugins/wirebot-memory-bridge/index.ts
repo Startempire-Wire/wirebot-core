@@ -600,6 +600,142 @@ const wirebotMemoryBridge = {
     );
 
     // ========================================================================
+    // Tool: wirebot_memory_queue
+    // Review and manage the memory approval queue from any surface
+    // ========================================================================
+
+    const scoreboardUrl = "http://127.0.0.1:8100";
+    const scoreboardToken = "65b918ba-baf5-4996-8b53-6fb0f662a0c3";
+
+    api.registerTool(
+      {
+        name: "wirebot_memory_queue",
+        label: "Memory Queue",
+        description:
+          "View and manage the memory approval queue. Shows pending extracted memories " +
+          "waiting for human review. Actions: status (counts by status), list (show pending), " +
+          "approve (approve by ID), reject (reject by ID), correct (fix text and approve), " +
+          "extract-vault (trigger Obsidian vault extraction). " +
+          "Use this when asked about pending memories, memory review, or extraction progress.",
+        parameters: Type.Object({
+          action: Type.Union([
+            Type.Literal("status"),
+            Type.Literal("list"),
+            Type.Literal("approve"),
+            Type.Literal("reject"),
+            Type.Literal("correct"),
+            Type.Literal("extract-vault"),
+          ], { description: "status=counts, list=show pending, approve/reject/correct=act on ID, extract-vault=start extraction" }),
+          id: Type.Optional(Type.String({ description: "Memory queue item ID (for approve/reject/correct)" })),
+          correction: Type.Optional(Type.String({ description: "Corrected memory text (for correct action)" })),
+          limit: Type.Optional(Type.Number({ description: "Max items to list (default 10)" })),
+        }),
+        async execute(_toolCallId, params) {
+          const p = params as {
+            action: string;
+            id?: string;
+            correction?: string;
+            limit?: number;
+          };
+
+          const headers = {
+            "Authorization": `Bearer ${scoreboardToken}`,
+            "Content-Type": "application/json",
+          };
+
+          try {
+            switch (p.action) {
+              case "status": {
+                const resp = await fetch(`${scoreboardUrl}/v1/memory/queue?status=pending&limit=1`, { headers });
+                const data = await resp.json() as { counts?: Record<string, number> };
+                const counts = data.counts || {};
+                let text = "📋 Memory Queue Status\n\n";
+                for (const [status, count] of Object.entries(counts)) {
+                  const icon = status === "pending" ? "⏳" : status === "approved" ? "✅" : status === "rejected" ? "❌" : "✏️";
+                  text += `${icon} ${status}: ${count}\n`;
+                }
+                return { content: [{ type: "text" as const, text }] };
+              }
+
+              case "list": {
+                const limit = p.limit || 10;
+                const resp = await fetch(`${scoreboardUrl}/v1/memory/queue?status=pending&limit=${limit}`, { headers });
+                const data = await resp.json() as { items?: Array<{ id: string; memory_text: string; source_type: string; source_file: string; confidence: number; created_at: string }> };
+                const items = data.items || [];
+                if (items.length === 0) {
+                  return { content: [{ type: "text" as const, text: "✅ No pending memories to review." }] };
+                }
+                let text = `📋 Pending Memories (${items.length})\n\n`;
+                for (const item of items) {
+                  text += `**${item.id}** (${item.source_type}, conf: ${item.confidence})\n`;
+                  text += `  "${item.memory_text}"\n`;
+                  text += `  Source: ${item.source_file}\n\n`;
+                }
+                text += `\nTo approve: wirebot_memory_queue(action: "approve", id: "<id>")\n`;
+                text += `To reject: wirebot_memory_queue(action: "reject", id: "<id>")`;
+                return { content: [{ type: "text" as const, text }] };
+              }
+
+              case "approve": {
+                if (!p.id) return { content: [{ type: "text" as const, text: "❌ id required for approve" }] };
+                const resp = await fetch(`${scoreboardUrl}/v1/memory/queue/${p.id}/approve`, {
+                  method: "POST", headers,
+                });
+                const data = await resp.json() as { ok?: boolean; memory?: string };
+                if (data.ok) {
+                  return { content: [{ type: "text" as const, text: `✅ Approved: "${data.memory?.slice(0, 80)}..."` }] };
+                }
+                return { content: [{ type: "text" as const, text: `❌ Failed to approve ${p.id}` }] };
+              }
+
+              case "reject": {
+                if (!p.id) return { content: [{ type: "text" as const, text: "❌ id required for reject" }] };
+                const resp = await fetch(`${scoreboardUrl}/v1/memory/queue/${p.id}/reject`, {
+                  method: "POST", headers,
+                });
+                const data = await resp.json() as { ok?: boolean };
+                if (data.ok) {
+                  return { content: [{ type: "text" as const, text: `❌ Rejected: ${p.id}` }] };
+                }
+                return { content: [{ type: "text" as const, text: `Failed to reject ${p.id}` }] };
+              }
+
+              case "correct": {
+                if (!p.id || !p.correction) {
+                  return { content: [{ type: "text" as const, text: "❌ id and correction required" }] };
+                }
+                const resp = await fetch(`${scoreboardUrl}/v1/memory/queue/${p.id}/correct`, {
+                  method: "POST", headers,
+                  body: JSON.stringify({ correction: p.correction }),
+                });
+                const data = await resp.json() as { ok?: boolean };
+                if (data.ok) {
+                  return { content: [{ type: "text" as const, text: `✏️ Corrected: "${p.correction.slice(0, 80)}..."` }] };
+                }
+                return { content: [{ type: "text" as const, text: `Failed to correct ${p.id}` }] };
+              }
+
+              case "extract-vault": {
+                const resp = await fetch(`${scoreboardUrl}/v1/memory/extract-vault`, {
+                  method: "POST", headers,
+                  body: JSON.stringify({ path: "/data/wirebot/obsidian", limit: 853 }),
+                });
+                const data = await resp.json() as { message?: string; limit?: number };
+                return { content: [{ type: "text" as const, text: `🔄 ${data.message || "Extraction started"} (limit: ${data.limit || 853})` }] };
+              }
+
+              default:
+                return { content: [{ type: "text" as const, text: `❌ Unknown action: ${p.action}` }] };
+            }
+          } catch (err) {
+            return { content: [{ type: "text" as const, text: `Error: ${String(err)}` }] };
+          }
+        },
+      },
+      { name: "wirebot_memory_queue" },
+    );
+
+    // ========================================================================
     // Tool: wirebot_checklist
     // Business Setup Checklist Engine — Idea → Launch → Growth
     // ========================================================================
@@ -979,10 +1115,8 @@ const wirebotMemoryBridge = {
 
     // ========================================================================
     // Tool: wirebot_score — scoreboard query & event submission
+    // (scoreboardUrl + scoreboardToken already declared above in wirebot_memory_queue)
     // ========================================================================
-
-    const scoreboardUrl = "http://127.0.0.1:8100";
-    const scoreboardToken = "65b918ba-baf5-4996-8b53-6fb0f662a0c3";
 
     api.registerTool(
       {
@@ -1270,7 +1404,8 @@ const wirebotMemoryBridge = {
 
           if (conversation.length < 2) return; // Need at least 1 exchange
 
-          // Send structured messages to Mem0 (its designed API for conversation-aware extraction)
+          // ── Flow 1a: Send to Mem0 for its native conversation-aware extraction ──
+          // Mem0 handles dedup and contradiction resolution internally.
           const result = await mem0Store(
             cfg.mem0Url,
             cfg.mem0Namespace,
@@ -1286,6 +1421,34 @@ const wirebotMemoryBridge = {
             api.logger.warn(
               "wirebot-memory-bridge: Mem0 fact extraction failed",
             );
+          }
+
+          // ── Flow 1b: Also route through scoreboard's extraction queue ──
+          // This feeds the approval pipeline → MEMORY.md (the vector-indexed store).
+          // Without this, Mem0 gets facts but MEMORY.md doesn't, causing divergence.
+          // Uses POST /v1/memory/extract-conversation endpoint on the scoreboard.
+          try {
+            const lastUser = conversation.filter((m) => m.role === "user").pop();
+            const lastAssistant = conversation.filter((m) => m.role === "assistant").pop();
+            if (lastUser && lastAssistant && lastUser.content.length >= 20) {
+              const extractResp = await fetch(`${scoreboardUrl}/v1/memory/extract-conversation`, {
+                method: "POST",
+                headers: {
+                  "Authorization": `Bearer ${scoreboardToken}`,
+                  "Content-Type": "application/json",
+                },
+                body: JSON.stringify({
+                  user_message: lastUser.content,
+                  assistant_message: lastAssistant.content,
+                }),
+                signal: AbortSignal.timeout(5000),
+              });
+              if (extractResp.ok) {
+                api.logger.info("wirebot-memory-bridge: routed conversation to scoreboard extraction queue");
+              }
+            }
+          } catch {
+            // Scoreboard routing is best-effort
           }
 
           // ── Flow 2: Route business-relevant context to Letta agent ──

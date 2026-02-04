@@ -24,39 +24,154 @@ type MemoryExtraction struct {
 	Confidence    float64 `json:"confidence"`
 }
 
-// ExtractMemoriesFromDocument uses LLM to extract personal facts with real quoted context
-func (s *Server) ExtractMemoriesFromDocument(docPath, content string) ([]MemoryExtraction, error) {
-	// Don't process tiny files
-	if len(content) < 100 {
-		return nil, nil
+// classifyDocument determines the extraction strategy based on file path and frontmatter.
+// Returns: docType ("journal", "client_note", "ai_chat", "book", "note", "freewriting")
+// and any metadata extracted from YAML frontmatter.
+func classifyDocument(docPath, content string) (docType string, meta map[string]string) {
+	meta = make(map[string]string)
+	lower := strings.ToLower(docPath)
+
+	// Parse YAML frontmatter (between --- delimiters)
+	if strings.HasPrefix(strings.TrimSpace(content), "---") {
+		parts := strings.SplitN(content, "---", 3)
+		if len(parts) >= 3 {
+			fm := parts[1]
+			for _, line := range strings.Split(fm, "\n") {
+				line = strings.TrimSpace(line)
+				if idx := strings.Index(line, ":"); idx > 0 {
+					key := strings.TrimSpace(line[:idx])
+					val := strings.TrimSpace(strings.Trim(line[idx+1:], "\"' "))
+					if val != "" {
+						meta[key] = val
+					}
+				}
+			}
+		}
 	}
 
-	// Truncate very long docs to first 8000 chars for extraction
-	extractContent := content
-	if len(extractContent) > 8000 {
-		extractContent = extractContent[:8000]
+	// Classify by path
+	switch {
+	case strings.Contains(lower, "daily journal") || strings.Contains(lower, "daily thoughts"):
+		docType = "journal"
+	case strings.Contains(lower, "client notes") || strings.Contains(lower, "philoveracity notes"):
+		docType = "client_note"
+	case strings.Contains(lower, "ai chats") || strings.Contains(lower, "chatgpt") || strings.Contains(lower, "grok"):
+		docType = "ai_chat"
+	case strings.Contains(lower, "book") || strings.Contains(lower, "books"):
+		docType = "book"
+	case strings.Contains(lower, "freewriting"):
+		docType = "freewriting"
+	default:
+		docType = "note"
 	}
 
-	// Build LLM prompt for extraction — includes entity disambiguation, category, reasoning
-	prompt := fmt.Sprintf(`You are extracting PERSONAL FACTS about the document author from their writing.
+	return docType, meta
+}
 
-DOCUMENT: %s
----
+// buildExtractionPrompt generates a type-specific LLM prompt for document memory extraction.
+// Different document types get different prompts tuned for their content structure.
+func buildExtractionPrompt(docPath, content, docType string, meta map[string]string) string {
+	// Inject frontmatter context if available
+	var metaContext string
+	if author := meta["author"]; author != "" {
+		metaContext += fmt.Sprintf("Author: %s\n", author)
+	}
+	if created := meta["created"]; created != "" {
+		metaContext += fmt.Sprintf("Created: %s\n", created)
+	}
+	if loc := meta["location"]; loc != "" {
+		metaContext += fmt.Sprintf("GPS: %s\n", loc)
+	}
+	if title := meta["title"]; title != "" {
+		metaContext += fmt.Sprintf("Title: %s\n", title)
+	}
+	if platform := meta["platform"]; platform != "" {
+		metaContext += fmt.Sprintf("Platform: %s\n", platform)
+	}
+
+	// Type-specific extraction instructions
+	var typeRules string
+	switch docType {
+	case "journal":
+		typeRules = `This is a DAILY JOURNAL entry. Extract:
+- Habits and routines (wake time, meals, exercise, work patterns)
+- Emotional state, stress levels, energy
+- Projects being worked on and progress
+- People mentioned and relationships
+- Goals set or referenced
+- Health notes (vitamins, sleep, food)
+- Location and environment clues
+Weight recent patterns over one-off mentions. Habits with timestamps are high-value.`
+
+	case "client_note":
+		typeRules = `This is a CLIENT/BUSINESS NOTE. Extract:
+- Client name and project relationship
+- Pricing, hourly rates, project costs mentioned
+- Technical skills demonstrated (WordPress, WooCommerce, etc.)
+- Business practices (rush fees, estimation methods)
+- Client industries served
+- Tools and platforms used
+DO extract business relationships even if old — they reveal skills and experience.`
+
+	case "ai_chat":
+		typeRules = `This is an AI CHAT EXPORT. Extract ONLY facts from the USER's messages (👤 You):
+- Questions reveal what the user is working on or curious about
+- Stated goals, plans, strategies
+- Business context (startup stage, revenue model, products)
+- Technical skills and tools mentioned
+IGNORE the AI assistant's responses entirely — only the user's own words matter.
+The chat title often reveals the user's current focus area.`
+
+	case "book":
+		typeRules = `This is the author's BOOK MANUSCRIPT or notes. Extract:
+- The author is WRITING this book — that itself is a key fact
+- Topics and expertise areas the book covers
+- Personal stories or anecdotes embedded in the writing
+- Author's beliefs, philosophy, or worldview expressed
+- Target audience mentioned
+DO NOT extract facts from quoted external sources within the book.`
+
+	case "freewriting":
+		typeRules = `This is FREEWRITING / creative expression. Extract:
+- Emotional states and what triggered them
+- Life events and circumstances described
+- Relationships and people mentioned
+- Goals, dreams, aspirations expressed
+- Struggles or challenges mentioned
+Be careful with metaphor vs. literal statements — confidence should be lower for figurative language.`
+
+	default: // "note"
+		typeRules = `This is a general NOTE. Extract any personal facts about the author.
+Look for: ideas the author had, skills demonstrated, tools used, projects planned,
+people referenced, locations mentioned, and business concepts explored.`
+	}
+
+	return fmt.Sprintf(`You are extracting PERSONAL FACTS about the document author from their writing.
+%s
+DOCUMENT TYPE: %s
+FILE: %s
+%s---
 %s
 ---
 
-RULES:
+TYPE-SPECIFIC INSTRUCTIONS:
+%s
+
+GENERAL RULES:
 1. Extract facts about the AUTHOR — inference OK if supported by quoted text
 2. Each fact MUST have a direct quote (2-4 sentences) from the document as evidence
 3. Confidence scoring:
-   - 0.9+ explicit statement ("I live in X", "my name is Y")
+   - 0.9+ explicit first-person statement ("I live in X", "my name is Y")
    - 0.7-0.9 supported inference ("moved to Corona last year" → lives in Corona)
    - 0.5-0.7 weak inference (mentioned but unclear if about the author)
    - Below 0.5: do not extract
-4. Focus on: location, work, preferences, relationships, goals, habits, beliefs, business
+4. Focus on: location, work, preferences, relationships, goals, habits, beliefs, business, skills, tools
 5. Do NOT extract general knowledge or opinions about external topics
 6. NO GUESSING — if you can't quote evidence, don't extract it
 7. FLAG ENTITIES that need disambiguation (e.g. "Providence" = hospital? city? organization?)
+8. TEMPORAL CONTEXT: note when facts are dated — "in 2016" differs from "currently"
+9. RELATIONSHIPS: extract connections between people and projects (e.g. "Client X hired author for Y")
+10. SKILLS: programming languages, tools, platforms the author uses or has used
 
 OUTPUT FORMAT (JSON array):
 [
@@ -71,11 +186,102 @@ OUTPUT FORMAT (JSON array):
   }
 ]
 
-CATEGORIES: identity, preference, fact, relationship, business, temporal, habit
+CATEGORIES: identity, preference, fact, relationship, business, temporal, habit, skill, health, creative
 ENTITIES: List any person names, locations, organizations, or products mentioned.
 REASONING: One sentence explaining why you assigned that confidence level.
 
-If no personal facts can be extracted with real quotes, return: []`, docPath, extractContent)
+Extract as many facts as the evidence supports — do not artificially limit to 3-5. Rich documents may yield 10+ facts.
+If no personal facts can be extracted with real quotes, return: []`,
+		metaContext, docType, docPath,
+		func() string {
+			if metaContext != "" {
+				return "METADATA:\n" + metaContext
+			}
+			return ""
+		}(),
+		content, typeRules)
+}
+
+// ExtractMemoriesFromDocument uses LLM to extract personal facts with real quoted context.
+// Uses document classification for type-specific extraction prompts.
+// Long documents are chunked to avoid truncation loss.
+func (s *Server) ExtractMemoriesFromDocument(docPath, content string) ([]MemoryExtraction, error) {
+	// Don't process tiny files
+	if len(content) < 100 {
+		return nil, nil
+	}
+
+	// Classify document for type-specific extraction
+	docType, meta := classifyDocument(docPath, content)
+
+	// Strip YAML frontmatter from content before sending to LLM
+	extractContent := content
+	if strings.HasPrefix(strings.TrimSpace(content), "---") {
+		parts := strings.SplitN(content, "---", 3)
+		if len(parts) >= 3 {
+			extractContent = parts[2]
+		}
+	}
+
+	// Chunk strategy: for long docs, extract from multiple chunks instead of truncating
+	var allMemories []MemoryExtraction
+	chunkSize := 6000
+	overlap := 500
+
+	if len(extractContent) <= chunkSize+overlap {
+		// Single chunk — fast path
+		prompt := buildExtractionPrompt(docPath, extractContent, docType, meta)
+		memories, err := s.extractFromPrompt(docPath, content, prompt, docType)
+		if err != nil {
+			return nil, err
+		}
+		return memories, nil
+	}
+
+	// Multi-chunk: slide through document with overlap
+	chunkNum := 0
+	for offset := 0; offset < len(extractContent); offset += chunkSize {
+		end := offset + chunkSize + overlap
+		if end > len(extractContent) {
+			end = len(extractContent)
+		}
+		chunk := extractContent[offset:end]
+		chunkNum++
+
+		chunkPath := fmt.Sprintf("%s [chunk %d]", docPath, chunkNum)
+		prompt := buildExtractionPrompt(chunkPath, chunk, docType, meta)
+		memories, err := s.extractFromPrompt(docPath, content, prompt, docType)
+		if err != nil {
+			log.Printf("[memory-extract] Chunk %d error for %s: %v", chunkNum, docPath, err)
+			continue
+		}
+		allMemories = append(allMemories, memories...)
+
+		// Max 3 chunks per document to bound LLM costs
+		if chunkNum >= 3 {
+			break
+		}
+
+		// Rate limit between chunks
+		time.Sleep(1 * time.Second)
+	}
+
+	// Dedup memories within the same document (multi-chunk can produce overlaps)
+	seen := map[string]bool{}
+	var deduped []MemoryExtraction
+	for _, m := range allMemories {
+		key := strings.ToLower(strings.Join(strings.Fields(m.MemoryText), " "))
+		if !seen[key] {
+			seen[key] = true
+			deduped = append(deduped, m)
+		}
+	}
+
+	return deduped, nil
+}
+
+// extractFromPrompt handles the LLM call and response parsing for a single extraction prompt.
+func (s *Server) extractFromPrompt(docPath, fullContent, prompt, docType string) ([]MemoryExtraction, error) {
 
 	// Call gateway for extraction
 	result, err := s.callLLMForExtraction(prompt)
@@ -113,7 +319,7 @@ If no personal facts can be extracted with real quotes, return: []`, docPath, ex
 			continue
 		}
 		// Verify quote actually exists in content (fuzzy match)
-		if !containsFuzzy(content, e.Quote) {
+		if !containsFuzzy(fullContent, e.Quote) {
 			log.Printf("[memory-extract] Quote not found in doc, skipping: %s", e.Quote[:min(50, len(e.Quote))])
 			continue
 		}
@@ -125,9 +331,19 @@ If no personal facts can be extracted with real quotes, return: []`, docPath, ex
 		if len(e.Entities) > 0 {
 			context += "\n[Entities: " + strings.Join(e.Entities, ", ") + "]"
 		}
+		// Use classified doc type as source_type for richer filtering
+		sourceType := "obsidian"
+		if docType == "ai_chat" {
+			sourceType = "ai_chat"
+		} else if docType == "journal" {
+			sourceType = "journal"
+		} else if docType == "client_note" {
+			sourceType = "client_note"
+		}
+
 		memories = append(memories, MemoryExtraction{
 			MemoryText:    e.Memory,
-			SourceType:    "obsidian",
+			SourceType:    sourceType,
 			SourceFile:    docPath,
 			SourceSection: e.Section,
 			SourceContext: context,
@@ -204,11 +420,15 @@ CONVERSATION:
 ---
 
 RULES:
-1. Extract facts about the USER - inference OK if supported by their actual words
+1. Extract facts about the USER — inference OK if supported by their actual words
 2. Include the actual user message as the quote (evidence)
 3. Confidence 0.9+ for direct statements ("I live in X"), 0.7-0.9 for supported inference
-4. Do NOT extract what the assistant said or assumed - only what the USER stated
-5. NO GUESSING - if the user didn't say it, don't extract it
+4. Do NOT extract what the assistant said or assumed — only what the USER stated or confirmed
+5. NO GUESSING — if the user didn't say it, don't extract it
+6. Look for: preferences, decisions made, goals stated, projects discussed, emotions expressed
+7. Business context: tools chosen, strategies discussed, pricing decisions, product direction
+8. Relationships: people mentioned, collaborators, clients, partners
+9. Extract ACTIONS taken ("I just shipped X", "I deployed Y") as temporal facts
 
 OUTPUT FORMAT (JSON array):
 [
@@ -298,7 +518,8 @@ func (s *Server) QueueMemoryForApproval(m MemoryExtraction) error {
 	hasAmbiguousEntities := containsAmbiguousEntities(m.MemoryText)
 
 	// Bulk document scans always queue for review regardless of confidence
-	isBulkScan := m.SourceType == "obsidian" || m.SourceType == "gdrive" || m.SourceType == "dropbox"
+	isBulkScan := m.SourceType == "obsidian" || m.SourceType == "gdrive" || m.SourceType == "dropbox" ||
+		m.SourceType == "ai_chat" || m.SourceType == "journal" || m.SourceType == "client_note"
 
 	if m.Confidence >= 0.95 && m.SourceType == "pairing" {
 		status = "approved"
@@ -356,7 +577,7 @@ func (s *Server) callLLMForExtraction(prompt string) (string, error) {
 		"messages": []map[string]string{
 			{"role": "user", "content": prompt},
 		},
-		"max_tokens": 2000,
+		"max_tokens": 4000,
 	}
 	bodyBytes, _ := json.Marshal(body)
 
@@ -508,6 +729,52 @@ func (s *Server) handleMemoryExtractVault(w http.ResponseWriter, r *http.Request
 		s.saveVaultWatermark(watermarkPath, processedFiles)
 		log.Printf("[memory-extract] Complete: %d files processed, %d skipped, %d memories extracted, %d queued", processed, skipped, extracted, queued)
 	}()
+}
+
+// POST /v1/memory/extract-conversation — Extract memories from a conversation exchange.
+// Called by the wirebot-memory-bridge plugin's agent_end hook to route Discord/gateway
+// conversations through the same approval pipeline as wins portal chat.
+func (s *Server) handleMemoryExtractConversation(w http.ResponseWriter, r *http.Request) {
+	cors(w)
+	if r.Method != "POST" {
+		http.Error(w, `{"error":"POST only"}`, 405)
+		return
+	}
+
+	var body struct {
+		UserMessage      string `json:"user_message"`
+		AssistantMessage string `json:"assistant_message"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.UserMessage == "" {
+		http.Error(w, `{"error":"user_message required"}`, 400)
+		return
+	}
+
+	// Fire extraction in background (same as extractConversationToQueue but bypasses rate limiter)
+	go func() {
+		if len(body.UserMessage) < 20 {
+			return
+		}
+		messages := []map[string]string{
+			{"role": "user", "content": body.UserMessage},
+			{"role": "assistant", "content": body.AssistantMessage},
+		}
+		memories, err := s.ExtractMemoriesFromConversation(messages)
+		if err != nil {
+			log.Printf("[convo-extract-api] Extraction error: %v", err)
+			return
+		}
+		for _, m := range memories {
+			if err := s.QueueMemoryForApproval(m); err != nil {
+				log.Printf("[convo-extract-api] Queue error: %v", err)
+			}
+		}
+		if len(memories) > 0 {
+			log.Printf("[convo-extract-api] Extracted %d memories from conversation", len(memories))
+		}
+	}()
+
+	writeJSON(w, map[string]interface{}{"ok": true, "message": "Extraction queued"})
 }
 
 func (s *Server) saveVaultWatermark(path string, processed map[string]bool) {
