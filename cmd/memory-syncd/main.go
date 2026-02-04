@@ -6,7 +6,7 @@
 // Flows:
 //   Workspace → External:
 //     MEMORY.md edit     → extract new facts → POST Mem0
-//     BUSINESS_STATE.md  → parse → PATCH Letta blocks
+//     BUSINESS_STATE.md  → parse → agent message to Letta (self-edits blocks)
 //   External → Workspace:
 //     Mem0 new facts     → dedup → append MEMORY.md
 //     Letta block change → snapshot BUSINESS_STATE.md

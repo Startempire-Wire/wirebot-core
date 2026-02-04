@@ -4647,6 +4647,11 @@ var lastChatExtractTime time.Time
 // and queues any personal facts found for approval review.
 // Rate-limited to at most once per 2 minutes to avoid hammering the LLM.
 func (s *Server) extractConversationToQueue(userMsg, assistantMsg string) {
+	// Skip tiny exchanges before touching the rate limiter
+	if len(userMsg) < 20 {
+		return
+	}
+
 	// Rate limit: skip if we extracted less than 2 minutes ago
 	chatExtractMu.Lock()
 	if time.Since(lastChatExtractTime) < 2*time.Minute {
@@ -4655,11 +4660,6 @@ func (s *Server) extractConversationToQueue(userMsg, assistantMsg string) {
 	}
 	lastChatExtractTime = time.Now()
 	chatExtractMu.Unlock()
-
-	// Skip tiny exchanges — nothing to extract
-	if len(userMsg) < 20 {
-		return
-	}
 	messages := []map[string]string{
 		{"role": "user", "content": userMsg},
 		{"role": "assistant", "content": assistantMsg},

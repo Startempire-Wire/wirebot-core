@@ -322,12 +322,15 @@ func (s *Server) QueueMemoryForApproval(m MemoryExtraction) error {
 }
 
 // containsAmbiguousEntities checks for location/person/org names that need human disambiguation.
+// Uses word-level matching to avoid false positives like "coronavirus" matching "corona".
 func containsAmbiguousEntities(text string) bool {
-	lower := strings.ToLower(text)
-	// Location names that have been historically confused
-	ambiguousLocations := []string{"providence", "corona", "riverside", "portland", "springfield"}
-	for _, loc := range ambiguousLocations {
-		if strings.Contains(lower, loc) {
+	ambiguousLocations := map[string]bool{
+		"providence": true, "corona": true, "riverside": true,
+		"portland": true, "springfield": true,
+	}
+	for _, word := range strings.Fields(strings.ToLower(text)) {
+		word = strings.Trim(word, ".,!?;:\"'()-")
+		if ambiguousLocations[word] {
 			return true
 		}
 	}
@@ -371,7 +374,11 @@ func (s *Server) callLLMForExtraction(prompt string) (string, error) {
 	defer resp.Body.Close()
 
 	respBody, _ := io.ReadAll(resp.Body)
-	
+
+	if resp.StatusCode != 200 {
+		return "", fmt.Errorf("gateway returned %d: %s", resp.StatusCode, string(respBody[:min(200, len(respBody))]))
+	}
+
 	var chatResp struct {
 		Choices []struct {
 			Message struct {
