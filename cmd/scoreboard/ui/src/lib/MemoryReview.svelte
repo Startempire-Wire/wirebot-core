@@ -20,13 +20,19 @@
   // Swipe state
   let startX = 0;
   let startY = 0;
+  let lastX = 0;
+  let lastTime = 0;
+  let velocityX = 0;
   let dragging = $state(false);
   let swipeOffset = $state(0);
   let swipeOpacity = $state(0);
   let swipeDirection = $state(null);
   let animatingOut = $state(false);
+  let nextCardScale = $state(0.95);  // scale of card behind
   
-  const SWIPE_THRESHOLD = 100;
+  const SWIPE_THRESHOLD = 80;
+  const THROW_OUT_DISTANCE = 600; // far enough to fully exit viewport
+  const VELOCITY_THRESHOLD = 0.5; // px/ms — fast flick triggers throw even below distance threshold
   const POWER_PER_ACTION = { approve: 15, correct: 25, reject: 5 };
   const POWER_PER_LEVEL = 100;
   
@@ -96,7 +102,12 @@
     if (!currentItem) return;
     
     animatingOut = true;
-    swipeOffset = action === 'approve' || action === 'correct' ? 400 : -400;
+    const direction = (action === 'approve' || action === 'correct') ? 1 : -1;
+    // Throw far enough to fully exit screen with extra margin
+    swipeOffset = direction * THROW_OUT_DISTANCE;
+    swipeOpacity = 1;
+    swipeDirection = direction > 0 ? 'right' : 'left';
+    nextCardScale = 1; // next card scales up to full size
     
     const body = correction ? { correction } : {};
     try {
@@ -109,6 +120,7 @@
       if (res.ok) {
         addPower(action);
         
+        // Wait for the throw animation to complete before swapping cards
         setTimeout(() => {
           items = items.filter((_, i) => i !== currentIndex);
           counts.pending = Math.max(0, counts.pending - 1);
@@ -122,12 +134,14 @@
           swipeOpacity = 0;
           swipeDirection = null;
           animatingOut = false;
-        }, 250);
+          nextCardScale = 0.95;
+        }, 400); // match the CSS transition duration
       }
     } catch (e) {
       console.error('Action failed:', e);
       animatingOut = false;
       swipeOffset = 0;
+      nextCardScale = 0.95;
     }
   }
   
@@ -135,6 +149,9 @@
     if (correctionMode || animatingOut) return;
     startX = e.touches[0].clientX;
     startY = e.touches[0].clientY;
+    lastX = startX;
+    lastTime = Date.now();
+    velocityX = 0;
     dragging = true;
   }
   
@@ -142,12 +159,25 @@
     if (!dragging || correctionMode || animatingOut) return;
     const deltaY = Math.abs(e.touches[0].clientY - startY);
     const deltaX = e.touches[0].clientX - startX;
+    const now = Date.now();
+    
+    // Track velocity (exponential moving average for smoothness)
+    const dt = now - lastTime;
+    if (dt > 0) {
+      const instantV = (e.touches[0].clientX - lastX) / dt;
+      velocityX = velocityX * 0.4 + instantV * 0.6;
+    }
+    lastX = e.touches[0].clientX;
+    lastTime = now;
     
     if (Math.abs(deltaX) > deltaY) {
       e.preventDefault();
       swipeOffset = deltaX;
+      // Opacity ramps up based on distance toward threshold
       swipeOpacity = Math.min(Math.abs(deltaX) / SWIPE_THRESHOLD, 1);
-      swipeDirection = deltaX > 40 ? 'right' : deltaX < -40 ? 'left' : null;
+      swipeDirection = deltaX > 30 ? 'right' : deltaX < -30 ? 'left' : null;
+      // Next card scales up proportionally as current card leaves
+      nextCardScale = 0.95 + 0.05 * Math.min(Math.abs(deltaX) / SWIPE_THRESHOLD, 1);
     }
   }
   
@@ -155,15 +185,29 @@
     if (!dragging || animatingOut) return;
     dragging = false;
     
-    if (swipeOffset > SWIPE_THRESHOLD) takeAction('approve');
-    else if (swipeOffset < -SWIPE_THRESHOLD) takeAction('reject');
-    else { swipeOffset = 0; swipeOpacity = 0; swipeDirection = null; }
+    const absOffset = Math.abs(swipeOffset);
+    const absVelocity = Math.abs(velocityX);
+    
+    // Throw out if: exceeded distance threshold OR fast flick velocity
+    if (absOffset > SWIPE_THRESHOLD || absVelocity > VELOCITY_THRESHOLD) {
+      const direction = swipeOffset > 0 ? 'approve' : 'reject';
+      takeAction(direction);
+    } else {
+      // Spring back to center
+      swipeOffset = 0;
+      swipeOpacity = 0;
+      swipeDirection = null;
+      nextCardScale = 0.95;
+    }
   }
   
   function handleMouseDown(e) {
     if (correctionMode || animatingOut) return;
     if (e.target.closest('.memory-card')) {
       startX = e.clientX;
+      lastX = e.clientX;
+      lastTime = Date.now();
+      velocityX = 0;
       dragging = true;
       e.preventDefault();
     }
@@ -171,9 +215,19 @@
   
   function handleMouseMove(e) {
     if (!dragging || correctionMode || animatingOut) return;
+    const now = Date.now();
+    const dt = now - lastTime;
+    if (dt > 0) {
+      const instantV = (e.clientX - lastX) / dt;
+      velocityX = velocityX * 0.4 + instantV * 0.6;
+    }
+    lastX = e.clientX;
+    lastTime = now;
+    
     swipeOffset = e.clientX - startX;
     swipeOpacity = Math.min(Math.abs(swipeOffset) / SWIPE_THRESHOLD, 1);
-    swipeDirection = swipeOffset > 40 ? 'right' : swipeOffset < -40 ? 'left' : null;
+    swipeDirection = swipeOffset > 30 ? 'right' : swipeOffset < -30 ? 'left' : null;
+    nextCardScale = 0.95 + 0.05 * Math.min(Math.abs(swipeOffset) / SWIPE_THRESHOLD, 1);
   }
   
   function handleMouseUp() { handleTouchEnd(); }
@@ -280,14 +334,14 @@
   {:else if currentItem}
     <div class="card-stack">
       {#each nextItems as _, i}
-        <div class="card-behind" style="transform: scale({0.95 - i * 0.03}) translateY({(i + 1) * 12}px); opacity: {0.4 - i * 0.15};"></div>
+        <div class="card-behind" style="transform: scale({(i === 0 ? nextCardScale : 0.95 - i * 0.03)}) translateY({(i + 1) * 12}px); opacity: {(i === 0 ? 0.7 : 0.4 - i * 0.15)}; transition: transform 0.3s ease-out, opacity 0.3s ease-out;"></div>
       {/each}
       
       <div 
         class="memory-card"
         class:dragging
         class:animating={animatingOut}
-        style="transform: translateX({swipeOffset}px) rotate({swipeOffset * 0.04}deg);"
+        style="transform: translateX({swipeOffset}px) rotate({swipeOffset * 0.06}deg); opacity: {animatingOut ? Math.max(0, 1 - Math.abs(swipeOffset) / 500) : 1};"
         ontouchstart={handleTouchStart}
         ontouchmove={handleTouchMove}
         ontouchend={handleTouchEnd}
@@ -489,13 +543,13 @@
     overflow: hidden;
     touch-action: pan-y;
     cursor: grab;
-    transition: transform 0.12s ease-out;
+    transition: transform 0.35s cubic-bezier(0.175, 0.885, 0.32, 1.275), opacity 0.3s ease-out;
     user-select: none;
     display: flex;
     flex-direction: column;
   }
   .memory-card.dragging { cursor: grabbing; transition: none; }
-  .memory-card.animating { transition: transform 0.25s ease-out; }
+  .memory-card.animating { transition: transform 0.4s cubic-bezier(0.2, 0, 0.4, 1), opacity 0.35s ease-out; }
   
   /* Swipe Stamps */
   .swipe-stamp {
