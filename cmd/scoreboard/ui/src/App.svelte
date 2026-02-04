@@ -16,6 +16,7 @@
 
   let view = $state('dashboard');
   let viewHistory = $state(['dashboard']); // SPA navigation stack
+  let visitedViews = $state(new Set(['dashboard'])); // tracks which tabs have been mounted
   let data = $state(null);
   let feed = $state([]);
   let history = $state([]);
@@ -59,12 +60,16 @@
   // ── SPA Navigation with Back Button Support ──
   function navigateTo(newView) {
     if (newView === view) return;
+    visitedViews.add(newView);
+    visitedViews = visitedViews; // trigger reactivity
     viewHistory = [...viewHistory, newView];
     view = newView;
     window.history.pushState({ view: newView, idx: viewHistory.length - 1 }, '', `#${newView}`);
   }
   function handlePopState(e) {
     if (e.state?.view) {
+      visitedViews.add(e.state.view);
+      visitedViews = visitedViews;
       view = e.state.view;
       // Pop from our stack too
       if (viewHistory.length > 1) {
@@ -812,6 +817,9 @@ Tracked with Wirebot — your AI business operating partner`;
     viewHistory = [...viewHistory, next];
     window.history.pushState({ view: next, idx: viewHistory.length - 1 }, '', `#${next}`);
 
+    visitedViews.add(next);
+    visitedViews = visitedViews; // trigger reactivity
+
     // Use View Transitions API if available (Chrome 111+, Safari 18+)
     if (document.startViewTransition) {
       document.documentElement.dataset.direction = direction;
@@ -847,9 +855,8 @@ Tracked with Wirebot — your AI business operating partner`;
     handleOAuthCallback();
     canShare = !!navigator.share;
     if (loggedInUser) {
-      fetchAll();
-      fetchProfile();
-      loadIntegrations();
+      // Fire all initial fetches in parallel — no sequential waterfall
+      Promise.all([fetchAll(), fetchProfile(), loadIntegrations()]);
     }
     const interval = setInterval(() => { if (loggedInUser) fetchAll(); }, 30000);
     // SW disabled — network-first app, no offline needed
@@ -929,7 +936,10 @@ Tracked with Wirebot — your AI business operating partner`;
       ontouchmove={handleTouchMove}
       ontouchend={handleTouchEnd}
       style="transform: translateY({pulling ? pullY * 0.4 : 0}px); transition: {pulling ? 'none' : 'transform 0.2s ease'}">
-      {#if view === 'dashboard'}
+      <!-- Keep-alive views: once visited, stay mounted but hidden via CSS.
+           Prevents re-fetch + re-render on every tab switch.
+           Data props update reactively even when hidden. -->
+      <div class="view-pane" class:view-active={view === 'dashboard'}>
         <Dashboard {data} user={loggedInUser} token={getToken()} {activeBusiness}
           pairingComplete={selfReportCount > 0}
           onOpenPairing={() => showPairing = true}
@@ -938,20 +948,40 @@ Tracked with Wirebot — your AI business operating partner`;
           onopenFab={() => showChat = true}
           onopenPairing={() => showPairing = true}
           onbusinessChange={(e) => { activeBusiness = e.detail; fetchAll(); }} />
-      {:else if view === 'score'}
-        <Score {data} {lastUpdate} onHelp={() => showHints = true} user={loggedInUser} onPairing={selfReportCount === 0 ? () => showPairing = true : null} onShare={shareScore} {canShare} />
-      {:else if view === 'feed'}
-        <Feed items={feed} pendingCount={data?.pending_count || 0} onHelp={() => showHints = true}
-          {activeBusiness} onBusinessChange={(biz) => { activeBusiness = biz; fetchAll(); }} />
-      {:else if view === 'season'}
-        <Season season={data.season} {history} streak={data.streak} onHelp={() => showHints = true} onnav={(e) => navigateTo(e.detail)} />
-      {:else if view === 'wrapped'}
-        <Wrapped {wrapped} />
-      {:else if view === 'audit'}
-        <Audit />
-      {:else if view === 'memory-review'}
-        <MemoryReview on:exit={() => navigateTo('settings')} />
-      {:else if view === 'settings'}
+      </div>
+      {#if visitedViews.has('score')}
+        <div class="view-pane" class:view-active={view === 'score'}>
+          <Score {data} {lastUpdate} onHelp={() => showHints = true} user={loggedInUser} onPairing={selfReportCount === 0 ? () => showPairing = true : null} onShare={shareScore} {canShare} />
+        </div>
+      {/if}
+      {#if visitedViews.has('feed')}
+        <div class="view-pane" class:view-active={view === 'feed'}>
+          <Feed items={feed} pendingCount={data?.pending_count || 0} onHelp={() => showHints = true}
+            {activeBusiness} onBusinessChange={(biz) => { activeBusiness = biz; fetchAll(); }} />
+        </div>
+      {/if}
+      {#if visitedViews.has('season')}
+        <div class="view-pane" class:view-active={view === 'season'}>
+          <Season season={data?.season} {history} streak={data?.streak} onHelp={() => showHints = true} onnav={(e) => navigateTo(e.detail)} />
+        </div>
+      {/if}
+      {#if visitedViews.has('wrapped')}
+        <div class="view-pane" class:view-active={view === 'wrapped'}>
+          <Wrapped {wrapped} />
+        </div>
+      {/if}
+      {#if visitedViews.has('audit')}
+        <div class="view-pane" class:view-active={view === 'audit'}>
+          <Audit />
+        </div>
+      {/if}
+      {#if visitedViews.has('memory-review')}
+        <div class="view-pane" class:view-active={view === 'memory-review'}>
+          <MemoryReview on:exit={() => navigateTo('settings')} />
+        </div>
+      {/if}
+      {#if visitedViews.has('settings') || view === 'settings'}
+        <div class="view-pane" class:view-active={view === 'settings'}>
         <div class="settings-view">
           <div class="s-hdr"><h2>⚙️ Settings</h2></div>
 
@@ -1369,6 +1399,7 @@ Tracked with Wirebot — your AI business operating partner`;
             </div>
           </div>
         </div>
+        </div>
       {/if}
     </div>
 
@@ -1619,6 +1650,9 @@ Tracked with Wirebot — your AI business operating partner`;
   }
   @keyframes spin { to { transform: rotate(360deg); } }
   .content { flex: 1; overflow-y: auto; padding-bottom: 56px; view-transition-name: content; }
+  /* Keep-alive view system: hidden panes stay in DOM but invisible + no layout cost */
+  .view-pane { display: none; }
+  .view-pane.view-active { display: contents; }
 
   /* ── View Transitions (native API) ── */
   @view-transition { navigation: auto; }
