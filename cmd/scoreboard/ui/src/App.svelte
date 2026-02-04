@@ -12,6 +12,7 @@
   import PairingFlow from './lib/PairingFlow.svelte';
   import Audit from './lib/Audit.svelte';
   import MemoryReview from './lib/MemoryReview.svelte';
+  import SystemStatus from './lib/SystemStatus.svelte';
 
   let view = $state('dashboard');
   let viewHistory = $state(['dashboard']); // SPA navigation stack
@@ -1356,6 +1357,14 @@ Tracked with Wirebot — your AI business operating partner`;
               <a href="/v1/card/season" target="_blank">📤 Season Card</a>
             </div>
           </div>
+          <!-- ── System Health (superadmin only) ── -->
+          {#if loggedInUser?.is_admin}
+            <div class="s-group">
+              <label>System</label>
+              <SystemStatus token={getToken()} />
+            </div>
+          {/if}
+
           <div class="s-group">
             <label>Info</label>
             <div class="s-info">

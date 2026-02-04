@@ -458,6 +458,7 @@ func main() {
 	mux.HandleFunc("/v1/memory/extract-vault", s.auth(s.handleMemoryExtractVault))
 	mux.HandleFunc("/v1/memory/extract-conversation", s.auth(s.handleMemoryExtractConversation))
 	mux.HandleFunc("/v1/system/health", s.auth(s.handleSystemHealth))
+	mux.HandleFunc("/v1/system/restart", s.auth(s.handleSystemRestart))
 
 	// Wirebot chat proxy — full conversations with memory retention
 	mux.HandleFunc("/v1/chat", s.auth(s.handleChat))
@@ -1144,7 +1145,7 @@ func (s *Server) handleSystemHealth(w http.ResponseWriter, r *http.Request) {
 
 	services := []svcStatus{
 		{Name: "scoreboard", Status: "up", Latency: 0, Detail: "this service"},
-		check("gateway", "http://127.0.0.1:18789/__openclaw__/"),
+		check("gateway", "http://127.0.0.1:18789/"),
 		check("mem0", "http://127.0.0.1:8200/health"),
 		check("letta", "http://127.0.0.1:8283/v1/health"),
 		check("memory-sync", "http://127.0.0.1:8201/health"),
@@ -1181,6 +1182,63 @@ func (s *Server) handleSystemHealth(w http.ResponseWriter, r *http.Request) {
 		"memory_approved":  approved,
 		"disk_percent":     diskPct,
 		"checked_at":       time.Now().Format(time.RFC3339),
+	})
+}
+
+// ─── POST /v1/system/restart — restart a service (superadmin only) ───────────
+
+func (s *Server) handleSystemRestart(w http.ResponseWriter, r *http.Request) {
+	cors(w)
+	if r.Method == "OPTIONS" {
+		return
+	}
+	if r.Method != "POST" {
+		http.Error(w, `{"error":"method not allowed"}`, 405)
+		return
+	}
+
+	var req struct {
+		Service string `json:"service"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, `{"error":"bad request"}`, 400)
+		return
+	}
+
+	// Map UI names to systemd service names (whitelist only)
+	serviceMap := map[string]string{
+		"gateway":     "openclaw-gateway",
+		"mem0":        "mem0-wirebot",
+		"letta":       "letta-wirebot",
+		"memory-sync": "wirebot-memory-syncd",
+	}
+
+	unit, ok := serviceMap[req.Service]
+	if !ok {
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"error": "unknown service: " + req.Service,
+		})
+		return
+	}
+
+	// Restart via systemctl (scoreboard runs as wirebot, needs sudo or polkit)
+	// Use a helper script that's setuid or sudoers-enabled
+	cmd := exec.Command("sudo", "/data/wirebot/bin/svc-restart", unit)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		w.WriteHeader(500)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"error":   "restart failed: " + err.Error(),
+			"output":  string(out),
+			"service": unit,
+		})
+		return
+	}
+
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"ok":      true,
+		"service": unit,
+		"output":  string(out),
 	})
 }
 

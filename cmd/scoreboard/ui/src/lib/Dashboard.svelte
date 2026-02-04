@@ -16,7 +16,6 @@
    * Business-aware: optional filter lens, aggregate by default
    */
   import { createEventDispatcher } from 'svelte';
-  import SystemStatus from './SystemStatus.svelte';
   const dispatch = createEventDispatcher();
 
   let { data = null, user = null, token = '', activeBusiness: parentBiz = '', pairingComplete = false, onOpenPairing = null, onNav = null } = $props();
@@ -363,9 +362,6 @@
   {#if loading}
     <div class="loading"><div class="spinner"></div></div>
   {:else}
-
-    <!-- ═══ 0. SYSTEM STATUS ═══ -->
-    <SystemStatus {token} />
 
     <!-- ═══ 1. WELCOME HEADER ═══ -->
     <div class="header">
