@@ -24,7 +24,6 @@
   let lastUpdate = $state('');
 
   let activeBusiness = $state(''); // '' = all businesses
-  let showFab = $state(false); // kept for backward compat with Dashboard dispatch
   let showHints = $state(false);
   let showChat = $state(false);
   let showPairing = $state(false);
@@ -61,7 +60,7 @@
     if (newView === view) return;
     viewHistory = [...viewHistory, newView];
     view = newView;
-    history.pushState({ view: newView, idx: viewHistory.length - 1 }, '', `#${newView}`);
+    window.history.pushState({ view: newView, idx: viewHistory.length - 1 }, '', `#${newView}`);
   }
   function handlePopState(e) {
     if (e.state?.view) {
@@ -635,7 +634,7 @@ Tracked with Wirebot — your AI business operating partner`;
     wrapped = null;
     view = 'dashboard';
     viewHistory = ['dashboard'];
-    history.replaceState({ view: 'dashboard', idx: 0 }, '', '#dashboard');
+    window.history.replaceState({ view: 'dashboard', idx: 0 }, '', '#dashboard');
   }
 
   function restoreSession() {
@@ -863,7 +862,7 @@ Tracked with Wirebot — your AI business operating partner`;
       showFirstVisit = true;
     }
     // SPA history: set initial state and listen for back button
-    history.replaceState({ view: 'dashboard', idx: 0 }, '', '#dashboard');
+    window.history.replaceState({ view: 'dashboard', idx: 0 }, '', '#dashboard');
     window.addEventListener('popstate', handlePopState);
     return () => {
       clearInterval(interval);

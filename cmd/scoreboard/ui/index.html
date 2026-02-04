@@ -25,7 +25,7 @@
           });
         }
       })();
-      // 2. Apply theme BEFORE CSS loads to prevent flash-of-wrong-theme
+      // Apply theme BEFORE CSS loads to prevent flash-of-wrong-theme
       (function() {
         var t = localStorage.getItem('theme') || 'system';
         if (t === 'system') {
