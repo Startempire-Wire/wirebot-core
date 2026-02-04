@@ -586,7 +586,7 @@ func (s *Server) QueueMemoryForApproval(m MemoryExtraction) error {
 
 	// If auto-approved AND recorded in DB, fan out to all memory layers
 	if status == "approved" {
-		go s.writebackApprovedMemory(m.MemoryText)
+		go s.writebackApprovedMemory(id, m.MemoryText)
 		log.Printf("[memory-queue] Auto-approved (conf=%.2f, type=%s): %s", m.Confidence, m.SourceType, m.MemoryText[:min(60, len(m.MemoryText))])
 	}
 

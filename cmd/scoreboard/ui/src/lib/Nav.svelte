@@ -7,7 +7,7 @@
     { id: 'dashboard', icon: '🏠', label: 'Home' },
     { id: 'score', icon: '⚡', label: 'Score' },
     { id: 'feed', icon: '📋', label: 'Feed' },
-    { id: 'season', icon: '🏆', label: 'Season' },
+    { id: 'memory', icon: '🧠', label: 'Memory' },
     { id: 'settings', icon: '⚙️', label: 'Settings' },
   ];
 

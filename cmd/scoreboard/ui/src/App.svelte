@@ -12,6 +12,7 @@
   import PairingFlow from './lib/PairingFlow.svelte';
   import Audit from './lib/Audit.svelte';
   import MemoryReview from './lib/MemoryReview.svelte';
+  import MemoryAudit from './lib/MemoryAudit.svelte';
   import SystemStatus from './lib/SystemStatus.svelte';
 
   let view = $state('dashboard');
@@ -797,7 +798,7 @@ Tracked with Wirebot — your AI business operating partner`;
   }
 
   // Tab index order for slide direction
-  const TAB_ORDER = ['dashboard', 'score', 'feed', 'season', 'settings', 'wrapped'];
+  const TAB_ORDER = ['dashboard', 'score', 'feed', 'memory', 'settings', 'season', 'wrapped'];
 
   function handleNav(e) {
     const next = e.detail;
@@ -945,6 +946,8 @@ Tracked with Wirebot — your AI business operating partner`;
         <Season season={data?.season} {history} streak={data?.streak} onHelp={() => showHints = true} onnav={(e) => navigateTo(e.detail)} />
       {:else if view === 'wrapped'}
         <Wrapped {wrapped} />
+      {:else if view === 'memory'}
+        <MemoryAudit />
       {:else if view === 'audit'}
         <Audit />
       {:else if view === 'memory-review'}

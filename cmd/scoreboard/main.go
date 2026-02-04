@@ -461,6 +461,8 @@ func main() {
 	mux.HandleFunc("/v1/memory/queue", s.auth(s.handleMemoryQueue))
 	mux.HandleFunc("/v1/memory/queue/", s.auth(s.handleMemoryQueueAction))
 	mux.HandleFunc("/v1/memory/conflicts", s.auth(s.handleMemoryConflicts))
+	mux.HandleFunc("/v1/memory/grid", s.auth(s.handleMemoryGrid))
+	mux.HandleFunc("/v1/memory/item/", s.auth(s.handleMemoryItem))
 	mux.HandleFunc("/v1/memory/extract-vault", s.auth(s.handleMemoryExtractVault))
 	mux.HandleFunc("/v1/memory/extract-conversation", s.auth(s.handleMemoryExtractConversation))
 	mux.HandleFunc("/v1/system/health", s.auth(s.handleSystemHealth))
@@ -833,9 +835,13 @@ func (s *Server) initDB() {
 			confidence REAL DEFAULT 0.5,
 			status TEXT DEFAULT 'pending',
 			correction TEXT DEFAULT '',
+			destinations TEXT DEFAULT '',
+			correction_hash TEXT DEFAULT '',
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 			reviewed_at DATETIME
 		)`,
+		`ALTER TABLE memory_queue ADD COLUMN destinations TEXT DEFAULT ''`,
+		`ALTER TABLE memory_queue ADD COLUMN correction_hash TEXT DEFAULT ''`,
 		`CREATE TABLE IF NOT EXISTS letta_feeder_state (
 			key TEXT PRIMARY KEY,
 			value TEXT NOT NULL DEFAULT '0',
@@ -7236,8 +7242,7 @@ func (s *Server) handleMemoryQueueAction(w http.ResponseWriter, r *http.Request)
 			http.Error(w, `{"error":"db update failed"}`, 500)
 			return
 		}
-		// Only writeback after confirmed DB update
-		go s.writebackApprovedMemory(finalText)
+		go s.writebackApprovedMemory(id, finalText)
 		json.NewEncoder(w).Encode(map[string]interface{}{"ok": true, "action": "approved", "memory": finalText})
 
 	case "reject":
@@ -7256,15 +7261,15 @@ func (s *Server) handleMemoryQueueAction(w http.ResponseWriter, r *http.Request)
 			http.Error(w, `{"error":"correction required"}`, 400)
 			return
 		}
-		_, err := s.db.Exec(`UPDATE memory_queue SET status='approved', correction=?, reviewed_at=CURRENT_TIMESTAMP WHERE id=?`,
-			body.Correction, id)
+		corrHash := fmt.Sprintf("%x", sha256.Sum256([]byte(body.Correction)))[:8]
+		_, err := s.db.Exec(`UPDATE memory_queue SET status='approved', correction=?, correction_hash=?, reviewed_at=CURRENT_TIMESTAMP WHERE id=?`,
+			body.Correction, corrHash, id)
 		if err != nil {
 			http.Error(w, `{"error":"db update failed"}`, 500)
 			return
 		}
-		// Only writeback after confirmed DB update
-		go s.writebackApprovedMemory(body.Correction)
-		json.NewEncoder(w).Encode(map[string]interface{}{"ok": true, "action": "corrected", "memory": body.Correction})
+		go s.writebackApprovedMemory(id, body.Correction)
+		json.NewEncoder(w).Encode(map[string]interface{}{"ok": true, "action": "corrected", "memory": body.Correction, "hash": corrHash})
 
 	default:
 		http.Error(w, `{"error":"invalid action, use approve/reject/correct"}`, 400)
@@ -7296,14 +7301,17 @@ func mem0Store(baseURL, namespace, text string, messages []map[string]string) er
 //   1. Mem0 (cross-surface fact store)
 //   2. MEMORY.md (workspace knowledge — immediate append, not waiting for syncd)
 //   3. Letta agent message (if business-relevant — agent self-edits its blocks)
-func (s *Server) writebackApprovedMemory(text string) {
-	// 1. Mem0
+func (s *Server) writebackApprovedMemory(memID, text string) {
+	var dests []string
+
+	// 1. Mem0 — vector store for semantic search
 	if err := mem0Store("http://127.0.0.1:8200", "wirebot_verious", text, nil); err != nil {
 		log.Printf("[memory-writeback] Mem0 error: %v", err)
+	} else {
+		dests = append(dests, "mem0")
 	}
 
 	// 2. Append to MEMORY.md (immediate, not waiting for syncd 60s poll)
-	// Sanitize: collapse newlines to spaces so the bullet stays on one line
 	safeLine := strings.Join(strings.Fields(text), " ")
 	memoryPath := "/home/wirebot/clawd/MEMORY.md"
 	f, err := os.OpenFile(memoryPath, os.O_APPEND|os.O_WRONLY, 0644)
@@ -7312,13 +7320,62 @@ func (s *Server) writebackApprovedMemory(text string) {
 		f.Close()
 		if writeErr != nil {
 			log.Printf("[memory-writeback] MEMORY.md write error: %v", writeErr)
+		} else {
+			dests = append(dests, "memory_md")
 		}
 	} else {
 		log.Printf("[memory-writeback] MEMORY.md open error: %v", err)
 	}
 
-	// Letta: handled by lettaStateFeeder goroutine (all approved memories,
-	// not just keyword-filtered ones). Feeder polls every 30s with watermarks.
+	// 3. Git-backed YAML fact file — local only, no remote push
+	factsDir := "/home/wirebot/clawd/memory/facts"
+	os.MkdirAll(factsDir, 0755)
+	// Load full record from DB for YAML
+	var sourceType, sourceFile, sourceCtx, correction, createdAt string
+	var confidence float64
+	s.db.QueryRow(`SELECT source_type, source_file, source_context, confidence, correction, created_at FROM memory_queue WHERE id=?`, memID).
+		Scan(&sourceType, &sourceFile, &sourceCtx, &confidence, &correction, &createdAt)
+
+	yamlContent := fmt.Sprintf("id: %s\ntext: %q\nsource: %s\nconfidence: %.2f\nstatus: approved\ncreated: %s\n",
+		memID, text, sourceType, confidence, createdAt)
+	if sourceCtx != "" {
+		// Truncate context for YAML readability
+		ctx := sourceCtx
+		if len(ctx) > 300 {
+			ctx = ctx[:300] + "..."
+		}
+		yamlContent += fmt.Sprintf("context: %q\n", ctx)
+	}
+	if correction != "" {
+		h := fmt.Sprintf("%x", sha256.Sum256([]byte(correction)))[:8]
+		yamlContent += fmt.Sprintf("correction: %q\ncorrection_hash: %s\n", correction, h)
+	}
+	destsForYAML := append([]string{}, dests...)
+	destsForYAML = append(destsForYAML, "git")
+	yamlContent += fmt.Sprintf("destinations: [%s]\n", strings.Join(destsForYAML, ", "))
+
+	yamlPath := filepath.Join(factsDir, memID+".yaml")
+	if err := os.WriteFile(yamlPath, []byte(yamlContent), 0644); err != nil {
+		log.Printf("[memory-writeback] YAML write error: %v", err)
+	} else {
+		dests = append(dests, "git")
+		// Auto-commit (non-blocking, best-effort)
+		go func() {
+			cmd := exec.Command("git", "-C", "/home/wirebot/clawd", "add", "memory/facts/"+memID+".yaml", "MEMORY.md")
+			cmd.Run()
+			commitMsg := fmt.Sprintf("memory: %s", truncateRunes(safeLine, 60))
+			exec.Command("git", "-C", "/home/wirebot/clawd", "commit", "-m", commitMsg, "--author", "wirebot <wirebot@wirebot.chat>").Run()
+		}()
+	}
+
+	// 4. Letta: handled by lettaStateFeeder goroutine (polls approved with watermarks)
+	// Add "letta" to dests when feeder confirms delivery (async, separate process)
+
+	// Update destinations in DB
+	if len(dests) > 0 {
+		destsJSON, _ := json.Marshal(dests)
+		s.db.Exec(`UPDATE memory_queue SET destinations=? WHERE id=?`, string(destsJSON), memID)
+	}
 }
 
 // ─── Memory Conflicts Detection ──────────────────────────────────────────
@@ -7479,6 +7536,162 @@ func (s *Server) handleMemoryConflicts(w http.ResponseWriter, r *http.Request) {
 		"conflicts": conflicts,
 		"checked":   len(listResp.Results),
 	})
+}
+
+// ─── GET /v1/memory/grid — heatmap data for memory audit tab ─────────────
+
+func (s *Server) handleMemoryGrid(w http.ResponseWriter, r *http.Request) {
+	cors(w)
+	if r.Method == "OPTIONS" {
+		return
+	}
+
+	rows, err := s.db.Query(`
+		SELECT date(created_at) as day, source_type, status, count(*) as cnt
+		FROM memory_queue
+		GROUP BY day, source_type, status
+		ORDER BY day DESC`)
+	if err != nil {
+		http.Error(w, `{"error":"query failed"}`, 500)
+		return
+	}
+	defer rows.Close()
+
+	type Cell struct {
+		Approved int `json:"approved"`
+		Pending  int `json:"pending"`
+		Rejected int `json:"rejected"`
+	}
+	days := map[string]map[string]*Cell{} // day → source_type → counts
+	for rows.Next() {
+		var day, sourceType, status string
+		var cnt int
+		rows.Scan(&day, &sourceType, &status, &cnt)
+		if sourceType == "" {
+			sourceType = "unknown"
+		}
+		if days[day] == nil {
+			days[day] = map[string]*Cell{}
+		}
+		if days[day][sourceType] == nil {
+			days[day][sourceType] = &Cell{}
+		}
+		switch status {
+		case "approved":
+			days[day][sourceType].Approved = cnt
+		case "pending":
+			days[day][sourceType].Pending = cnt
+		case "rejected":
+			days[day][sourceType].Rejected = cnt
+		}
+	}
+
+	// Totals
+	var total, approved, pending, rejected int
+	s.db.QueryRow(`SELECT count(*) FROM memory_queue`).Scan(&total)
+	s.db.QueryRow(`SELECT count(*) FROM memory_queue WHERE status='approved'`).Scan(&approved)
+	s.db.QueryRow(`SELECT count(*) FROM memory_queue WHERE status='pending'`).Scan(&pending)
+	s.db.QueryRow(`SELECT count(*) FROM memory_queue WHERE status='rejected'`).Scan(&rejected)
+
+	// Source types
+	sourceRows, _ := s.db.Query(`SELECT DISTINCT source_type FROM memory_queue WHERE source_type != '' ORDER BY source_type`)
+	var sources []string
+	if sourceRows != nil {
+		defer sourceRows.Close()
+		for sourceRows.Next() {
+			var st string
+			sourceRows.Scan(&st)
+			sources = append(sources, st)
+		}
+	}
+
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"days":    days,
+		"sources": sources,
+		"totals":  map[string]int{"total": total, "approved": approved, "pending": pending, "rejected": rejected},
+	})
+}
+
+// ─── GET/PATCH /v1/memory/item/{id} — view or edit a single memory ──────
+
+func (s *Server) handleMemoryItem(w http.ResponseWriter, r *http.Request) {
+	cors(w)
+	if r.Method == "OPTIONS" {
+		return
+	}
+
+	id := strings.TrimPrefix(r.URL.Path, "/v1/memory/item/")
+	if id == "" {
+		http.Error(w, `{"error":"id required"}`, 400)
+		return
+	}
+
+	if r.Method == "GET" {
+		var item struct {
+			ID             string  `json:"id"`
+			MemoryText     string  `json:"memory_text"`
+			SourceType     string  `json:"source_type"`
+			SourceFile     string  `json:"source_file"`
+			SourceContext  string  `json:"source_context"`
+			Confidence     float64 `json:"confidence"`
+			Status         string  `json:"status"`
+			Correction     string  `json:"correction"`
+			CorrectionHash string  `json:"correction_hash"`
+			Destinations   string  `json:"destinations"`
+			CreatedAt      string  `json:"created_at"`
+			ReviewedAt     *string `json:"reviewed_at"`
+		}
+		err := s.db.QueryRow(`SELECT id, memory_text, source_type, source_file, source_context, 
+			confidence, status, correction, correction_hash, destinations, created_at, reviewed_at 
+			FROM memory_queue WHERE id=?`, id).
+			Scan(&item.ID, &item.MemoryText, &item.SourceType, &item.SourceFile, &item.SourceContext,
+				&item.Confidence, &item.Status, &item.Correction, &item.CorrectionHash, &item.Destinations,
+				&item.CreatedAt, &item.ReviewedAt)
+		if err != nil {
+			http.Error(w, `{"error":"not found"}`, 404)
+			return
+		}
+		// Parse destinations JSON
+		var dests []string
+		json.Unmarshal([]byte(item.Destinations), &dests)
+
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"id": item.ID, "memory_text": item.MemoryText,
+			"source_type": item.SourceType, "source_file": item.SourceFile,
+			"source_context": item.SourceContext, "confidence": item.Confidence,
+			"status": item.Status, "correction": item.Correction,
+			"correction_hash": item.CorrectionHash, "destinations": dests,
+			"created_at": item.CreatedAt, "reviewed_at": item.ReviewedAt,
+		})
+		return
+	}
+
+	if r.Method == "PATCH" {
+		var body struct {
+			MemoryText string `json:"memory_text"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.MemoryText == "" {
+			http.Error(w, `{"error":"memory_text required"}`, 400)
+			return
+		}
+		corrHash := fmt.Sprintf("%x", sha256.Sum256([]byte(body.MemoryText)))[:8]
+		_, err := s.db.Exec(`UPDATE memory_queue SET correction=?, correction_hash=?, reviewed_at=CURRENT_TIMESTAMP WHERE id=?`,
+			body.MemoryText, corrHash, id)
+		if err != nil {
+			http.Error(w, `{"error":"update failed"}`, 500)
+			return
+		}
+		// Re-writeback to all destinations
+		var status string
+		s.db.QueryRow(`SELECT status FROM memory_queue WHERE id=?`, id).Scan(&status)
+		if status == "approved" {
+			go s.writebackApprovedMemory(id, body.MemoryText)
+		}
+		json.NewEncoder(w).Encode(map[string]interface{}{"ok": true, "hash": corrHash})
+		return
+	}
+
+	http.Error(w, `{"error":"GET or PATCH only"}`, 405)
 }
 
 // extractNumbers pulls numeric values from text
