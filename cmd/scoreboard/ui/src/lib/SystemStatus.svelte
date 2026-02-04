@@ -6,6 +6,7 @@
    * - Live: 30s interval when visible, stops when scrolled away
    */
   let { token = '' } = $props();
+  let expanded = $state(JSON.parse(localStorage.getItem('sys_health_open') || 'false'));
   let health = $state(null);
   let loading = $state(true);
   let error = $state(false);
@@ -57,9 +58,14 @@
     return () => obs.disconnect();
   });
 
-  // Start/stop polling based on visibility
+  function toggleExpand() {
+    expanded = !expanded;
+    localStorage.setItem('sys_health_open', JSON.stringify(expanded));
+  }
+
+  // Start/stop polling based on visibility AND expanded state
   $effect(() => {
-    if (visible) {
+    if (visible && expanded) {
       // First fetch immediately (non-blocking via requestIdleCallback)
       if ('requestIdleCallback' in window) {
         requestIdleCallback(() => fetchHealth());
@@ -138,8 +144,9 @@
 </script>
 
 <div class="sys-panel" bind:this={panelEl}>
-  <div class="sys-header">
+  <button class="sys-header" onclick={toggleExpand}>
     <div class="sys-title">
+      <span class="sys-chevron" class:open={expanded}>▸</span>
       <span class="sys-icon">🖥️</span>
       <span>System Health</span>
       {#if polling}
@@ -147,13 +154,21 @@
       {/if}
     </div>
     <div class="sys-meta">
-      {#if lastChecked}
+      {#if health && !expanded}
+        <span class="sys-dots">
+          {#each health.services as svc}{dot(svc.status)}{/each}
+        </span>
+      {/if}
+      {#if lastChecked && expanded}
         <span class="sys-time">{lastChecked}</span>
       {/if}
-      <button class="sys-refresh" onclick={fetchHealth} disabled={polling} title="Refresh now">↻</button>
+      {#if expanded}
+        <button class="sys-refresh" onclick={(e) => { e.stopPropagation(); fetchHealth(); }} disabled={polling} title="Refresh now">↻</button>
+      {/if}
     </div>
-  </div>
+  </button>
 
+  {#if expanded}
   {#if loading}
     <div class="sys-loading">
       <div class="sys-skeleton">
@@ -245,6 +260,7 @@
       </div>
     </div>
   {/if}
+  {/if}
 </div>
 
 <style>
@@ -259,6 +275,15 @@
     display: flex;
     justify-content: space-between;
     align-items: center;
+    width: 100%;
+    background: none;
+    border: none;
+    padding: 0;
+    margin-bottom: 0;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .sys-header:has(~ .sys-loading, ~ .sys-error, ~ .sys-overall) {
     margin-bottom: 12px;
   }
   .sys-title {
@@ -270,6 +295,16 @@
     color: var(--text-primary, #fff);
   }
   .sys-icon { font-size: 16px; }
+  .sys-chevron {
+    font-size: 11px;
+    transition: transform 0.2s;
+    color: var(--text-tertiary, #555);
+  }
+  .sys-chevron.open { transform: rotate(90deg); }
+  .sys-dots {
+    font-size: 8px;
+    letter-spacing: 2px;
+  }
   .sys-polling {
     animation: spin 1s linear infinite;
     font-size: 12px;
