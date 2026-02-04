@@ -8863,8 +8863,30 @@ func (s *Server) pollGoogleDrive(integrationID, credential, configJSON, lastPoll
 
 		if resp.StatusCode == 401 {
 			resp.Body.Close()
-			// TODO: refresh token and retry
-			return fmt.Errorf("drive API: access token expired (needs refresh)")
+			// Try to refresh the token
+			if tokenData.RefreshToken == "" {
+				return fmt.Errorf("drive API: access token expired and no refresh token")
+			}
+			log.Printf("[gdrive] Access token expired, refreshing...")
+			newToken, err := s.refreshGoogleToken(tokenData.RefreshToken)
+			if err != nil {
+				return fmt.Errorf("drive API: token refresh failed: %v", err)
+			}
+			tokenData.AccessToken = newToken
+			// Update stored credential
+			s.updateIntegrationCredential(integrationID, credential, newToken)
+			// Retry the request
+			req, _ = http.NewRequest("GET", apiURL, nil)
+			req.Header.Set("Authorization", "Bearer "+newToken)
+			resp, err = client.Do(req)
+			if err != nil {
+				return fmt.Errorf("drive API retry failed: %v", err)
+			}
+			if resp.StatusCode != 200 {
+				body, _ := io.ReadAll(resp.Body)
+				resp.Body.Close()
+				return fmt.Errorf("drive API error after refresh %d: %s", resp.StatusCode, string(body))
+			}
 		}
 
 		if resp.StatusCode != 200 {
@@ -8915,6 +8937,57 @@ func (s *Server) pollGoogleDrive(integrationID, credential, configJSON, lastPoll
 
 	log.Printf("[gdrive] Indexed %d files from Google Drive", len(indexFiles))
 	return nil
+}
+
+// refreshGoogleToken uses refresh_token to get a new access_token
+func (s *Server) refreshGoogleToken(refreshToken string) (string, error) {
+	data := url.Values{}
+	data.Set("client_id", oauthGoogleClientID)
+	data.Set("client_secret", oauthGoogleClientSecret)
+	data.Set("refresh_token", refreshToken)
+	data.Set("grant_type", "refresh_token")
+
+	resp, err := http.PostForm("https://oauth2.googleapis.com/token", data)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	var result struct {
+		AccessToken string `json:"access_token"`
+		Error       string `json:"error"`
+		ErrorDesc   string `json:"error_description"`
+	}
+	json.NewDecoder(resp.Body).Decode(&result)
+	if result.Error != "" {
+		return "", fmt.Errorf("%s: %s", result.Error, result.ErrorDesc)
+	}
+	if result.AccessToken == "" {
+		return "", fmt.Errorf("no access_token in response")
+	}
+	return result.AccessToken, nil
+}
+
+// updateIntegrationCredential updates the stored credential with new access_token
+func (s *Server) updateIntegrationCredential(integrationID, oldCred, newAccessToken string) {
+	// Parse old credential, update access_token, re-encrypt
+	var tokenData map[string]interface{}
+	if err := json.Unmarshal([]byte(oldCred), &tokenData); err != nil {
+		return
+	}
+	tokenData["access_token"] = newAccessToken
+	newCred, _ := json.Marshal(tokenData)
+
+	encrypted, nonce, err := s.encryptCredential(newCred)
+	if err != nil {
+		log.Printf("[gdrive] Failed to encrypt updated credential: %v", err)
+		return
+	}
+	s.mu.Lock()
+	s.db.Exec("UPDATE integrations SET encrypted_data=?, nonce=?, updated_at=? WHERE id=?",
+		encrypted, nonce, time.Now().UTC().Format(time.RFC3339), integrationID)
+	s.mu.Unlock()
+	log.Printf("[gdrive] Updated stored access_token for %s", integrationID)
 }
 
 // ─── Dropbox Integration (REST API) ─────────────────────────────────────
