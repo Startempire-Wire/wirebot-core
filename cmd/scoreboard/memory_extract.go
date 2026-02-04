@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math/rand"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -153,7 +154,7 @@ func containsFuzzy(content, quote string) bool {
 		return true
 	}
 
-	// Second try: token overlap — if 60%+ of quote tokens appear in content, accept
+	// Second try: token overlap — if 60%+ of significant quote tokens appear in content, accept
 	quoteTokens := strings.Fields(normQuote)
 	if len(quoteTokens) < 3 {
 		return false
@@ -163,16 +164,20 @@ func containsFuzzy(content, quote string) bool {
 		contentSet[t] = true
 	}
 	matches := 0
+	significant := 0
 	for _, t := range quoteTokens {
-		if len(t) < 3 { // skip tiny words (a, an, the, is, etc.)
-			matches++ // count as match — don't penalize for common words
-			continue
+		if len(t) < 3 {
+			continue // skip tiny words (a, an, the, is) — don't count in numerator or denominator
 		}
+		significant++
 		if contentSet[t] {
 			matches++
 		}
 	}
-	ratio := float64(matches) / float64(len(quoteTokens))
+	if significant < 3 {
+		return false
+	}
+	ratio := float64(matches) / float64(significant)
 	return ratio >= 0.6
 }
 
@@ -277,7 +282,7 @@ func (s *Server) QueueMemoryForApproval(m MemoryExtraction) error {
 		return nil // already queued, skip silently
 	}
 
-	id := fmt.Sprintf("mem-%d", time.Now().UnixNano())
+	id := fmt.Sprintf("mem-%d-%04x", time.Now().UnixNano(), rand.Intn(0xFFFF))
 	sourceFile := m.SourceFile
 	if m.SourceSection != "" {
 		sourceFile = fmt.Sprintf("%s [%s]", m.SourceFile, m.SourceSection)
@@ -345,7 +350,10 @@ func (s *Server) callLLMForExtraction(prompt string) (string, error) {
 	}
 	bodyBytes, _ := json.Marshal(body)
 
-	req, _ := http.NewRequest("POST", gatewayURL+"/v1/chat/completions", bytes.NewReader(bodyBytes))
+	req, err := http.NewRequest("POST", gatewayURL+"/v1/chat/completions", bytes.NewReader(bodyBytes))
+	if err != nil {
+		return "", fmt.Errorf("build request: %w", err)
+	}
 	req.Header.Set("Content-Type", "application/json")
 	if gwToken != "" {
 		req.Header.Set("Authorization", "Bearer "+gwToken)
@@ -485,11 +493,4 @@ func (s *Server) saveVaultWatermark(path string, processed map[string]bool) {
 	}
 	data, _ := json.Marshal(files)
 	os.WriteFile(path, data, 0644)
-}
-
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
 }

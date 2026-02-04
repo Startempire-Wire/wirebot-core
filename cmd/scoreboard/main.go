@@ -4639,9 +4639,23 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// chatExtractMu guards lastChatExtractTime from concurrent goroutine access.
+var chatExtractMu sync.Mutex
+var lastChatExtractTime time.Time
+
 // extractConversationToQueue runs LLM extraction on a user+assistant exchange
 // and queues any personal facts found for approval review.
+// Rate-limited to at most once per 2 minutes to avoid hammering the LLM.
 func (s *Server) extractConversationToQueue(userMsg, assistantMsg string) {
+	// Rate limit: skip if we extracted less than 2 minutes ago
+	chatExtractMu.Lock()
+	if time.Since(lastChatExtractTime) < 2*time.Minute {
+		chatExtractMu.Unlock()
+		return
+	}
+	lastChatExtractTime = time.Now()
+	chatExtractMu.Unlock()
+
 	// Skip tiny exchanges — nothing to extract
 	if len(userMsg) < 20 {
 		return
@@ -4656,17 +4670,8 @@ func (s *Server) extractConversationToQueue(userMsg, assistantMsg string) {
 		return
 	}
 	for _, m := range memories {
-		// Auto-approve high-confidence conversation facts (direct user statements)
-		if m.Confidence >= 0.95 {
-			m.SourceType = "conversation"
-			go s.writebackApprovedMemory(m.MemoryText)
-			s.db.Exec(`INSERT INTO memory_queue (id, memory_text, source_type, source_file, source_context, confidence, status, reviewed_at)
-				VALUES (?, ?, ?, ?, ?, ?, 'approved', CURRENT_TIMESTAMP)`,
-				fmt.Sprintf("mem-%d", time.Now().UnixNano()), m.MemoryText, m.SourceType, m.SourceFile, m.SourceContext, m.Confidence)
-		} else {
-			if err := s.QueueMemoryForApproval(m); err != nil {
-				log.Printf("[chat→queue] Queue error: %v", err)
-			}
+		if err := s.QueueMemoryForApproval(m); err != nil {
+			log.Printf("[chat→queue] Queue error: %v", err)
 		}
 	}
 	if len(memories) > 0 {
@@ -6943,7 +6948,9 @@ func (s *Server) handleMemoryQueue(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		id := fmt.Sprintf("mem-%d", time.Now().UnixNano())
+		randBytes := make([]byte, 4)
+		rand.Read(randBytes)
+		id := fmt.Sprintf("mem-%d-%x", time.Now().UnixNano(), randBytes)
 		_, err := s.db.Exec(`
 			INSERT INTO memory_queue (id, memory_text, source_type, source_file, source_context, confidence)
 			VALUES (?, ?, ?, ?, ?, ?)`,
@@ -7078,8 +7085,10 @@ func (s *Server) writebackApprovedMemory(text string) {
 		payload, _ := json.Marshal(map[string]interface{}{
 			"messages": []map[string]string{{"role": "user", "content": msg}},
 		})
-		req, _ := http.NewRequest("POST", fmt.Sprintf("%s/v1/agents/%s/messages/", lettaURL, lettaAgentID), bytes.NewReader(payload))
-		if req != nil {
+		req, err := http.NewRequest("POST", fmt.Sprintf("%s/v1/agents/%s/messages/", lettaURL, lettaAgentID), bytes.NewReader(payload))
+		if err != nil {
+			log.Printf("[memory-writeback] Letta request build error: %v", err)
+		} else {
 			req.Header.Set("Content-Type", "application/json")
 			req.Header.Set("Authorization", "Bearer letta")
 			client := &http.Client{Timeout: 30 * time.Second}
@@ -9164,7 +9173,10 @@ func (s *Server) extractFromGDriveIndex(files []map[string]string, accessToken s
 			fetchURL = fmt.Sprintf("https://www.googleapis.com/drive/v3/files/%s?alt=media", fileID)
 		}
 
-		req, _ := http.NewRequest("GET", fetchURL, nil)
+		req, err := http.NewRequest("GET", fetchURL, nil)
+		if err != nil {
+			continue
+		}
 		req.Header.Set("Authorization", "Bearer "+accessToken)
 		resp, err := client.Do(req)
 		if err != nil || resp.StatusCode != 200 {
@@ -9403,18 +9415,20 @@ func (s *Server) extractFromDropboxIndex(files []map[string]string, accessToken 
 		if path == "" || processed[path] {
 			continue
 		}
-		// Only text files
+		// Only text files — skip non-text without watermarking (cheap ext check each cycle)
 		ext := strings.ToLower(filepath.Ext(name))
 		if !textExts[ext] {
-			processed[path] = true // watermark non-text so we don't check again
 			continue
 		}
 
 		// Download file content via Dropbox API
-		payload, _ := json.Marshal(map[string]string{"path": path})
-		req, _ := http.NewRequest("POST", "https://content.dropboxapi.com/2/files/download", nil)
+		dbxArg, _ := json.Marshal(map[string]string{"path": path})
+		req, err := http.NewRequest("POST", "https://content.dropboxapi.com/2/files/download", nil)
+		if err != nil {
+			continue
+		}
 		req.Header.Set("Authorization", "Bearer "+accessToken)
-		req.Header.Set("Dropbox-API-Arg", string(payload))
+		req.Header.Set("Dropbox-API-Arg", string(dbxArg))
 		resp, err := client.Do(req)
 		if err != nil || resp.StatusCode != 200 {
 			if resp != nil { resp.Body.Close() }

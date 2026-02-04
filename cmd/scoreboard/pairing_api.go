@@ -516,12 +516,12 @@ func (s *Server) handlePairingAnswers(w http.ResponseWriter, r *http.Request) {
 		},
 	})
 
-	// Also queue each answer as a memory for approval
+	// Queue meaningful text answers as memories (skip numeric scores and arrays)
 	go func() {
 		for _, a := range body.Answers {
-			valueStr := fmt.Sprintf("%v", a.Value)
-			if valueStr == "" || valueStr == "<nil>" {
-				continue
+			valueStr, ok := a.Value.(string)
+			if !ok || len(valueStr) < 10 {
+				continue // Skip numeric Likert values, booleans, arrays — only meaningful text
 			}
 			m := ExtractMemoryFromPairing(
 				a.QuestionID,
