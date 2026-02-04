@@ -21,7 +21,7 @@ func (s *Server) lettaStateFeeder() {
 		return
 	}
 
-	ticker := time.NewTicker(30 * time.Second)
+	ticker := time.NewTicker(60 * time.Second)
 	defer ticker.Stop()
 
 	var msgCount int
@@ -49,7 +49,7 @@ func (s *Server) lettaStateFeeder() {
 			SELECT rowid, memory_text, COALESCE(correction, '') 
 			FROM memory_queue
 			WHERE status='approved' AND rowid > ?
-			ORDER BY rowid LIMIT 3`, lastApprovedRowID)
+			ORDER BY rowid LIMIT 1`, lastApprovedRowID)
 		if err == nil {
 			for rows.Next() {
 				var rowid int64
@@ -88,7 +88,7 @@ func (s *Server) lettaStateFeeder() {
 			SELECT rowid, event_type, lane, source, artifact_title
 			FROM events
 			WHERE rowid > ?
-			ORDER BY rowid LIMIT 3`, lastEventRowID)
+			ORDER BY rowid LIMIT 1`, lastEventRowID)
 		if err == nil {
 			for rows.Next() {
 				var rowid int64
@@ -129,7 +129,7 @@ func (s *Server) lettaSendAsync(message string) bool {
 	}
 	req.Header.Set("Content-Type", "application/json")
 
-	client := &http.Client{Timeout: 30 * time.Second}
+	client := &http.Client{Timeout: 3 * time.Minute}
 	resp, err := client.Do(req)
 	if err != nil {
 		log.Printf("[letta-feeder] Send error: %v", err)
