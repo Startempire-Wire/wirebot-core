@@ -1076,8 +1076,23 @@ Tracked with Wirebot — your AI business operating partner`;
               {/if}
             </div>
           {:else}
+            <!-- Operator token — instant, no network round-trip -->
             <div class="s-group">
-              <label>Sign in</label>
+              <label>Operator Access</label>
+              <input type="password" id="token-input" value={getToken()}
+                oninput={debounceToken}
+                onpaste={debounceToken}
+                placeholder="Paste operator token" />
+              {#if tokenStatus}
+                <div class="token-status" class:ok={tokenStatus === 'ok'} class:fail={tokenStatus === 'fail'} class:saving={tokenStatus === 'saving'}>
+                  {tokenMsg}
+                </div>
+              {/if}
+            </div>
+
+            <!-- SSO — community member login -->
+            <div class="s-group">
+              <label>Member Sign In</label>
               <a class="btn-sso" href="https://startempirewire.com/?sewn_sso=1&redirect_uri=https://wins.wirebot.chat">
                 → Sign in with Startempire Wire
               </a>
@@ -1097,20 +1112,6 @@ Tracked with Wirebot — your AI business operating partner`;
               <button class="btn-login" onclick={loginViaRingLeader} disabled={loginLoading}>
                 {loginLoading ? 'Connecting...' : '→ Sign in'}
               </button>
-            </details>
-
-            <!-- Operator fallback -->
-            <details class="s-group">
-              <summary class="s-detail-label">Operator token (advanced)</summary>
-              <input type="password" id="token-input" value={getToken()}
-                oninput={debounceToken}
-                onpaste={debounceToken}
-                placeholder="Paste operator token" />
-              {#if tokenStatus}
-                <div class="token-status" class:ok={tokenStatus === 'ok'} class:fail={tokenStatus === 'fail'} class:saving={tokenStatus === 'saving'}>
-                  {tokenMsg}
-                </div>
-              {/if}
             </details>
           {/if}
           <!-- ── Connected Accounts ── -->
