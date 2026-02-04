@@ -349,14 +349,11 @@ Tracked with Wirebot — your AI business operating partner`;
   }
 
   // ── Plaid Link ──
-  let plaidReady = $state(false);
-
   function loadPlaidScript() {
-    if (document.getElementById('plaid-link-script')) { plaidReady = true; return; }
+    if (document.getElementById('plaid-link-script')) return;
     const s = document.createElement('script');
     s.id = 'plaid-link-script';
     s.src = 'https://cdn.plaid.com/link/v2/stable/link-initialize.js';
-    s.onload = () => { plaidReady = true; };
     document.head.appendChild(s);
   }
 
@@ -800,7 +797,6 @@ Tracked with Wirebot — your AI business operating partner`;
 
   // Tab index order for slide direction
   const TAB_ORDER = ['dashboard', 'score', 'feed', 'season', 'settings', 'wrapped'];
-  let prevView = $state('dashboard');
 
   function handleNav(e) {
     const next = e.detail;
@@ -818,7 +814,6 @@ Tracked with Wirebot — your AI business operating partner`;
     if (document.startViewTransition) {
       document.documentElement.dataset.direction = direction;
       document.startViewTransition(() => {
-        prevView = view;
         view = next;
         if (next === 'wrapped' && !wrapped) fetchWrapped();
       });
@@ -831,7 +826,6 @@ Tracked with Wirebot — your AI business operating partner`;
           el.classList.remove(`slide-${direction}`);
         }, { once: true });
       }
-      prevView = view;
       view = next;
       if (next === 'wrapped' && !wrapped) fetchWrapped();
     }
