@@ -4871,6 +4871,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 // chatExtractMu guards lastChatExtractTime from concurrent goroutine access.
 var chatExtractMu sync.Mutex
 var lastChatExtractTime time.Time
+var trainingFileMu sync.Mutex
 
 // extractConversationToQueue runs LLM extraction on a user+assistant exchange
 // and queues any personal facts found for approval review.
@@ -10552,10 +10553,10 @@ func (s *Server) handleDiscordFeedback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Fetch the original interaction for pipeline processing
-	var userMsg, botResp string
-	s.db.QueryRow("SELECT user_message, bot_response FROM discord_interactions WHERE interaction_id=?",
-		req.InteractionID).Scan(&userMsg, &botResp)
+	// Fetch the original user message for pipeline context
+	var userMsg string
+	s.db.QueryRow("SELECT user_message FROM discord_interactions WHERE interaction_id=?",
+		req.InteractionID).Scan(&userMsg)
 
 	pipelineActions := []string{}
 
@@ -10665,10 +10666,10 @@ func (s *Server) queueForLetta(content string) {
 // appendTrainingEntry adds a line to the operator's TRAINING.md workspace file.
 // This file is read by the LLM on every conversation via workspace bootstrap.
 // Keeps file under 5000 chars by trimming oldest entries when full.
-// Uses s.mu to prevent concurrent write races.
+// Uses trainingFileMu (not s.mu) to avoid blocking score/event operations.
 func (s *Server) appendTrainingEntry(entry string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	trainingFileMu.Lock()
+	defer trainingFileMu.Unlock()
 
 	const trainingPath = "/home/wirebot/clawd/TRAINING.md"
 	const header = "# TRAINING.md — Operator Feedback Loop\n" +

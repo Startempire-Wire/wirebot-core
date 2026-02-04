@@ -52,13 +52,18 @@
     if (!feedbackModal || submitting) return;
     submitting = true;
     
+    // Capture values now — feedbackModal may change during async fetch
+    const targetId = feedbackModal.interaction_id;
+    const type = feedbackType;
+    const text = feedbackText;
+    
     const payload = {
-      interaction_id: feedbackModal.interaction_id,
-      feedback_type: feedbackType,
-      feedback_text: feedbackText
+      interaction_id: targetId,
+      feedback_type: type,
+      feedback_text: text
     };
     
-    if (feedbackType === 'memory') {
+    if (type === 'memory') {
       payload.memory_action = 'add';
     }
     
@@ -74,12 +79,12 @@
       const result = await res.json();
       
       if (result.ok) {
-        // Update local state
-        const idx = interactions.findIndex(i => i.interaction_id === feedbackModal.interaction_id);
+        // Update local state using captured targetId (not feedbackModal which may have changed)
+        const idx = interactions.findIndex(i => i.interaction_id === targetId);
         if (idx >= 0) {
           interactions[idx].feedback = [...(interactions[idx].feedback || []), {
-            feedback_type: feedbackType,
-            feedback_text: feedbackText,
+            feedback_type: type,
+            feedback_text: text,
             created_at: new Date().toISOString()
           }];
         }
@@ -89,9 +94,9 @@
         if (pipelineMsg.length > 0) {
           toast = `✓ ${pipelineMsg.join(' • ')}`;
         } else {
-          toast = feedbackType === 'good' ? '✓ Positive pattern saved' :
-                  feedbackType === 'bad' ? '✓ Correction stored' :
-                  feedbackType === 'memory' ? '✓ Memory queued for review' :
+          toast = type === 'good' ? '✓ Positive pattern saved' :
+                  type === 'bad' ? '✓ Correction stored' :
+                  type === 'memory' ? '✓ Memory queued for review' :
                   '✓ Note saved';
         }
         setTimeout(() => toast = '', 4000);
