@@ -247,11 +247,13 @@ func operatorNow() time.Time {
 }
 
 type Server struct {
-	db       *sql.DB
-	mu       sync.RWMutex
-	season   Season
-	tenantID string         // empty = operator (default), otherwise randID
-	pairing  *PairingEngine // Living profile engine (pairing.go)
+	db            *sql.DB
+	mu            sync.RWMutex
+	season        Season
+	tenantID      string         // empty = operator (default), otherwise randID
+	pairing       *PairingEngine // Living profile engine (pairing.go)
+	lettaURL      string         // Letta server (default: http://localhost:8283)
+	lettaAgentID  string         // Letta agent for state feeder
 }
 
 // ─── Tenant Manager ─────────────────────────────────────────────────────────
@@ -400,7 +402,11 @@ func main() {
 	}
 	defer db.Close()
 
-	s := &Server{db: db}
+	s := &Server{
+		db:           db,
+		lettaURL:     envOr("LETTA_URL", "http://127.0.0.1:8283"),
+		lettaAgentID: envOr("LETTA_AGENT_ID", "agent-82610d14-ec65-4d10-9ec2-8c479848cea9"),
+	}
 	s.initDB()
 	s.loadSeason()
 
@@ -651,6 +657,8 @@ func main() {
 	s.recalcSeason()
 	log.Printf("Startup recalc complete for %s", today)
 
+	go s.lettaStateFeeder()
+
 	log.Printf("Scoreboard listening on %s (multi-tenant enabled)", listenAddr)
 	log.Fatal(http.ListenAndServe(listenAddr, topHandler))
 }
@@ -824,6 +832,11 @@ func (s *Server) initDB() {
 			correction TEXT DEFAULT '',
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 			reviewed_at DATETIME
+		)`,
+		`CREATE TABLE IF NOT EXISTS letta_feeder_state (
+			key TEXT PRIMARY KEY,
+			value TEXT NOT NULL DEFAULT '0',
+			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 		)`,
 	}
 	for _, stmt := range stmts {
@@ -7258,44 +7271,8 @@ func (s *Server) writebackApprovedMemory(text string) {
 		log.Printf("[memory-writeback] MEMORY.md open error: %v", err)
 	}
 
-	// 3. Letta — only if business-relevant (goals, kpis, stage, revenue, customers)
-	lower := strings.ToLower(text)
-	businessKeywords := []string{"revenue", "goal", "kpi", "stage", "milestone", "customer",
-		"beta tester", "pricing", "debt", "profit", "business", "startup", "shipped", "launched",
-		"member", "subscriber", "mrr", "churn", "pillar", "checklist"}
-	isBusinessRelevant := false
-	for _, kw := range businessKeywords {
-		if strings.Contains(lower, kw) {
-			isBusinessRelevant = true
-			break
-		}
-	}
-	if isBusinessRelevant {
-		lettaAgentID := os.Getenv("LETTA_AGENT_ID")
-		if lettaAgentID == "" {
-			lettaAgentID = "agent-82610d14-ec65-4d10-9ec2-8c479848cea9"
-		}
-		lettaURL := "http://127.0.0.1:8283"
-		msg := fmt.Sprintf("Approved memory from user review: %s\n\nUpdate your human, goals, kpis, or business_stage blocks if this is relevant.", text)
-		payload, _ := json.Marshal(map[string]interface{}{
-			"messages": []map[string]string{{"role": "user", "content": msg}},
-		})
-		req, err := http.NewRequest("POST", fmt.Sprintf("%s/v1/agents/%s/messages/", lettaURL, lettaAgentID), bytes.NewReader(payload))
-		if err != nil {
-			log.Printf("[memory-writeback] Letta request build error: %v", err)
-		} else {
-			req.Header.Set("Content-Type", "application/json")
-			req.Header.Set("Authorization", "Bearer letta")
-			client := &http.Client{Timeout: 30 * time.Second}
-			resp, err := client.Do(req)
-			if err != nil {
-				log.Printf("[memory-writeback] Letta message error: %v", err)
-			} else {
-				resp.Body.Close()
-				log.Printf("[memory-writeback] Letta agent notified of business-relevant memory")
-			}
-		}
-	}
+	// Letta: handled by lettaStateFeeder goroutine (all approved memories,
+	// not just keyword-filtered ones). Feeder polls every 30s with watermarks.
 }
 
 // ─── Memory Conflicts Detection ──────────────────────────────────────────
