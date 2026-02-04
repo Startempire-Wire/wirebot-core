@@ -496,11 +496,55 @@ func ExtractMemoryFromPairing(questionID, questionText, answerText string) Memor
 // Skips if an identical memory_text already exists (any status).
 // Auto-approves high-confidence items per MEMORY_APPROVAL_SYSTEM.md rules.
 func (s *Server) QueueMemoryForApproval(m MemoryExtraction) error {
-	// Dedup: check if this exact text already exists in queue
+	// Dedup: check exact match first, then fuzzy match against recent items
 	var existing int
 	s.db.QueryRow(`SELECT COUNT(*) FROM memory_queue WHERE memory_text = ?`, m.MemoryText).Scan(&existing)
 	if existing > 0 {
-		return nil // already queued, skip silently
+		return nil // exact match, skip silently
+	}
+
+	// Fuzzy dedup: check if a semantically similar memory already exists.
+	// Normalize current memory to token set, compare against recent queue items.
+	normNew := strings.ToLower(strings.Join(strings.Fields(m.MemoryText), " "))
+	newTokens := make(map[string]bool)
+	for _, t := range strings.Fields(normNew) {
+		if len(t) >= 3 {
+			newTokens[t] = true
+		}
+	}
+	if len(newTokens) >= 3 {
+		// Check against items from same source file (most likely duplicates)
+		rows, err := s.db.Query(`SELECT memory_text FROM memory_queue WHERE source_file LIKE ? LIMIT 100`,
+			strings.Split(m.SourceFile, " [")[0]+"%")
+		if err == nil {
+			defer rows.Close()
+			for rows.Next() {
+				var existingText string
+				rows.Scan(&existingText)
+				normExisting := strings.ToLower(strings.Join(strings.Fields(existingText), " "))
+				existingTokens := make(map[string]bool)
+				for _, t := range strings.Fields(normExisting) {
+					if len(t) >= 3 {
+						existingTokens[t] = true
+					}
+				}
+				// Count overlap
+				overlap := 0
+				for t := range newTokens {
+					if existingTokens[t] {
+						overlap++
+					}
+				}
+				// If 80%+ token overlap in both directions, it's a near-duplicate
+				if len(newTokens) > 0 && len(existingTokens) > 0 {
+					fwd := float64(overlap) / float64(len(newTokens))
+					rev := float64(overlap) / float64(len(existingTokens))
+					if fwd >= 0.8 && rev >= 0.8 {
+						return nil // near-duplicate, skip
+					}
+				}
+			}
+		}
 	}
 
 	id := fmt.Sprintf("mem-%d-%04x", time.Now().UnixNano(), rand.Intn(0xFFFF))
