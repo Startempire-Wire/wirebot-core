@@ -165,6 +165,88 @@
 
   function close() { visible = false; }
 
+  // ─── Long-press context menu ────────────────────────────────
+  let ctxMenu = $state(null); // { idx, x, y, role }
+  let pressTimer = null;
+  let pressStartPos = null;
+
+  function onMsgPointerDown(e, idx) {
+    // Ignore if already sending or menu open
+    if (sending && messages[idx].role === 'user') return;
+    pressStartPos = { x: e.clientX || e.touches?.[0]?.clientX, y: e.clientY || e.touches?.[0]?.clientY };
+    pressTimer = setTimeout(() => {
+      e.preventDefault();
+      const msg = messages[idx];
+      ctxMenu = { idx, x: pressStartPos.x, y: pressStartPos.y, role: msg.role, content: msg.content };
+      // Haptic feedback on mobile if available
+      navigator.vibrate?.(30);
+    }, 500);
+  }
+  function onMsgPointerUp() { clearTimeout(pressTimer); }
+  function onMsgPointerMove(e) {
+    if (!pressStartPos) return;
+    const x = e.clientX || e.touches?.[0]?.clientX;
+    const y = e.clientY || e.touches?.[0]?.clientY;
+    if (Math.abs(x - pressStartPos.x) > 10 || Math.abs(y - pressStartPos.y) > 10) {
+      clearTimeout(pressTimer); // Cancel if finger moved (scrolling)
+    }
+  }
+  function closeCtx() { ctxMenu = null; }
+
+  async function ctxCopy() {
+    if (!ctxMenu) return;
+    try { await navigator.clipboard.writeText(ctxMenu.content); } catch {}
+    closeCtx();
+  }
+
+  function ctxResend() {
+    if (!ctxMenu) return;
+    const text = ctxMenu.content;
+    closeCtx();
+    // Remove original + any assistant/error response after it, then re-send
+    input = text;
+    send();
+  }
+
+  function ctxRegenerate() {
+    if (!ctxMenu) return;
+    const idx = ctxMenu.idx;
+    closeCtx();
+    // Find the user message before this assistant message
+    let userText = '';
+    for (let i = idx - 1; i >= 0; i--) {
+      if (messages[i].role === 'user') { userText = messages[i].content; break; }
+    }
+    if (!userText) return;
+    // Remove the assistant message (and any error after it)
+    messages = messages.slice(0, idx);
+    messages = messages;
+    input = userText;
+    send();
+  }
+
+  function ctxDelete() {
+    if (!ctxMenu) return;
+    const idx = ctxMenu.idx;
+    closeCtx();
+    messages = messages.filter((_, i) => i !== idx);
+  }
+
+  function ctxRetry() {
+    if (!ctxMenu) return;
+    const idx = ctxMenu.idx;
+    closeCtx();
+    // Find last user message before this error
+    let userText = '';
+    for (let i = idx - 1; i >= 0; i--) {
+      if (messages[i].role === 'user') { userText = messages[i].content; break; }
+    }
+    // Remove the error
+    messages = messages.filter((_, i) => i !== idx);
+    messages = messages;
+    if (userText) { input = userText; send(); }
+  }
+
   function timeAgo(ts) {
     if (!ts) return '';
     const diff = (Date.now() - new Date(ts).getTime()) / 1000;
@@ -244,8 +326,14 @@
             </div>
           {/if}
 
-          {#each messages as msg}
-            <div class="chat-msg {msg.role}">
+          {#each messages as msg, i}
+            <div class="chat-msg {msg.role}"
+              onpointerdown={(e) => onMsgPointerDown(e, i)}
+              onpointerup={onMsgPointerUp}
+              onpointermove={onMsgPointerMove}
+              onpointercancel={onMsgPointerUp}
+              oncontextmenu={(e) => { e.preventDefault(); ctxMenu = { idx: i, x: e.clientX, y: e.clientY, role: msg.role, content: msg.content }; }}
+            >
               {#if msg.role === 'assistant'}
                 <span class="msg-avatar">⚡</span>
               {/if}
@@ -278,6 +366,24 @@
         </div>
       {/if}
     </div>
+
+    <!-- Long-press context menu -->
+    {#if ctxMenu}
+      <div class="ctx-backdrop" onclick={closeCtx} oncontextmenu={(e) => { e.preventDefault(); closeCtx(); }} role="presentation"></div>
+      <div class="ctx-menu" style="top:{Math.min(ctxMenu.y, window.innerHeight - 200)}px; left:{Math.min(ctxMenu.x, window.innerWidth - 180)}px">
+        <button class="ctx-item" onclick={ctxCopy}>📋 Copy</button>
+        {#if ctxMenu.role === 'user'}
+          <button class="ctx-item" onclick={ctxResend}>🔄 Resend</button>
+          <button class="ctx-item ctx-del" onclick={ctxDelete}>🗑 Delete</button>
+        {:else if ctxMenu.role === 'assistant'}
+          <button class="ctx-item" onclick={ctxRegenerate}>🔄 Regenerate</button>
+          <button class="ctx-item ctx-del" onclick={ctxDelete}>🗑 Delete</button>
+        {:else if ctxMenu.role === 'error'}
+          <button class="ctx-item" onclick={ctxRetry}>🔄 Retry</button>
+          <button class="ctx-item ctx-del" onclick={ctxDelete}>🗑 Dismiss</button>
+        {/if}
+      </div>
+    {/if}
   </div>
 {/if}
 
@@ -442,4 +548,30 @@
   }
   .chat-send:disabled { opacity: 0.3; cursor: default; }
   .chat-send:not(:disabled):active { background: var(--accent-dim); }
+
+  /* Long-press context menu */
+  .ctx-backdrop { position: fixed; inset: 0; z-index: 2000; }
+  .ctx-menu {
+    position: fixed; z-index: 2001;
+    background: var(--bg-elevated, #1e1e2e);
+    border: 1px solid var(--border-light, rgba(255,255,255,0.1));
+    border-radius: 12px; padding: 4px;
+    min-width: 160px;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.4);
+    animation: ctxIn 0.15s ease-out;
+  }
+  @keyframes ctxIn { from { opacity: 0; transform: scale(0.9); } to { opacity: 1; transform: scale(1); } }
+  .ctx-item {
+    display: flex; align-items: center; gap: 8px;
+    width: 100%; padding: 10px 14px; border: none; background: none;
+    color: var(--text); font-size: 14px; cursor: pointer;
+    border-radius: 8px; text-align: left;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .ctx-item:active { background: rgba(124,124,255,0.12); }
+  .ctx-del { color: var(--error, #ef4444); }
+  .ctx-del:active { background: rgba(239,68,68,0.1); }
+
+  /* Disable text selection on messages during long-press */
+  .chat-msg { -webkit-user-select: none; user-select: none; touch-action: pan-y; }
 </style>
