@@ -463,7 +463,6 @@ func main() {
 	mux.HandleFunc("/v1/memory/queue/", s.auth(s.handleMemoryQueueAction))
 	mux.HandleFunc("/v1/memory/conflicts", s.auth(s.handleMemoryConflicts))
 	mux.HandleFunc("/v1/memory/grid", s.auth(s.handleMemoryGrid))
-	mux.HandleFunc("/v1/memory/cells", s.auth(s.handleMemoryCells))
 	mux.HandleFunc("/v1/memory/item/", s.auth(s.handleMemoryItem))
 	mux.HandleFunc("/v1/memory/extract-vault", s.auth(s.handleMemoryExtractVault))
 	mux.HandleFunc("/v1/memory/extract-conversation", s.auth(s.handleMemoryExtractConversation))
@@ -7647,60 +7646,6 @@ func (s *Server) handleMemoryGrid(w http.ResponseWriter, r *http.Request) {
 		"days":    days,
 		"sources": sources,
 		"totals":  map[string]int{"total": total, "approved": approved, "pending": pending, "rejected": rejected},
-	})
-}
-
-// ─── GET /v1/memory/cells — lightweight cell data for grid view ──────
-
-func (s *Server) handleMemoryCells(w http.ResponseWriter, r *http.Request) {
-	cors(w)
-	if r.Method == "OPTIONS" {
-		return
-	}
-
-	status := r.URL.Query().Get("status") // empty = all
-
-	var rows *sql.Rows
-	var err error
-	if status == "" {
-		rows, err = s.db.Query(`SELECT id, status, confidence, source_type, 
-			CASE WHEN correction != '' AND correction IS NOT NULL THEN 1 ELSE 0 END as edited,
-			created_at FROM memory_queue ORDER BY created_at DESC`)
-	} else {
-		rows, err = s.db.Query(`SELECT id, status, confidence, source_type, 
-			CASE WHEN correction != '' AND correction IS NOT NULL THEN 1 ELSE 0 END as edited,
-			created_at FROM memory_queue WHERE status=? ORDER BY created_at DESC`, status)
-	}
-	if err != nil {
-		http.Error(w, `{"error":"query failed"}`, 500)
-		return
-	}
-	defer rows.Close()
-
-	type Cell struct {
-		ID         string  `json:"id"`
-		Status     string  `json:"s"`
-		Confidence float64 `json:"c"`
-		Source     string  `json:"t"`
-		Edited     int     `json:"e"`
-		Created    string  `json:"d"`
-	}
-	var cells []Cell
-	for rows.Next() {
-		var c Cell
-		rows.Scan(&c.ID, &c.Status, &c.Confidence, &c.Source, &c.Edited, &c.Created)
-		cells = append(cells, c)
-	}
-
-	var total, approved, pending, rejected int
-	s.db.QueryRow(`SELECT count(*) FROM memory_queue`).Scan(&total)
-	s.db.QueryRow(`SELECT count(*) FROM memory_queue WHERE status='approved'`).Scan(&approved)
-	s.db.QueryRow(`SELECT count(*) FROM memory_queue WHERE status='pending'`).Scan(&pending)
-	s.db.QueryRow(`SELECT count(*) FROM memory_queue WHERE status='rejected'`).Scan(&rejected)
-
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"cells":  cells,
-		"counts": map[string]int{"total": total, "approved": approved, "pending": pending, "rejected": rejected},
 	})
 }
 

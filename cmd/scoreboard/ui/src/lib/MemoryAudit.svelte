@@ -19,8 +19,8 @@
 
   onMount(() => loadGrid());
 
-  async function loadGrid() {
-    loading = true;
+  async function loadGrid(background = false) {
+    if (!background) loading = true;
     try {
       const res = await fetch('/v1/memory/grid', { headers: hdrs() });
       if (res.ok) grid = await res.json();
@@ -59,6 +59,20 @@
 
   function sortedDays() {
     return Object.keys(grid?.days || {}).sort().reverse();
+  }
+
+  // Compute totals respecting sourceFilter
+  function filteredTotals() {
+    if (!sourceFilter || !grid?.days) return grid?.totals || { total: 0, approved: 0, pending: 0, rejected: 0 };
+    let a = 0, p = 0, r = 0;
+    for (const sources of Object.values(grid.days)) {
+      const cell = sources[sourceFilter];
+      if (!cell) continue;
+      a += cell.approved || 0;
+      p += cell.pending || 0;
+      r += cell.rejected || 0;
+    }
+    return { total: a + p + r, approved: a, pending: p, rejected: r };
   }
 
   // Tap a day cell → load that day's memories
@@ -123,7 +137,7 @@
       const newStatus = action === 'reject' ? 'rejected' : 'approved';
       dayItems = dayItems.map(i => i.id === id ? { ...i, status: newStatus } : i);
       if (detail?.id === id) detail = { ...detail, status: newStatus };
-      loadGrid(); // refresh day cell colors
+      loadGrid(true); // background refresh — no loading flash
     } catch (e) { console.error(e); }
   }
 
@@ -149,11 +163,12 @@
 <div class="ma">
   <!-- Totals -->
   {#if grid?.totals}
+    {@const t = filteredTotals()}
     <div class="ma-bar">
-      <span class="mb-n">{grid.totals.total}</span>
-      <span class="mb-ok">{grid.totals.approved} ✓</span>
-      <span class="mb-wait">{grid.totals.pending} ⏳</span>
-      <span class="mb-no">{grid.totals.rejected} ✗</span>
+      <span class="mb-n">{t.total}</span>
+      <span class="mb-ok">{t.approved} ✓</span>
+      <span class="mb-wait">{t.pending} ⏳</span>
+      <span class="mb-no">{t.rejected} ✗</span>
       <div class="ma-legend">
         <span class="ml" style="background:#10b981"></span>
         <span class="ml" style="background:#f59e0b"></span>
@@ -197,13 +212,14 @@
 
     <!-- Selected day expanded -->
     {#if selectedDay}
+      {@const dc = dayCell(selectedDay)}
       <div class="ma-day-detail">
         <div class="dd-hdr">
           <span class="dd-date">{selectedDay}</span>
           <span class="dd-counts">
-            <span class="mb-ok">{dayCell(selectedDay).approved}✓</span>
-            <span class="mb-wait">{dayCell(selectedDay).pending}⏳</span>
-            <span class="mb-no">{dayCell(selectedDay).rejected}✗</span>
+            <span class="mb-ok">{dc.approved}✓</span>
+            <span class="mb-wait">{dc.pending}⏳</span>
+            <span class="mb-no">{dc.rejected}✗</span>
           </span>
           <button class="dd-close" onclick={() => selectedDay = null}>✕</button>
         </div>
