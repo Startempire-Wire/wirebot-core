@@ -5060,6 +5060,8 @@ Never ignore conversation memories in favor of passive data.
 	}
 
 	// ── TIER 4: Keyword-relevant memories (any source) ──
+	// Exclude memories already covered by Tier 1 (conversation/ai_chat last 30d)
+	// and Tier 2+3 (other types last 7d) to avoid duplicates in context.
 	if len(userMessages) > 0 {
 		lastMsg := userMessages[len(userMessages)-1].Content
 		if len(lastMsg) > 10 {
@@ -5073,6 +5075,8 @@ Never ignore conversation memories in favor of passive data.
 				}
 				q := fmt.Sprintf(`SELECT memory_text, source_type, date(created_at)
 					FROM memory_queue WHERE status='approved' AND (%s)
+					AND NOT (source_type IN ('conversation','ai_chat') AND created_at >= datetime('now','-30 days'))
+					AND NOT (source_type NOT IN ('conversation','ai_chat') AND created_at >= datetime('now','-7 days'))
 					ORDER BY
 						CASE WHEN source_type IN ('conversation','ai_chat') THEN 0 ELSE 1 END,
 						created_at DESC
@@ -5091,7 +5095,7 @@ Never ignore conversation memories in favor of passive data.
 						rlines = append(rlines, fmt.Sprintf("- %s[%s %s] %s", prefix, day, src, truncateRunes(text, 120)))
 					}
 					if len(rlines) > 0 {
-						parts = append(parts, "RELEVANT MEMORIES (matching this conversation, ⚡=from direct conversation):\n"+strings.Join(rlines, "\n"))
+						parts = append(parts, "RELEVANT MEMORIES (older/keyword-matched, ⚡=from direct conversation):\n"+strings.Join(rlines, "\n"))
 					}
 				}
 			}

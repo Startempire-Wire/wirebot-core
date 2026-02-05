@@ -176,7 +176,6 @@
     if (sending && messages[idx].role === 'user') return;
     pressStartPos = { x: e.clientX, y: e.clientY };
     pressTimer = setTimeout(() => {
-      e.preventDefault();
       const msg = messages[idx];
       actionSheet = { idx, role: msg.role, content: msg.content };
       navigator.vibrate?.(30);
@@ -416,7 +415,7 @@
               <span class="as-icon">🔄</span><span>Retry</span>
             </button>
           {/if}
-          <button class="as-btn as-danger" onclick={actionSheet.role === 'error' ? actDelete : actDelete}>
+          <button class="as-btn as-danger" onclick={actDelete}>
             <span class="as-icon">🗑</span><span>{actionSheet.role === 'error' ? 'Dismiss' : 'Delete'}</span>
           </button>
         </div>
