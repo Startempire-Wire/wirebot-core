@@ -150,7 +150,7 @@
         {#if tab.id === 'feed' && pendingCount > 0 && !editMode}
           <span class="nav-badge">{pendingCount > 99 ? '99+' : pendingCount}</span>
         {/if}
-        {#if tab.id === 'settings' && memoryPendingCount > 0 && !editMode}
+        {#if tab.id === 'memory' && memoryPendingCount > 0 && !editMode}
           <span class="nav-badge memory">{memoryPendingCount > 99 ? '99+' : memoryPendingCount}</span>
         {/if}
       </span>

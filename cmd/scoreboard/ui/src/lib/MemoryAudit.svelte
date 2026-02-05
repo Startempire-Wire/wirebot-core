@@ -4,7 +4,6 @@
   let grid = $state(null);     // { days: {date: {source: {approved,pending,rejected}}}, sources: [], totals: {} }
   let loading = $state(true);
   let selected = $state(null);  // full memory item for popup
-  let loadingItem = $state(false);
   let editing = $state(false);
   let editText = $state('');
   let saving = $state(false);
@@ -46,7 +45,6 @@
           listItems = [...listItems, ...items];
         } else {
           listItems = items;
-          listOffset = 0;
         }
         listOffset = listItems.length;
         hasMore = items.length === 50;
@@ -61,13 +59,13 @@
   }
 
   async function openItem(id) {
-    loadingItem = true;
     editing = false;
+    selected = { _loading: true }; // show popup immediately with loading state
     try {
       const res = await fetch(`${API}/v1/memory/item/${id}`, { headers: hdrs() });
       if (res.ok) selected = await res.json();
-    } catch (e) { console.error(e); }
-    loadingItem = false;
+      else selected = null;
+    } catch (e) { console.error(e); selected = null; }
   }
 
   function startEdit() {
@@ -95,11 +93,12 @@
 
   async function doAction(id, action) {
     try {
-      await fetch(`${API}/v1/memory/queue/${id}/${action}`, { method: 'POST', headers: hdrs() });
-      // Update local state
-      listItems = listItems.map(i => i.id === id ? { ...i, status: action === 'reject' ? 'rejected' : 'approved' } : i);
-      if (selected?.id === id) selected = { ...selected, status: action === 'reject' ? 'rejected' : 'approved' };
-      loadGrid(); // refresh counts
+      const res = await fetch(`${API}/v1/memory/queue/${id}/${action}`, { method: 'POST', headers: hdrs() });
+      if (!res.ok) { console.error('Action failed:', res.status); return; }
+      const newStatus = action === 'reject' ? 'rejected' : 'approved';
+      listItems = listItems.map(i => i.id === id ? { ...i, status: newStatus } : i);
+      if (selected?.id === id) selected = { ...selected, status: newStatus };
+      loadGrid();
     } catch (e) { console.error(e); }
   }
 
@@ -112,10 +111,13 @@
 
   function cellColor(cell) {
     if (!cell) return 'rgba(255,255,255,0.05)';
-    if (cell.approved > 0 && cell.pending === 0) return '#10b981';
-    if (cell.pending > 0 && cell.approved === 0) return '#f59e0b';
-    if (cell.rejected > 0 && cell.approved === 0 && cell.pending === 0) return '#ef4444';
-    return '#6366f1';
+    const has = (v) => (v || 0) > 0;
+    const types = [has(cell.approved), has(cell.pending), has(cell.rejected)].filter(Boolean).length;
+    if (types > 1) return '#6366f1'; // mixed
+    if (has(cell.approved)) return '#10b981';
+    if (has(cell.pending)) return '#f59e0b';
+    if (has(cell.rejected)) return '#ef4444';
+    return 'rgba(255,255,255,0.05)';
   }
 
   function cellCount(cell) {
@@ -260,6 +262,9 @@
   <div class="ma-overlay" use:portal>
     <div class="ma-backdrop" onclick={closePopup} role="presentation"></div>
     <div class="ma-popup">
+      {#if selected._loading}
+        <div class="ma-loading">Loading...</div>
+      {:else}
       <div class="mp-header">
         <span class="mp-source">{sourceIcon(selected.source_type)} {selected.source_type}</span>
         <span class="mp-status {statusClass(selected.status)}">{selected.status}</span>
@@ -344,6 +349,7 @@
           <button class="mp-btn mp-approve" onclick={() => doAction(selected.id, 'approve')}>✓ Approve</button>
           <button class="mp-btn mp-reject" onclick={() => doAction(selected.id, 'reject')}>✗ Reject</button>
         </div>
+      {/if}
       {/if}
     </div>
   </div>
@@ -448,7 +454,6 @@
 
   /* Theme vars */
   :global([data-theme="light"]) .ma-item { background: rgba(0,0,0,0.03); }
-  :global([data-theme="light"]) .ma-cell { }
   :global([data-theme="light"]) .mp-popup { background: #fff; }
   :global([data-theme="light"]) .mp-text, :global([data-theme="light"]) .mp-context { background: rgba(0,0,0,0.03); }
 </style>

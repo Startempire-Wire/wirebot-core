@@ -24,6 +24,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"syscall"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -7118,21 +7119,34 @@ func (s *Server) handleMemoryQueue(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case "GET":
 		status := r.URL.Query().Get("status")
-		if status == "" {
-			status = "pending"
-		}
 		limit := 50
 		if l := r.URL.Query().Get("limit"); l != "" {
 			fmt.Sscanf(l, "%d", &limit)
 		}
+		offset := 0
+		if o := r.URL.Query().Get("offset"); o != "" {
+			fmt.Sscanf(o, "%d", &offset)
+		}
 
-		rows, err := s.db.Query(`
-			SELECT id, memory_text, source_type, source_file, source_context, 
-			       confidence, status, correction, created_at, reviewed_at
-			FROM memory_queue 
-			WHERE status = ?
-			ORDER BY created_at DESC
-			LIMIT ?`, status, limit)
+		var rows *sql.Rows
+		var err error
+		if status == "" {
+			// "All" — no status filter
+			rows, err = s.db.Query(`
+				SELECT id, memory_text, source_type, source_file, source_context, 
+				       confidence, status, correction, created_at, reviewed_at
+				FROM memory_queue 
+				ORDER BY created_at DESC
+				LIMIT ? OFFSET ?`, limit, offset)
+		} else {
+			rows, err = s.db.Query(`
+				SELECT id, memory_text, source_type, source_file, source_context, 
+				       confidence, status, correction, created_at, reviewed_at
+				FROM memory_queue 
+				WHERE status = ?
+				ORDER BY created_at DESC
+				LIMIT ? OFFSET ?`, status, limit, offset)
+		}
 		if err != nil {
 			http.Error(w, `{"error":"db query failed"}`, 500)
 			return
@@ -7277,6 +7291,8 @@ func (s *Server) handleMemoryQueueAction(w http.ResponseWriter, r *http.Request)
 }
 
 // mem0Store stores a fact in Mem0 via HTTP API.
+var mem0Client = &http.Client{Timeout: 30 * time.Second}
+
 func mem0Store(baseURL, namespace, text string, messages []map[string]string) error {
 	body := map[string]interface{}{"namespace": namespace, "category": "approved"}
 	if len(messages) > 0 {
@@ -7285,7 +7301,7 @@ func mem0Store(baseURL, namespace, text string, messages []map[string]string) er
 		body["text"] = text
 	}
 	bodyBytes, _ := json.Marshal(body)
-	resp, err := http.Post(baseURL+"/v1/store", "application/json", bytes.NewReader(bodyBytes))
+	resp, err := mem0Client.Post(baseURL+"/v1/store", "application/json", bytes.NewReader(bodyBytes))
 	if err != nil {
 		return err
 	}
@@ -7322,6 +7338,7 @@ func (s *Server) writebackApprovedMemory(memID, text string) {
 			log.Printf("[memory-writeback] MEMORY.md write error: %v", writeErr)
 		} else {
 			dests = append(dests, "memory_md")
+			exec.Command("chown", "wirebot:wirebot", memoryPath).Run()
 		}
 	} else {
 		log.Printf("[memory-writeback] MEMORY.md open error: %v", err)
@@ -7330,21 +7347,20 @@ func (s *Server) writebackApprovedMemory(memID, text string) {
 	// 3. Git-backed YAML fact file — local only, no remote push
 	factsDir := "/home/wirebot/clawd/memory/facts"
 	os.MkdirAll(factsDir, 0755)
+	exec.Command("chown", "wirebot:wirebot", factsDir).Run()
 	// Load full record from DB for YAML
-	var sourceType, sourceFile, sourceCtx, correction, createdAt string
+	var sourceType, createdAt string
+	var nSrcFile, nSrcCtx, nCorrection sql.NullString
 	var confidence float64
 	s.db.QueryRow(`SELECT source_type, source_file, source_context, confidence, correction, created_at FROM memory_queue WHERE id=?`, memID).
-		Scan(&sourceType, &sourceFile, &sourceCtx, &confidence, &correction, &createdAt)
+		Scan(&sourceType, &nSrcFile, &nSrcCtx, &confidence, &nCorrection, &createdAt)
+	sourceCtx := nSrcCtx.String
+	correction := nCorrection.String
 
 	yamlContent := fmt.Sprintf("id: %s\ntext: %q\nsource: %s\nconfidence: %.2f\nstatus: approved\ncreated: %s\n",
 		memID, text, sourceType, confidence, createdAt)
 	if sourceCtx != "" {
-		// Truncate context for YAML readability
-		ctx := sourceCtx
-		if len(ctx) > 300 {
-			ctx = ctx[:300] + "..."
-		}
-		yamlContent += fmt.Sprintf("context: %q\n", ctx)
+		yamlContent += fmt.Sprintf("context: %q\n", truncateRunes(sourceCtx, 300))
 	}
 	if correction != "" {
 		h := fmt.Sprintf("%x", sha256.Sum256([]byte(correction)))[:8]
@@ -7359,12 +7375,22 @@ func (s *Server) writebackApprovedMemory(memID, text string) {
 		log.Printf("[memory-writeback] YAML write error: %v", err)
 	} else {
 		dests = append(dests, "git")
-		// Auto-commit (non-blocking, best-effort)
+		// Fix ownership (scoreboard runs as root, clawd owned by wirebot)
+		exec.Command("chown", "wirebot:wirebot", yamlPath).Run()
+		// Auto-commit as wirebot (non-blocking, best-effort)
 		go func() {
-			cmd := exec.Command("git", "-C", "/home/wirebot/clawd", "add", "memory/facts/"+memID+".yaml", "MEMORY.md")
-			cmd.Run()
 			commitMsg := fmt.Sprintf("memory: %s", truncateRunes(safeLine, 60))
-			exec.Command("git", "-C", "/home/wirebot/clawd", "commit", "-m", commitMsg, "--author", "wirebot <wirebot@wirebot.chat>").Run()
+			clawdDir := "/home/wirebot/clawd"
+			gitCmd := func(args ...string) {
+				cmd := exec.Command("git", args...)
+				cmd.Dir = clawdDir
+				cmd.SysProcAttr = &syscall.SysProcAttr{
+					Credential: &syscall.Credential{Uid: 549, Gid: 547},
+				}
+				cmd.Run()
+			}
+			gitCmd("add", "memory/facts/"+memID+".yaml", "MEMORY.md")
+			gitCmd("commit", "-m", commitMsg, "--author", "wirebot <wirebot@wirebot.chat>")
 		}()
 	}
 
@@ -7627,41 +7653,35 @@ func (s *Server) handleMemoryItem(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if r.Method == "GET" {
-		var item struct {
-			ID             string  `json:"id"`
-			MemoryText     string  `json:"memory_text"`
-			SourceType     string  `json:"source_type"`
-			SourceFile     string  `json:"source_file"`
-			SourceContext  string  `json:"source_context"`
-			Confidence     float64 `json:"confidence"`
-			Status         string  `json:"status"`
-			Correction     string  `json:"correction"`
-			CorrectionHash string  `json:"correction_hash"`
-			Destinations   string  `json:"destinations"`
-			CreatedAt      string  `json:"created_at"`
-			ReviewedAt     *string `json:"reviewed_at"`
-		}
+		var memID, memText, sourceType, status, createdAt string
+		var srcFile, srcCtx, correction, corrHash, destinations, reviewedAt sql.NullString
+		var confidence float64
 		err := s.db.QueryRow(`SELECT id, memory_text, source_type, source_file, source_context, 
 			confidence, status, correction, correction_hash, destinations, created_at, reviewed_at 
 			FROM memory_queue WHERE id=?`, id).
-			Scan(&item.ID, &item.MemoryText, &item.SourceType, &item.SourceFile, &item.SourceContext,
-				&item.Confidence, &item.Status, &item.Correction, &item.CorrectionHash, &item.Destinations,
-				&item.CreatedAt, &item.ReviewedAt)
+			Scan(&memID, &memText, &sourceType, &srcFile, &srcCtx,
+				&confidence, &status, &correction, &corrHash, &destinations,
+				&createdAt, &reviewedAt)
 		if err != nil {
 			http.Error(w, `{"error":"not found"}`, 404)
 			return
 		}
-		// Parse destinations JSON
 		var dests []string
-		json.Unmarshal([]byte(item.Destinations), &dests)
+		if destinations.Valid && destinations.String != "" {
+			json.Unmarshal([]byte(destinations.String), &dests)
+		}
+		var revAt interface{}
+		if reviewedAt.Valid {
+			revAt = reviewedAt.String
+		}
 
 		json.NewEncoder(w).Encode(map[string]interface{}{
-			"id": item.ID, "memory_text": item.MemoryText,
-			"source_type": item.SourceType, "source_file": item.SourceFile,
-			"source_context": item.SourceContext, "confidence": item.Confidence,
-			"status": item.Status, "correction": item.Correction,
-			"correction_hash": item.CorrectionHash, "destinations": dests,
-			"created_at": item.CreatedAt, "reviewed_at": item.ReviewedAt,
+			"id": memID, "memory_text": memText,
+			"source_type": sourceType, "source_file": srcFile.String,
+			"source_context": srcCtx.String, "confidence": confidence,
+			"status": status, "correction": correction.String,
+			"correction_hash": corrHash.String, "destinations": dests,
+			"created_at": createdAt, "reviewed_at": revAt,
 		})
 		return
 	}
