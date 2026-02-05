@@ -173,7 +173,7 @@
   let copied = $state(false); // flash "Copied!" feedback
 
   function onMsgPointerDown(e, idx) {
-    if (sending && messages[idx].role === 'user') return;
+    if (sending) return; // no action sheet during streaming — destructive actions can corrupt aidx
     pressStartPos = { x: e.clientX, y: e.clientY };
     pressTimer = setTimeout(() => {
       const msg = messages[idx];
@@ -337,7 +337,7 @@
               onpointerup={onMsgPointerUp}
               onpointermove={onMsgPointerMove}
               onpointercancel={onMsgPointerUp}
-              oncontextmenu={(e) => { e.preventDefault(); actionSheet = { idx: i, role: msg.role, content: msg.content }; }}
+              oncontextmenu={(e) => { e.preventDefault(); if (!sending) actionSheet = { idx: i, role: msg.role, content: msg.content }; }}
             >
               {#if msg.role === 'assistant'}
                 <span class="msg-avatar">⚡</span>
