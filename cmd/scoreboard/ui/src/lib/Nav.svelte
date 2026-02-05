@@ -7,7 +7,7 @@
     { id: 'dashboard', icon: '🏠', label: 'Home' },
     { id: 'score', icon: '⚡', label: 'Score' },
     { id: 'feed', icon: '📋', label: 'Feed' },
-    { id: 'memory', icon: '🧠', label: 'Memory' },
+    { id: 'season', icon: '🏆', label: 'Season' },
     { id: 'settings', icon: '⚙️', label: 'Settings' },
   ];
 
@@ -150,7 +150,7 @@
         {#if tab.id === 'feed' && pendingCount > 0 && !editMode}
           <span class="nav-badge">{pendingCount > 99 ? '99+' : pendingCount}</span>
         {/if}
-        {#if tab.id === 'memory' && memoryPendingCount > 0 && !editMode}
+        {#if tab.id === 'feed' && memoryPendingCount > 0 && !editMode}
           <span class="nav-badge memory">{memoryPendingCount > 99 ? '99+' : memoryPendingCount}</span>
         {/if}
       </span>

@@ -12,7 +12,7 @@
   import PairingFlow from './lib/PairingFlow.svelte';
   import Audit from './lib/Audit.svelte';
   import MemoryReview from './lib/MemoryReview.svelte';
-  import MemoryAudit from './lib/MemoryAudit.svelte';
+
   import SystemStatus from './lib/SystemStatus.svelte';
 
   let view = $state('dashboard');
@@ -798,7 +798,7 @@ Tracked with Wirebot — your AI business operating partner`;
   }
 
   // Tab index order for slide direction
-  const TAB_ORDER = ['dashboard', 'score', 'feed', 'memory', 'settings', 'season', 'wrapped'];
+  const TAB_ORDER = ['dashboard', 'score', 'feed', 'season', 'settings', 'wrapped'];
 
   function handleNav(e) {
     const next = e.detail;
@@ -940,14 +940,12 @@ Tracked with Wirebot — your AI business operating partner`;
       {:else if view === 'score'}
         <Score {data} {lastUpdate} onHelp={() => showHints = true} user={loggedInUser} onPairing={selfReportCount === 0 ? () => showPairing = true : null} onShare={shareScore} {canShare} />
       {:else if view === 'feed'}
-        <Feed items={feed} pendingCount={data?.pending_count || 0} onHelp={() => showHints = true}
+        <Feed items={feed} pendingCount={data?.pending_count || 0} memoryPendingCount={data?.memory_pending_count || 0} onHelp={() => showHints = true}
           {activeBusiness} onBusinessChange={(biz) => { activeBusiness = biz; fetchAll(); }} />
       {:else if view === 'season'}
         <Season season={data?.season} {history} streak={data?.streak} onHelp={() => showHints = true} onnav={(e) => navigateTo(e.detail)} />
       {:else if view === 'wrapped'}
         <Wrapped {wrapped} />
-      {:else if view === 'memory'}
-        <MemoryAudit />
       {:else if view === 'audit'}
         <Audit />
       {:else if view === 'memory-review'}

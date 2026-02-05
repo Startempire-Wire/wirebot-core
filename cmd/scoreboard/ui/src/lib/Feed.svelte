@@ -1,5 +1,6 @@
 <script>
-  let { items, pendingCount = 0, onHelp, activeBusiness = '', onBusinessChange } = $props();
+  import MemoryAudit from './MemoryAudit.svelte';
+  let { items, pendingCount = 0, memoryPendingCount = 0, onHelp, activeBusiness = '', onBusinessChange } = $props();
 
   const BIZ_LABELS = { SEW: '🚀', STA: '🚀', SEWN: '🕸', WB: '🤖', WIR: '🤖', PVD: '📘', PHI: '📘' };
 
@@ -377,6 +378,9 @@
       Projects{#if pendingCount > 0}<span class="badge">{pendingCount}</span>{/if}
     </button>
     <button class="tab" class:active={tab === 'approved'} onclick={() => switchTab('approved')}>Scored</button>
+    <button class="tab" class:active={tab === 'memory'} onclick={() => switchTab('memory')}>
+      🧠 Memory{#if memoryPendingCount > 0}<span class="badge">{memoryPendingCount > 99 ? '99+' : memoryPendingCount}</span>{/if}
+    </button>
   </div>
 
   <!-- ═══════════ PROJECTS TAB ═══════════ -->
@@ -507,6 +511,10 @@
         </div>
       {/each}
     {/if}
+
+  <!-- ═══════════ MEMORY TAB ═══════════ -->
+  {:else if tab === 'memory'}
+    <MemoryAudit />
 
   <!-- ═══════════ ALL / SCORED TAB ═══════════ -->
   {:else}
