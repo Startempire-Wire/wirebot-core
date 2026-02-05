@@ -257,7 +257,7 @@
     align-items: center;
     justify-content: center;
   }
-  .nav-badge.memory { background: #a855f7; }
+  .nav-badge.memory { background: #a855f7; top: -6px; right: auto; left: -10px; }
 
   /* Edit mode */
   nav.edit-mode { background: var(--bg); }

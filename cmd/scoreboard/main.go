@@ -7250,10 +7250,11 @@ func (s *Server) handleMemoryQueueAction(w http.ResponseWriter, r *http.Request)
 	}
 	id, action := parts[0], parts[1]
 
-	// Get the memory item
+	// Get the memory item (include correction — edits via PATCH)
 	var item MemoryQueueItem
-	err := s.db.QueryRow(`SELECT id, memory_text, source_type FROM memory_queue WHERE id=?`, id).
-		Scan(&item.ID, &item.MemoryText, &item.SourceType)
+	var correction sql.NullString
+	err := s.db.QueryRow(`SELECT id, memory_text, source_type, correction FROM memory_queue WHERE id=?`, id).
+		Scan(&item.ID, &item.MemoryText, &item.SourceType, &correction)
 	if err != nil {
 		http.Error(w, `{"error":"memory not found"}`, 404)
 		return
@@ -7262,6 +7263,9 @@ func (s *Server) handleMemoryQueueAction(w http.ResponseWriter, r *http.Request)
 	switch action {
 	case "approve":
 		finalText := item.MemoryText
+		if correction.Valid && correction.String != "" {
+			finalText = correction.String
+		}
 		_, err := s.db.Exec(`UPDATE memory_queue SET status='approved', reviewed_at=CURRENT_TIMESTAMP WHERE id=?`, id)
 		if err != nil {
 			http.Error(w, `{"error":"db update failed"}`, 500)
@@ -7361,10 +7365,10 @@ func (s *Server) writebackApprovedMemory(memID, text string) {
 	exec.Command("chown", "wirebot:wirebot", factsDir).Run()
 	// Load full record from DB for YAML
 	var sourceType, createdAt string
-	var nSrcFile, nSrcCtx, nCorrection sql.NullString
+	var nSrcCtx, nCorrection sql.NullString
 	var confidence float64
-	s.db.QueryRow(`SELECT source_type, source_file, source_context, confidence, correction, created_at FROM memory_queue WHERE id=?`, memID).
-		Scan(&sourceType, &nSrcFile, &nSrcCtx, &confidence, &nCorrection, &createdAt)
+	s.db.QueryRow(`SELECT source_type, source_context, confidence, correction, created_at FROM memory_queue WHERE id=?`, memID).
+		Scan(&sourceType, &nSrcCtx, &confidence, &nCorrection, &createdAt)
 	sourceCtx := nSrcCtx.String
 	correction := nCorrection.String
 
