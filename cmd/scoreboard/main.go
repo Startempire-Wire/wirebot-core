@@ -4968,6 +4968,14 @@ After EACH answer, call wirebot_remember to persist the fact.`)
 		}
 	}
 
+	// --- Approved memories (cross-surface awareness) ---
+	// Inject recent approved memories so Wirebot knows what it learned from
+	// Discord, AI chats, drive scans, etc. — not just this WINS session.
+	memCtx := s.getMemoryContext(userMessages)
+	if memCtx != "" {
+		contextParts = append(contextParts, memCtx)
+	}
+
 	if len(contextParts) > 0 {
 		result = append(result, map[string]string{
 			"role":    "system",
@@ -4980,6 +4988,155 @@ After EACH answer, call wirebot_remember to persist the fact.`)
 		result = append(result, map[string]string{"role": m.Role, "content": m.Content})
 	}
 
+	return result
+}
+
+// getMemoryContext builds a compact memory block for the chat system prompt.
+//
+// Signal hierarchy (NEVER violate this order):
+//   TIER 1 — 1-on-1 conversations (source_type = 'conversation', 'ai_chat')
+//            The founder CHOSE to say this. Highest initiative signal.
+//            Direct conversations > group conversations.
+//            These are ALWAYS included — no cap on recency, generous limits.
+//   TIER 2 — Active contributions (source_type = 'pairing', 'obsidian')
+//            Founder wrote or answered something deliberately.
+//   TIER 3 — Passive scans (source_type = 'gdrive', 'recovered', etc.)
+//            Discovered by automation, not founder initiative.
+//   TIER 4 — Keyword-relevant from any tier (semantic match against current message)
+func (s *Server) getMemoryContext(userMessages []struct {
+	Role    string `json:"role"`
+	Content string `json:"content"`
+}) string {
+	var parts []string
+
+	// ── TIER 1: Conversations — HIGHEST SIGNAL ──
+	// The founder spoke directly. This is initiative. This is what they care about.
+	// 1-on-1 conversations (conversation, ai_chat) get priority placement and
+	// generous limits. NEVER drop these to make room for passive data.
+	convRows, err := s.db.Query(`SELECT memory_text, source_type, date(created_at)
+		FROM memory_queue WHERE status='approved'
+		AND source_type IN ('conversation', 'ai_chat')
+		AND created_at >= datetime('now', '-30 days')
+		ORDER BY created_at DESC LIMIT 50`)
+	if err == nil {
+		defer convRows.Close()
+		var lines []string
+		for convRows.Next() {
+			var text, src, day string
+			convRows.Scan(&text, &src, &day)
+			tag := "💬 DIRECT"
+			if src == "ai_chat" {
+				tag = "🤖 AI-CHAT"
+			}
+			lines = append(lines, fmt.Sprintf("- [%s %s] %s", day, tag, truncateRunes(text, 150)))
+		}
+		if len(lines) > 0 {
+			parts = append(parts, `⚡ CONVERSATION MEMORIES — HIGHEST SIGNAL
+These came from direct 1-on-1 conversations. The founder actively said or discussed these topics.
+Treat every item here as HIGH-PRIORITY context. If the founder mentioned stress,
+a client issue, a celebration, or ANY emotional state — you MUST acknowledge it.
+Never ignore conversation memories in favor of passive data.
+`+strings.Join(lines, "\n"))
+		}
+	}
+
+	// ── TIER 2+3: Other recent memories (non-conversation) ──
+	otherRows, err := s.db.Query(`SELECT memory_text, source_type, date(created_at)
+		FROM memory_queue WHERE status='approved'
+		AND source_type NOT IN ('conversation', 'ai_chat')
+		AND created_at >= datetime('now', '-7 days')
+		ORDER BY created_at DESC LIMIT 20`)
+	if err == nil {
+		defer otherRows.Close()
+		var lines []string
+		for otherRows.Next() {
+			var text, src, day string
+			otherRows.Scan(&text, &src, &day)
+			lines = append(lines, fmt.Sprintf("- [%s %s] %s", day, src, truncateRunes(text, 120)))
+		}
+		if len(lines) > 0 {
+			parts = append(parts, "OTHER RECENT MEMORIES (passive — drive scans, notes, recovered):\n"+strings.Join(lines, "\n"))
+		}
+	}
+
+	// ── TIER 4: Keyword-relevant memories (any source) ──
+	if len(userMessages) > 0 {
+		lastMsg := userMessages[len(userMessages)-1].Content
+		if len(lastMsg) > 10 {
+			keywords := extractKeywords(lastMsg, 6)
+			if len(keywords) > 0 {
+				var likeClauses []string
+				var args []interface{}
+				for _, kw := range keywords {
+					likeClauses = append(likeClauses, "memory_text LIKE ?")
+					args = append(args, "%"+kw+"%")
+				}
+				q := fmt.Sprintf(`SELECT memory_text, source_type, date(created_at)
+					FROM memory_queue WHERE status='approved' AND (%s)
+					ORDER BY
+						CASE WHEN source_type IN ('conversation','ai_chat') THEN 0 ELSE 1 END,
+						created_at DESC
+					LIMIT 15`, strings.Join(likeClauses, " OR "))
+				rrows, rerr := s.db.Query(q, args...)
+				if rerr == nil {
+					defer rrows.Close()
+					var rlines []string
+					for rrows.Next() {
+						var text, src, day string
+						rrows.Scan(&text, &src, &day)
+						prefix := ""
+						if src == "conversation" || src == "ai_chat" {
+							prefix = "⚡ "
+						}
+						rlines = append(rlines, fmt.Sprintf("- %s[%s %s] %s", prefix, day, src, truncateRunes(text, 120)))
+					}
+					if len(rlines) > 0 {
+						parts = append(parts, "RELEVANT MEMORIES (matching this conversation, ⚡=from direct conversation):\n"+strings.Join(rlines, "\n"))
+					}
+				}
+			}
+		}
+	}
+
+	if len(parts) == 0 {
+		return ""
+	}
+	return strings.Join(parts, "\n\n---\n\n")
+}
+
+// extractKeywords pulls meaningful words from text for memory search.
+func extractKeywords(text string, maxCount int) []string {
+	stop := map[string]bool{
+		"about": true, "after": true, "again": true, "been": true, "before": true,
+		"being": true, "between": true, "both": true, "could": true, "does": true,
+		"doing": true, "down": true, "during": true, "each": true, "from": true,
+		"further": true, "have": true, "having": true, "here": true, "into": true,
+		"just": true, "know": true, "like": true, "more": true, "most": true,
+		"much": true, "myself": true, "once": true, "only": true, "other": true,
+		"over": true, "same": true, "should": true, "some": true, "such": true,
+		"than": true, "that": true, "their": true, "them": true, "then": true,
+		"there": true, "these": true, "they": true, "this": true, "those": true,
+		"through": true, "under": true, "until": true, "very": true, "want": true,
+		"were": true, "what": true, "when": true, "where": true, "which": true,
+		"while": true, "will": true, "with": true, "would": true, "your": true,
+		"think": true, "thing": true, "things": true, "anything": true, "something": true,
+		"everything": true, "nothing": true, "notice": true, "today": true, "yesterday": true,
+	}
+	words := strings.Fields(strings.ToLower(text))
+	seen := map[string]bool{}
+	var result []string
+	for _, w := range words {
+		// Strip punctuation
+		w = strings.Trim(w, ".,!?;:\"'()-")
+		if len(w) < 4 || stop[w] || seen[w] {
+			continue
+		}
+		seen[w] = true
+		result = append(result, w)
+		if len(result) >= maxCount {
+			break
+		}
+	}
 	return result
 }
 
