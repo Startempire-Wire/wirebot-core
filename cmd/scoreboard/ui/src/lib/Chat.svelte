@@ -165,85 +165,91 @@
 
   function close() { visible = false; }
 
-  // ─── Long-press context menu ────────────────────────────────
-  let ctxMenu = $state(null); // { idx, x, y, role }
+  // ─── Long-press action sheet (bottom slide-up) ───────────────
+  let actionSheet = $state(null); // { idx, role, content }
+  let sheetClosing = $state(false);
   let pressTimer = null;
   let pressStartPos = null;
+  let copied = $state(false); // flash "Copied!" feedback
 
   function onMsgPointerDown(e, idx) {
-    // Ignore if already sending or menu open
     if (sending && messages[idx].role === 'user') return;
-    pressStartPos = { x: e.clientX || e.touches?.[0]?.clientX, y: e.clientY || e.touches?.[0]?.clientY };
+    pressStartPos = { x: e.clientX, y: e.clientY };
     pressTimer = setTimeout(() => {
       e.preventDefault();
       const msg = messages[idx];
-      ctxMenu = { idx, x: pressStartPos.x, y: pressStartPos.y, role: msg.role, content: msg.content };
-      // Haptic feedback on mobile if available
+      actionSheet = { idx, role: msg.role, content: msg.content };
       navigator.vibrate?.(30);
     }, 500);
   }
   function onMsgPointerUp() { clearTimeout(pressTimer); }
   function onMsgPointerMove(e) {
     if (!pressStartPos) return;
-    const x = e.clientX || e.touches?.[0]?.clientX;
-    const y = e.clientY || e.touches?.[0]?.clientY;
-    if (Math.abs(x - pressStartPos.x) > 10 || Math.abs(y - pressStartPos.y) > 10) {
-      clearTimeout(pressTimer); // Cancel if finger moved (scrolling)
+    if (Math.abs(e.clientX - pressStartPos.x) > 10 || Math.abs(e.clientY - pressStartPos.y) > 10) {
+      clearTimeout(pressTimer);
     }
   }
-  function closeCtx() { ctxMenu = null; }
 
-  async function ctxCopy() {
-    if (!ctxMenu) return;
-    try { await navigator.clipboard.writeText(ctxMenu.content); } catch {}
-    closeCtx();
+  function closeSheet() {
+    sheetClosing = true;
+    setTimeout(() => { actionSheet = null; sheetClosing = false; }, 200);
   }
 
-  function ctxResend() {
-    if (!ctxMenu) return;
-    const text = ctxMenu.content;
-    closeCtx();
-    // Remove original + any assistant/error response after it, then re-send
+  async function actCopy() {
+    if (!actionSheet) return;
+    try { await navigator.clipboard.writeText(actionSheet.content); } catch {}
+    copied = true;
+    setTimeout(() => { copied = false; closeSheet(); }, 600);
+  }
+
+  async function actCopyConversation() {
+    const transcript = messages
+      .filter(m => m.role !== 'error')
+      .map(m => `${m.role === 'user' ? 'You' : 'Wirebot'}: ${m.content}`)
+      .join('\n\n');
+    try { await navigator.clipboard.writeText(transcript); } catch {}
+    copied = true;
+    setTimeout(() => { copied = false; closeSheet(); }, 600);
+  }
+
+  function actResend() {
+    if (!actionSheet) return;
+    const text = actionSheet.content;
+    closeSheet();
     input = text;
     send();
   }
 
-  function ctxRegenerate() {
-    if (!ctxMenu) return;
-    const idx = ctxMenu.idx;
-    closeCtx();
-    // Find the user message before this assistant message
+  function actRegenerate() {
+    if (!actionSheet) return;
+    const idx = actionSheet.idx;
+    closeSheet();
     let userText = '';
     for (let i = idx - 1; i >= 0; i--) {
       if (messages[i].role === 'user') { userText = messages[i].content; break; }
     }
     if (!userText) return;
-    // Remove the assistant message (and any error after it)
     messages = messages.slice(0, idx);
-    messages = messages;
     input = userText;
     send();
   }
 
-  function ctxDelete() {
-    if (!ctxMenu) return;
-    const idx = ctxMenu.idx;
-    closeCtx();
+  function actDelete() {
+    if (!actionSheet) return;
+    const idx = actionSheet.idx;
+    closeSheet();
     messages = messages.filter((_, i) => i !== idx);
   }
 
-  function ctxRetry() {
-    if (!ctxMenu) return;
-    const idx = ctxMenu.idx;
-    closeCtx();
-    // Find last user message before this error
+  function actRetry() {
+    if (!actionSheet) return;
+    const idx = actionSheet.idx;
+    closeSheet();
     let userText = '';
     for (let i = idx - 1; i >= 0; i--) {
       if (messages[i].role === 'user') { userText = messages[i].content; break; }
     }
-    // Remove the error
     messages = messages.filter((_, i) => i !== idx);
-    messages = messages;
     if (userText) { input = userText; send(); }
   }
 
@@ -332,7 +338,7 @@
               onpointerup={onMsgPointerUp}
               onpointermove={onMsgPointerMove}
               onpointercancel={onMsgPointerUp}
-              oncontextmenu={(e) => { e.preventDefault(); ctxMenu = { idx: i, x: e.clientX, y: e.clientY, role: msg.role, content: msg.content }; }}
+              oncontextmenu={(e) => { e.preventDefault(); actionSheet = { idx: i, role: msg.role, content: msg.content }; }}
             >
               {#if msg.role === 'assistant'}
                 <span class="msg-avatar">⚡</span>
@@ -367,21 +373,55 @@
       {/if}
     </div>
 
-    <!-- Long-press context menu -->
-    {#if ctxMenu}
-      <div class="ctx-backdrop" onclick={closeCtx} oncontextmenu={(e) => { e.preventDefault(); closeCtx(); }} role="presentation"></div>
-      <div class="ctx-menu" style="top:{Math.min(ctxMenu.y, window.innerHeight - 200)}px; left:{Math.min(ctxMenu.x, window.innerWidth - 180)}px">
-        <button class="ctx-item" onclick={ctxCopy}>📋 Copy</button>
-        {#if ctxMenu.role === 'user'}
-          <button class="ctx-item" onclick={ctxResend}>🔄 Resend</button>
-          <button class="ctx-item ctx-del" onclick={ctxDelete}>🗑 Delete</button>
-        {:else if ctxMenu.role === 'assistant'}
-          <button class="ctx-item" onclick={ctxRegenerate}>🔄 Regenerate</button>
-          <button class="ctx-item ctx-del" onclick={ctxDelete}>🗑 Delete</button>
-        {:else if ctxMenu.role === 'error'}
-          <button class="ctx-item" onclick={ctxRetry}>🔄 Retry</button>
-          <button class="ctx-item ctx-del" onclick={ctxDelete}>🗑 Dismiss</button>
+    <!-- Action sheet (bottom slide-up) -->
+    {#if actionSheet}
+      <div class="as-backdrop" class:as-closing={sheetClosing}
+        onclick={closeSheet}
+        oncontextmenu={(e) => { e.preventDefault(); closeSheet(); }}
+        role="presentation"></div>
+      <div class="as-sheet" class:as-closing={sheetClosing}>
+        <div class="as-handle"></div>
+
+        <!-- Message preview -->
+        <div class="as-preview">
+          <span class="as-label">{actionSheet.role === 'user' ? 'You' : actionSheet.role === 'assistant' ? '⚡ Wirebot' : '⚠️ Error'}</span>
+          <span class="as-text">{actionSheet.content.slice(0, 120)}{actionSheet.content.length > 120 ? '…' : ''}</span>
+        </div>
+
+        <!-- Copied flash -->
+        {#if copied}
+          <div class="as-copied">✓ Copied</div>
         {/if}
+
+        <!-- Actions -->
+        <div class="as-actions">
+          <button class="as-btn" onclick={actCopy}>
+            <span class="as-icon">📋</span><span>Copy message</span>
+          </button>
+          {#if messages.length > 1}
+            <button class="as-btn" onclick={actCopyConversation}>
+              <span class="as-icon">📑</span><span>Copy full conversation</span>
+            </button>
+          {/if}
+          {#if actionSheet.role === 'user'}
+            <button class="as-btn" onclick={actResend}>
+              <span class="as-icon">🔄</span><span>Resend</span>
+            </button>
+          {:else if actionSheet.role === 'assistant'}
+            <button class="as-btn" onclick={actRegenerate}>
+              <span class="as-icon">🔄</span><span>Regenerate</span>
+            </button>
+          {:else if actionSheet.role === 'error'}
+            <button class="as-btn" onclick={actRetry}>
+              <span class="as-icon">🔄</span><span>Retry</span>
+            </button>
+          {/if}
+          <button class="as-btn as-danger" onclick={actionSheet.role === 'error' ? actDelete : actDelete}>
+            <span class="as-icon">🗑</span><span>{actionSheet.role === 'error' ? 'Dismiss' : 'Delete'}</span>
+          </button>
+        </div>
+
+        <button class="as-cancel" onclick={closeSheet}>Cancel</button>
       </div>
     {/if}
   </div>
@@ -549,29 +589,74 @@
   .chat-send:disabled { opacity: 0.3; cursor: default; }
   .chat-send:not(:disabled):active { background: var(--accent-dim); }
 
-  /* Long-press context menu */
-  .ctx-backdrop { position: fixed; inset: 0; z-index: 2000; }
-  .ctx-menu {
-    position: fixed; z-index: 2001;
-    background: var(--bg-elevated, #1e1e2e);
-    border: 1px solid var(--border-light, rgba(255,255,255,0.1));
-    border-radius: 12px; padding: 4px;
-    min-width: 160px;
-    box-shadow: 0 8px 32px rgba(0,0,0,0.4);
-    animation: ctxIn 0.15s ease-out;
+  /* Action sheet (bottom slide-up) */
+  .as-backdrop {
+    position: fixed; inset: 0; z-index: 2000;
+    background: rgba(0,0,0,0.4);
+    animation: asFadeIn 0.2s ease-out;
   }
-  @keyframes ctxIn { from { opacity: 0; transform: scale(0.9); } to { opacity: 1; transform: scale(1); } }
-  .ctx-item {
-    display: flex; align-items: center; gap: 8px;
-    width: 100%; padding: 10px 14px; border: none; background: none;
-    color: var(--text); font-size: 14px; cursor: pointer;
-    border-radius: 8px; text-align: left;
+  .as-backdrop.as-closing { animation: asFadeOut 0.2s ease-in forwards; }
+  @keyframes asFadeIn { from { opacity: 0; } to { opacity: 1; } }
+  @keyframes asFadeOut { from { opacity: 1; } to { opacity: 0; } }
+
+  .as-sheet {
+    position: fixed; bottom: 0; left: 0; right: 0; z-index: 2001;
+    background: var(--bg-elevated, #1e1e2e);
+    border-radius: 16px 16px 0 0;
+    padding: 8px 16px;
+    padding-bottom: max(16px, env(safe-area-inset-bottom));
+    max-height: 70vh; overflow-y: auto;
+    animation: asSlideUp 0.25s cubic-bezier(0.32, 0.72, 0, 1);
+  }
+  .as-sheet.as-closing { animation: asSlideDown 0.2s ease-in forwards; }
+  @keyframes asSlideUp { from { transform: translateY(100%); } to { transform: translateY(0); } }
+  @keyframes asSlideDown { from { transform: translateY(0); } to { transform: translateY(100%); } }
+
+  .as-handle {
+    width: 36px; height: 4px; border-radius: 2px;
+    background: rgba(255,255,255,0.15); margin: 4px auto 12px;
+  }
+
+  .as-preview {
+    display: flex; flex-direction: column; gap: 2px;
+    padding: 10px 12px; border-radius: 10px;
+    background: rgba(255,255,255,0.04); margin-bottom: 12px;
+  }
+  .as-label { font-size: 11px; font-weight: 700; color: var(--accent); }
+  .as-text { font-size: 13px; color: var(--text-muted); line-height: 1.4; }
+
+  .as-copied {
+    text-align: center; padding: 8px; margin-bottom: 8px;
+    color: #10b981; font-size: 13px; font-weight: 600;
+    animation: asFadeIn 0.15s ease-out;
+  }
+
+  .as-actions { display: flex; flex-direction: column; gap: 2px; margin-bottom: 8px; }
+  .as-btn {
+    display: flex; align-items: center; gap: 12px;
+    width: 100%; padding: 14px 12px; border: none;
+    background: none; color: var(--text); font-size: 15px;
+    cursor: pointer; border-radius: 10px; text-align: left;
     -webkit-tap-highlight-color: transparent;
   }
-  .ctx-item:active { background: rgba(124,124,255,0.12); }
-  .ctx-del { color: var(--error, #ef4444); }
-  .ctx-del:active { background: rgba(239,68,68,0.1); }
+  .as-btn:active { background: rgba(124,124,255,0.1); }
+  .as-icon { font-size: 18px; width: 24px; text-align: center; flex-shrink: 0; }
+  .as-danger { color: var(--error, #ef4444); }
+  .as-danger:active { background: rgba(239,68,68,0.08); }
+
+  .as-cancel {
+    width: 100%; padding: 14px; border: none; border-radius: 12px;
+    background: rgba(255,255,255,0.06); color: var(--text);
+    font-size: 15px; font-weight: 600; cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .as-cancel:active { background: rgba(255,255,255,0.1); }
 
   /* Disable text selection on messages during long-press */
   .chat-msg { -webkit-user-select: none; user-select: none; touch-action: pan-y; }
+
+  :global([data-theme="light"]) .as-sheet { background: #fff; box-shadow: 0 -4px 24px rgba(0,0,0,0.12); }
+  :global([data-theme="light"]) .as-preview { background: rgba(0,0,0,0.03); }
+  :global([data-theme="light"]) .as-handle { background: rgba(0,0,0,0.12); }
+  :global([data-theme="light"]) .as-cancel { background: rgba(0,0,0,0.04); }
 </style>
