@@ -249,24 +249,17 @@
               {#if msg.role === 'assistant'}
                 <span class="msg-avatar">⚡</span>
               {/if}
-              <div class="msg-bubble">
+              <div class="msg-bubble" class:typing={msg.role === 'assistant' && !msg.content && sending}>
                 {#if msg.role === 'error'}
                   ⚠️ {msg.content}
+                {:else if msg.role === 'assistant' && !msg.content && sending}
+                  <span class="dot"></span><span class="dot"></span><span class="dot"></span>
                 {:else}
                   {msg.content}
                 {/if}
               </div>
             </div>
           {/each}
-
-          {#if sending}
-            <div class="chat-msg assistant">
-              <span class="msg-avatar">⚡</span>
-              <div class="msg-bubble typing">
-                <span class="dot"></span><span class="dot"></span><span class="dot"></span>
-              </div>
-            </div>
-          {/if}
         </div>
 
         <!-- Input -->
